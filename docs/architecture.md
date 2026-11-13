@@ -2,7 +2,7 @@
 
 ## Estado deste documento
 
-Este documento regista a fundação E1.01 e a primeira aplicação desktop E1.02. “Definido” significa uma decisão já fornecida ou validada pelo projecto; “pendente” requer validação posterior e não deve ser inferido.
+Este documento regista a fundação E1.01, a primeira aplicação desktop E1.02 e a arquitectura de negócio consolidada em E1.02-H. “Definido” significa uma decisão já fornecida ou validada pelo projecto; “pendente” requer validação posterior e não deve ser inferido.
 
 ## Visão geral
 
@@ -20,6 +20,17 @@ packages/licensing ──> adaptador futuro ──> servidor KIL independente
 ```
 
 Nenhuma seta representa um endpoint já existente; indica somente limites e direcções arquitecturais pretendidas.
+
+## Arquitectura de negócio
+
+| Pilar | Definição registada | Estado na implementação (b113388) |
+| --- | --- | --- |
+| Multiempresa | Definido: isolamento obrigatório por tenant/empresa em todas as camadas (`AGENTS.md`). | Apenas tipos `TenantId` e `TenantContext` em `packages/shared-types`. A “empresa activa” na interface é texto fixo demonstrativo. |
+| Quatro sectores | O produto é multissectorial (`README.md`); o planeamento indica quatro sectores. | Os sectores não estão identificados em nenhum documento do repositório (pendente). Não existem módulos sectoriais. |
+| Contabilidade integrada | Definido: fronteira `packages/accounting`, valores decimais seguros, lançamentos imutáveis ou corrigidos de forma auditável (`AGENTS.md`). | O pacote apenas exporta `accountingModuleStatus = 'not-implemented'`. O modelo de integração entre operações e contabilidade está pendente. |
+| Funcionamento offline | Definido: o desktop opera com serviços e dados locais em SQLite. | A estratégia offline está pendente. O desktop ainda não comunica com `services/local-api`, que só cria a instância Fastify. |
+| Sincronização | Definido: `services/sync-service` liga o ambiente local aos serviços centrais em PostgreSQL. | Fronteira sem implementação (`syncServiceStatus = 'contract-pending'`); protocolo pendente. |
+| Monitor opcional | Definido: KIL Business Monitor em React Native, opcional, limitado à consulta de indicadores sincronizados. | `apps/mobile-monitor` é um marcador TypeScript sem dependências móveis. |
 
 ## Decisões definidas
 
@@ -65,6 +76,9 @@ Nenhuma seta representa um endpoint já existente; indica somente limites e dire
 - Biblioteca de componentes e sistema visual definitivo.
 - Versões e arquitectura concretas do React Native quando começar o monitor móvel.
 - Requisitos fiscais angolanos detalhados, respectivas fontes normativas e processo de actualização.
+- Identificação dos quatro sectores de negócio e respectivo âmbito funcional.
+- Modelo de integração contabilística: que operações geram lançamentos, em que momento e com que plano de contas.
+- Canal entre o processo Electron e `services/local-api` (processo separado, embutido ou IPC) e respectivo modelo de segurança.
 
 ## Restrições da fundação
 

@@ -43,4 +43,4 @@ Copie `.env.example` para `.env` apenas no ambiente local e substitua os marcado
 - `tests`: verificações transversais iniciais.
 - `docs`: decisões de arquitectura.
 
-Consulte [docs/architecture.md](docs/architecture.md) e [AGENTS.md](AGENTS.md) antes de contribuir.
+Consulte [docs/architecture.md](docs/architecture.md) e [AGENTS.md](AGENTS.md) antes de contribuir. Para retomar o trabalho noutra sessão ou com outro agente, comece por [docs/project-status.md](docs/project-status.md).

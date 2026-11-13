@@ -46,3 +46,15 @@ Estas regras aplicam-se a todo o monorepositório. Alterações devem ser pequen
 - Não alterar ficheiros fora do âmbito nem apagar trabalho alheio.
 - Manter `.env.example` sem valores secretos e actualizar documentação quando a configuração mudar.
 - Não criar bases de produção em tarefas de desenvolvimento.
+
+## Continuidade entre agentes
+
+Estas regras complementam as anteriores e aplicam-se a qualquer agente (Codex, Claude Code ou outro), incluindo sessões iniciadas sem contexto prévio.
+
+- Ao iniciar, ler `AGENTS.md`, `docs/project-status.md`, `docs/architecture.md`, `docs/decisions.md` e o ficheiro da tarefa activa em `docs/tasks/`; confirmar o estado real com `git log --oneline` e `git status` antes de agir.
+- Trabalhar apenas no âmbito do ficheiro da tarefa activa. Uma tarefa com estado “proposta” não pode ser implementada sem aprovação explícita do responsável do projecto.
+- Registar como facto apenas o que foi verificado no repositório ou executado na própria sessão (commits, testes, builds, smoke tests). O que não foi executado é registado como “não verificado”.
+- Divergências entre planeamento e implementação são registadas como pendências em `docs/project-status.md`; decisões arquitecturais não são tomadas por iniciativa própria.
+- Decisões aprovadas são acrescentadas a `docs/decisions.md`; uma decisão substituída recebe nova entrada que a referencia, sem reescrever o histórico.
+- Ao concluir, executar `pnpm check`, actualizar o ficheiro da tarefa e `docs/project-status.md`, criar o commit indicado na tarefa e confirmar que a árvore de trabalho ficou limpa.
+- Não alterar configuração global da máquina (política de execução do PowerShell, `git config --global`) para contornar bloqueios; usar as alternativas locais descritas em `docs/project-status.md`.
