@@ -17,6 +17,18 @@ pnpm install
 pnpm check
 ```
 
+Para iniciar a aplicação Electron em desenvolvimento:
+
+```sh
+pnpm --filter @kil-business/desktop dev
+```
+
+Para validar o arranque do Electron após a compilação:
+
+```sh
+pnpm --filter @kil-business/desktop smoke
+```
+
 Copie `.env.example` para `.env` apenas no ambiente local e substitua os marcadores. Nunca versione credenciais.
 
 ## Estrutura

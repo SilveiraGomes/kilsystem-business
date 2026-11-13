@@ -5,11 +5,18 @@
   "type": "module",
   "main": "dist-electron/main.js",
   "scripts": {
-    "build": "vite build && tsc -p tsconfig.node.json",
-    "dev": "vite",
-    "typecheck": "tsc --noEmit"
+    "build": "pnpm build:renderer && pnpm build:main",
+    "build:main": "tsc -p tsconfig.node.json && vite build --config vite.preload.config.ts",
+    "build:renderer": "vite build",
+    "dev": "concurrently --kill-others-on-fail --names renderer,electron \"pnpm dev:renderer\" \"pnpm dev:electron\"",
+    "dev:electron": "pnpm build:main && wait-on tcp:127.0.0.1:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 node scripts/run-electron.mjs",
+    "dev:renderer": "vite --host 127.0.0.1 --port 5173 --strictPort",
+    "smoke": "pnpm build && node scripts/run-electron.mjs --smoke-test",
+    "test": "vitest run --config ../../vitest.config.ts desktop",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.node.json"
   },
   "dependencies": {
+    "lucide-react": "^0.468.0",
     "react": "catalog:",
     "react-dom": "catalog:"
   },
@@ -18,8 +25,11 @@
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
     "@vitejs/plugin-react": "catalog:",
+    "concurrently": "^9.1.2",
+    "cross-env": "^7.0.3",
     "electron": "^33.2.1",
     "typescript": "catalog:",
-    "vite": "catalog:"
+    "vite": "catalog:",
+    "wait-on": "^8.0.1"
   }
 }

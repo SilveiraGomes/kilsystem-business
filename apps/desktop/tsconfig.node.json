@@ -6,5 +6,6 @@
     "outDir": "dist-electron",
     "types": ["node"]
   },
-  "include": ["src/main"]
+  "include": ["src/main"],
+  "exclude": ["src/main/preload-api.ts", "src/main/preload.ts"]
 }

@@ -2,7 +2,7 @@
 
 ## Estado deste documento
 
-Este documento regista a fundação E1.01. “Definido” significa uma decisão já fornecida pelo projecto; “pendente” requer validação posterior e não deve ser inferido durante esta etapa.
+Este documento regista a fundação E1.01 e a primeira aplicação desktop E1.02. “Definido” significa uma decisão já fornecida ou validada pelo projecto; “pendente” requer validação posterior e não deve ser inferido.
 
 ## Visão geral
 
@@ -33,6 +33,9 @@ Nenhuma seta representa um endpoint já existente; indica somente limites e dire
 - Organização modular em aplicações, serviços e pacotes reutilizáveis.
 - Isolamento multiempresa obrigatório em todas as camadas que tratem dados empresariais.
 - Integração de licenciamento por adaptador, mantendo o servidor existente independente.
+- Renderer Electron isolado, com `contextIsolation`, sandbox e segurança web activos, e integração Node.js desactivada.
+- Preload com API mínima e imutável; módulos Node/Electron não são expostos ao renderer.
+- Navegação desktop demonstrativa sem persistência, autenticação ou operações comerciais.
 
 ## Estrutura do monorepositório
 
@@ -65,4 +68,4 @@ Nenhuma seta representa um endpoint já existente; indica somente limites e dire
 
 ## Restrições da fundação
 
-E1.01 não cria esquemas ou bases de produção, endpoints de negócio, POS, facturação, contabilidade ou módulos sectoriais. Os pacotes de domínio são deliberadamente marcadores tipados para impedir decisões prematuras.
+E1.01 e E1.02 não criam esquemas ou bases de produção, endpoints de negócio, POS, facturação, contabilidade ou módulos sectoriais. Os indicadores visuais da aplicação desktop são explicitamente demonstrativos, e os pacotes de domínio continuam deliberadamente sem regras de negócio.
