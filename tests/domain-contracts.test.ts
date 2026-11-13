@@ -1,21 +1,36 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  COMPANY_STATUSES,
   createBranch,
   createCompany,
+  createTaxIdPolicy,
   createTenantContext,
+  deactivateBranch,
+  deactivateCompany,
   DomainValidationError,
+  EMPTY_TAX_ID_POLICY,
   isSectorType,
+  normalizeBranchCode,
   parseBranchId,
   parseCompanyId,
+  parseJurisdiction,
   parseTenantId,
+  restoreCompany,
   SECTOR_LABELS,
   SECTOR_TYPES,
   type BranchId,
   type CompanyId,
   type TenantId,
 } from '../packages/shared-types/src/index';
-import { branchInput, companyInput, CREATED_AT, newId, UPDATED_AT } from './support/fixtures';
+import {
+  branchInput,
+  companyInput,
+  CREATED_AT,
+  newCompany,
+  newId,
+  UPDATED_AT,
+} from './support/fixtures';
 
 const invalidIdentifiers: readonly unknown[] = [
   '',
@@ -49,11 +64,15 @@ describe('Multi-tenant domain contracts', () => {
   describe('valid contracts', () => {
     it('creates an immutable company with normalised fields', () => {
       const tenantId = newId().toUpperCase();
-      const company = createCompany(
-        companyInput({ legalName: '  Empresa de Teste, Lda.  ', tenantId, tradeName: undefined }),
-      );
+      const company = newCompany({
+        jurisdiction: ' zz ',
+        legalName: '  Empresa de Teste, Lda.  ',
+        tenantId,
+        tradeName: undefined,
+      });
 
       expect(company.tenantId).toBe(tenantId.toLowerCase());
+      expect(company.jurisdiction).toBe('ZZ');
       expect(company.legalName).toBe('Empresa de Teste, Lda.');
       expect(company).not.toHaveProperty('tradeName');
       expect(company.createdAt).toBe(CREATED_AT);
@@ -62,7 +81,7 @@ describe('Multi-tenant domain contracts', () => {
     });
 
     it('keeps the NIF as an attribute independent from the identifiers (D-016)', () => {
-      const company = createCompany(companyInput({ nif: 'NIF-TESTE-0002', tradeName: 'Marca' }));
+      const company = newCompany({ nif: 'NIF-TESTE-0002', tradeName: 'Marca' });
 
       expect(company.nif).toBe('NIF-TESTE-0002');
       expect(company.id).not.toBe(company.nif);
@@ -71,7 +90,7 @@ describe('Multi-tenant domain contracts', () => {
     });
 
     it('creates a branch bound to its company and tenant', () => {
-      const company = createCompany(companyInput());
+      const company = newCompany();
       const branch = createBranch(branchInput(company, { updatedAt: new Date(UPDATED_AT) }));
 
       expect(branch.companyId).toBe(company.id);
@@ -97,11 +116,11 @@ describe('Multi-tenant domain contracts', () => {
     });
 
     it.each(invalidIdentifiers)('rejects %j in contract identifier fields', (value) => {
-      const company = createCompany(companyInput());
+      const company = newCompany();
       const text = value as string;
 
-      expectValidationError(() => createCompany(companyInput({ id: text })), 'id');
-      expectValidationError(() => createCompany(companyInput({ tenantId: text })), 'tenantId');
+      expectValidationError(() => newCompany({ id: text }), 'id');
+      expectValidationError(() => newCompany({ tenantId: text }), 'tenantId');
       expectValidationError(() => createBranch(branchInput(company, { id: text })), 'id');
       expectValidationError(() => createBranch(branchInput(company, { tenantId: text })), 'tenantId');
       expectValidationError(() => createBranch(branchInput(company, { companyId: text })), 'companyId');
@@ -109,6 +128,13 @@ describe('Multi-tenant domain contracts', () => {
         () => createTenantContext({ actorId: 'user:x', correlationId: 'c-1', tenantId: text }),
         'tenantId',
       );
+    });
+
+    it('requires the company and tenant identifiers to be distinct (D-023)', () => {
+      const shared = newId();
+
+      expectValidationError(() => newCompany({ id: shared, tenantId: shared }), 'tenantId');
+      expectValidationError(() => newCompany({ id: shared, tenantId: shared.toUpperCase() }), 'tenantId');
     });
 
     it('rejects empty or oversized actor and correlation identifiers', () => {
@@ -138,38 +164,103 @@ describe('Multi-tenant domain contracts', () => {
 
   describe('field validation', () => {
     it('rejects missing required text', () => {
-      const company = createCompany(companyInput());
+      const company = newCompany();
 
-      expectValidationError(() => createCompany(companyInput({ legalName: '   ' })), 'legalName');
-      expectValidationError(() => createCompany(companyInput({ nif: '' })), 'nif');
-      expectValidationError(() => createCompany(companyInput({ tradeName: ' ' })), 'tradeName');
+      expectValidationError(() => newCompany({ legalName: '   ' }), 'legalName');
+      expectValidationError(() => newCompany({ nif: '' }), 'nif');
+      expectValidationError(() => newCompany({ tradeName: ' ' }), 'tradeName');
       expectValidationError(() => createBranch(branchInput(company, { name: '' })), 'name');
       expectValidationError(() => createBranch(branchInput(company, { code: ' ' })), 'code');
     });
 
     it('rejects unknown statuses', () => {
-      const company = createCompany(companyInput());
+      const company = newCompany();
 
-      expectValidationError(() => createCompany(companyInput({ status: 'active' })), 'status');
+      expectValidationError(() => newCompany({ status: 'active' }), 'status');
+      expectValidationError(() => newCompany({ status: 'DELETED' }), 'status');
       expectValidationError(() => createBranch(branchInput(company, { status: 'DELETED' })), 'status');
     });
 
+    it.each(['', 'ZZZ', 'Z1', 'Angola', null])('rejects jurisdiction %j', (jurisdiction) => {
+      expectValidationError(() => newCompany({ jurisdiction: jurisdiction as string }), 'jurisdiction');
+    });
+
     it('rejects invalid or inconsistent timestamps', () => {
-      expectValidationError(() => createCompany(companyInput({ createdAt: '13/11/2026' })), 'createdAt');
-      expectValidationError(() => createCompany(companyInput({ createdAt: new Date('invalid') })), 'createdAt');
-      expectValidationError(
-        () => createCompany(companyInput({ createdAt: UPDATED_AT, updatedAt: CREATED_AT })),
-        'updatedAt',
-      );
+      expectValidationError(() => newCompany({ createdAt: '13/11/2026' }), 'createdAt');
+      expectValidationError(() => newCompany({ createdAt: new Date('invalid') }), 'createdAt');
+      expectValidationError(() => newCompany({ createdAt: UPDATED_AT, updatedAt: CREATED_AT }), 'updatedAt');
     });
 
     it('does not echo rejected values in error messages', () => {
       const secret = 'NIF-SENSIVEL-9999';
-
-      const error = captureError(() => createCompany(companyInput({ nif: secret.padEnd(300, '9') })));
+      const error = captureError(() => newCompany({ nif: secret.padEnd(300, '9') }));
 
       expect(error).toBeInstanceOf(DomainValidationError);
       expect((error as DomainValidationError).message).not.toContain(secret);
+    });
+  });
+
+  describe('company statuses and NIF (D-024, D-025)', () => {
+    it('supports exactly the four business statuses', () => {
+      expect(COMPANY_STATUSES).toEqual(['DRAFT', 'ACTIVE', 'SUSPENDED', 'INACTIVE']);
+    });
+
+    it('allows a draft company without NIF and without a configured tax rule', () => {
+      const draft = createCompany(companyInput({ nif: undefined, status: 'DRAFT' }), EMPTY_TAX_ID_POLICY);
+
+      expect(draft.status).toBe('DRAFT');
+      expect(draft).not.toHaveProperty('nif');
+    });
+
+    it('requires a NIF for an active company', () => {
+      expectValidationError(() => newCompany({ nif: undefined, status: 'ACTIVE' }), 'nif');
+      expectValidationError(() => restoreCompany(companyInput({ nif: undefined, status: 'ACTIVE' })), 'nif');
+    });
+
+    it('validates the NIF of an active company with the jurisdiction rule', () => {
+      expectValidationError(() => newCompany({ nif: 'NIF-INVALIDO', status: 'ACTIVE' }), 'nif');
+      expect(newCompany({ nif: 'NIF-TESTE-0042', status: 'ACTIVE' }).nif).toBe('NIF-TESTE-0042');
+    });
+
+    it('fails closed when no rule is configured for the jurisdiction', () => {
+      expectValidationError(() => createCompany(companyInput(), EMPTY_TAX_ID_POLICY), 'nif');
+      expectValidationError(() => newCompany({ jurisdiction: 'AO' }), 'nif');
+    });
+
+    it.each(['SUSPENDED', 'INACTIVE'] as const)('accepts a %s company without re-applying the rule', (status) => {
+      const company = createCompany(companyInput({ nif: 'NIF-LEGADO', status }), EMPTY_TAX_ID_POLICY);
+
+      expect(company.status).toBe(status);
+    });
+
+    it('rejects ambiguous tax rule configuration', () => {
+      const rule = { isValid: () => true, jurisdiction: parseJurisdiction('ZZ'), source: 'Teste' };
+
+      expectValidationError(() => createTaxIdPolicy([rule, rule]), 'jurisdiction');
+      expectValidationError(() => createTaxIdPolicy([{ ...rule, source: ' ' }]), 'source');
+    });
+
+    it('deactivates companies and branches logically (D-027)', () => {
+      const company = newCompany();
+      const branch = createBranch(branchInput(company));
+
+      const inactiveCompany = deactivateCompany(company, UPDATED_AT);
+      const inactiveBranch = deactivateBranch(branch, UPDATED_AT);
+
+      expect(inactiveCompany).toEqual({ ...company, status: 'INACTIVE', updatedAt: UPDATED_AT });
+      expect(inactiveBranch).toEqual({ ...branch, status: 'INACTIVE', updatedAt: UPDATED_AT });
+    });
+  });
+
+  describe('branch code normalisation (D-026)', () => {
+    it.each([
+      ['  a-far ', 'A-FAR'],
+      ['loja   central', 'LOJA CENTRAL'],
+      ['ｌｊ０１', 'LJ01'],
+      ['Café-1', 'CAFÉ-1'],
+    ])('normalises %j to %j', (raw, normalised) => {
+      expect(normalizeBranchCode(raw)).toBe(normalised);
+      expect(createBranch(branchInput(newCompany(), { code: raw })).code).toBe(normalised);
     });
   });
 
@@ -183,7 +274,7 @@ describe('Multi-tenant domain contracts', () => {
     });
 
     it('lets one company own branches in different sectors', () => {
-      const company = createCompany(companyInput());
+      const company = newCompany();
       const branches = SECTOR_TYPES.map((sectorType) =>
         createBranch(branchInput(company, { code: sectorType, sectorType })),
       );
@@ -193,7 +284,7 @@ describe('Multi-tenant domain contracts', () => {
     });
 
     it.each(['pharmacy', 'FARMACIA', 'HOTEL', '', null])('rejects unknown sector %j', (sectorType) => {
-      const company = createCompany(companyInput());
+      const company = newCompany();
 
       expect(isSectorType(sectorType)).toBe(false);
       expectValidationError(

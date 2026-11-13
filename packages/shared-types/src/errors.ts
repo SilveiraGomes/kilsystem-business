@@ -46,7 +46,9 @@ export class RecordNotFoundError extends Error {
 export type RecordConflictReason =
   | 'duplicate-id'
   | 'tenant-already-has-company'
-  | 'company-has-branches';
+  | 'company-has-branches'
+  | 'duplicate-branch-code'
+  | 'immutable-field';
 
 export class RecordConflictError extends Error {
   override readonly name = 'RecordConflictError';

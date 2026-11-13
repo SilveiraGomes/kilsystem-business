@@ -3,8 +3,22 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "exports": { ".": "./dist/index.js" },
+  "exports": {
+    ".": {
+      "source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
   "types": "./dist/index.d.ts",
-  "scripts": { "build": "tsc -p tsconfig.json" },
-  "devDependencies": { "typescript": "catalog:" }
+  "scripts": { "build": "tsc -p tsconfig.build.json" },
+  "dependencies": {
+    "@kil-business/shared-types": "workspace:*",
+    "better-sqlite3": "^12.11.1"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "catalog:",
+    "typescript": "catalog:"
+  }
 }

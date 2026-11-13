@@ -1,6 +1,6 @@
 # Estado do projecto
 
-Última verificação: 2026-11-13, no fecho da tarefa E1.03 (ponto de partida `68b7f98`).
+Última verificação: 2026-11-13, no fecho da tarefa E1.04 (ponto de partida `7ce5bb0`).
 
 Este documento é o ponto de retoma para qualquer agente ou pessoa. Contém apenas factos verificados no repositório ou por execução; o que não foi executado está marcado como tal.
 
@@ -11,31 +11,37 @@ Este documento é o ponto de retoma para qualquer agente ou pessoa. Contém apen
 | E1.01 — Fundação tecnológica | Concluída | `ff5ba65` | [tasks/E1.01.md](tasks/E1.01.md) |
 | E1.02 — Aplicação desktop funcional | Concluída | `b113388` | [tasks/E1.02.md](tasks/E1.02.md) |
 | E1.02-H — Handoff multi-IA | Concluída | `68b7f98` | — |
-| E1.03 — Contratos multiempresa e isolamento lógico | Concluída | `feat: establish multi-tenant domain contracts` | [tasks/E1.03.md](tasks/E1.03.md) |
-| E1.04 — Persistência SQLite e repositórios | Definida, não autorizada | — | [tasks/E1.04.md](tasks/E1.04.md) |
+| E1.03 — Contratos multiempresa e isolamento lógico | Concluída | `7ce5bb0` | [tasks/E1.03.md](tasks/E1.03.md) |
+| E1.04 — Persistência SQLite e repositórios multiempresa | Concluída | `feat: implement tenant-isolated sqlite persistence` | [tasks/E1.04.md](tasks/E1.04.md) |
+| E1.05 — Serviço local de dados | Proposta, não autorizada | — | [tasks/E1.05.md](tasks/E1.05.md) |
 
-Tarefa activa: nenhuma. A E1.04 aguarda autorização explícita e as decisões listadas no respectivo ficheiro.
+Tarefa activa: nenhuma. A E1.05 é uma proposta e aguarda aprovação ou substituição pelo responsável.
 
 ## Validação verificada
 
-Executada em 2026-11-13 com Node.js 20.16.0 e pnpm 9.15.9, no fecho de E1.03:
+Executada em 2026-11-13 com Node.js 20.16.0 e pnpm 9.15.9, no fecho de E1.04:
 
 - `pnpm.cmd lint` e `pnpm.cmd typecheck`: sem erros.
-- `pnpm.cmd test`: 5 ficheiros, 74 testes aprovados:
+- `pnpm.cmd test`: 6 ficheiros, 183 testes aprovados:
   - `foundation` 1;
   - `desktop-security` 2;
   - `desktop-ui` 2;
-  - `domain-contracts` 37;
-  - `tenant-isolation` 32.
-- `pnpm.cmd build`: 12 de 12 projectos do workspace (`Scope: 12 of 13 workspace projects`; o 13.º é a raiz, sem script `build`).
+  - `domain-contracts` 56;
+  - `tenant-isolation` 88 (suite de contrato × memória e SQLite);
+  - `sqlite-persistence` 34.
+- `pnpm.cmd build`: 12 de 12 projectos do workspace.
 - `pnpm.cmd check`: código de saída 0.
-- `pnpm.cmd test:desktop` e `pnpm.cmd --filter @kil-business/desktop test`: 2 ficheiros, 4 testes aprovados cada.
+- `pnpm.cmd --filter @kil-business/desktop test`: 2 ficheiros, 4 testes aprovados.
 - `pnpm.cmd --filter @kil-business/desktop smoke`: `KIL_ELECTRON_SMOKE_OK`.
+- Clone limpo (sem `dist/` nem `node_modules`):
+  - `pnpm install --frozen-lockfile --offline` e `pnpm check` aprovados;
+  - pacote `database` compilado e executado em Node puro.
+- Mutação do filtro por tenant nas consultas SQLite: os testes de isolamento falham (detalhe em [tasks/E1.04.md](tasks/E1.04.md)).
 - `pnpm --filter @kil-business/desktop dev`: não executado (processo interactivo de longa duração).
 
 ## Comandos
 
-Requisitos: Node.js `>=20.16.0 <23`, pnpm `>=9.15.0 <10` (fixado em `pnpm@9.15.9`). Em PowerShell, usar `pnpm.cmd` em vez de `pnpm` se a política de execução bloquear `pnpm.ps1`.
+Requisitos: Node.js `>=20.16.0 <23`, pnpm `>=9.15.0 <10` (fixado em `pnpm@9.15.9`). Em Windows sem binário pré-compilado do `better-sqlite3`, `pnpm install` compila-o e precisa de Visual Studio 2022 (C++) e Python 3. Em PowerShell, usar `pnpm.cmd` em vez de `pnpm` se a política de execução bloquear `pnpm.ps1`.
 
 | Objectivo | Comando | Origem |
 | --- | --- | --- |
@@ -45,9 +51,10 @@ Requisitos: Node.js `>=20.16.0 <23`, pnpm `>=9.15.0 <10` (fixado em `pnpm@9.15.9
 | Typecheck global | `pnpm typecheck` | `package.json` |
 | Testes | `pnpm test` | `package.json` |
 | Testes do desktop | `pnpm test:desktop` ou `pnpm --filter @kil-business/desktop test` | `package.json`, `apps/desktop/package.json` |
-| Testes multiempresa | `pnpm test tenant domain-contracts` | `package.json` (filtro do Vitest) |
+| Testes multiempresa e SQLite | `pnpm test tenant domain-contracts sqlite` | `package.json` (filtro do Vitest) |
 | Testes em modo observação | `pnpm test:watch` | `package.json` |
 | Build de todos os projectos | `pnpm build` | `package.json` |
+| Build do pacote de persistência | `pnpm --filter @kil-business/database build` | `packages/database/package.json` |
 | Desktop em desenvolvimento | `pnpm --filter @kil-business/desktop dev` | `apps/desktop/package.json` |
 | Build do desktop | `pnpm --filter @kil-business/desktop build` | `apps/desktop/package.json` |
 | Smoke test do Electron | `pnpm --filter @kil-business/desktop smoke` | `apps/desktop/package.json` |
@@ -64,34 +71,39 @@ Notas sobre o arranque do Electron:
 
 ### Implementadas
 
-- Monorepositório pnpm com 12 projectos (`apps/*`, `services/*`, `packages/*`), TypeScript estrito, ESLint com verificação de tipos e Vitest.
-- Processo principal Electron com renderer isolado: `contextIsolation`, `sandbox` e `webSecurity` activos; `nodeIntegration` e `allowRunningInsecureContent` desactivados. Também bloqueia novas janelas e navegação externa.
-- Preload CommonJS (`preload.cts` → `dist-electron/preload.cjs`) que expõe apenas `kilDesktop.runtime.platform`, de forma imutável.
+- Monorepositório pnpm com 12 projectos, TypeScript estrito, ESLint com verificação de tipos e Vitest. Os pacotes do workspace resolvem a partir do código-fonte em typecheck, lint e testes (condição `source`) e a partir de `dist/` em execução.
+- Processo principal Electron com renderer isolado e preload mínimo e imutável; modo de smoke test.
 - Navegação funcional entre 8 áreas da interface desktop (estado React em memória).
-- Modo de smoke test do Electron (`--smoke-test`).
-- Contratos de domínio multiempresa em `packages/shared-types`:
-  - `Company`, `Branch` e `TenantContext`;
-  - identificadores UUID com tipos distintos;
-  - os quatro sectores;
-  - validação estrutural e erros sem eco de valores.
-- Interfaces `CompanyRepository` e `BranchRepository` com escopo obrigatório por tenant, e suite de contrato reutilizável que verifica o isolamento.
+- Contratos de domínio multiempresa (`packages/shared-types`):
+  - `Company` com 4 estados, jurisdição e NIF validado por política fiscal configurável;
+  - `Branch` com código normalizado;
+  - `TenantContext`;
+  - identificadores com tipos distintos;
+  - os 4 sectores;
+  - desactivação lógica.
+- Persistência SQLite local (`packages/database`):
+  - ligação com chaves estrangeiras activas;
+  - validação da localização;
+  - migrações versionadas com soma de verificação;
+  - esquema com isolamento e integridade;
+  - repositórios multiempresa com transacções e tradução de erros.
 
 ### Demonstrativas, sem dados nem regras de negócio
 
-- Dashboard com indicadores fixos (“Kz 0,00”, “0”), marcado na interface como “Dados de demonstração”.
-- Barra de contexto com “KIL Demonstração · Unidade Sede”, “Sistema local disponível” e “Sem dados reais”. São textos fixos e o estado do sistema local não é verificado.
-- Perfil “Administrador”, pesquisa, notificações e botão “Hoje”: só existem visualmente, sem comportamento.
-- Páginas Empresas, Estabelecimentos, Utilizadores, Vendas, Stock, Contabilidade e Configurações: estado vazio “Área preparada para a próxima etapa”. Ainda não usam os contratos de E1.03.
-- Portal administrativo: página estática “Portal administrativo em preparação”.
+- Dashboard com indicadores fixos (“Kz 0,00”, “0”), marcado como “Dados de demonstração”.
+- Barra de contexto com “KIL Demonstração · Unidade Sede”, “Sistema local disponível” e “Sem dados reais”. São textos fixos.
+- Perfil, pesquisa, notificações e botão “Hoje”: só existem visualmente.
+- Páginas Empresas, Estabelecimentos, Utilizadores, Vendas, Stock, Contabilidade e Configurações: estado vazio. Ainda não usam os contratos nem a persistência.
+- Portal administrativo: página estática.
 - Duplo de teste em memória (`tests/support/in-memory-tenant-repositories.ts`): serve apenas para testes e não é persistência.
 
 ### Ainda não desenvolvidas
 
-- Persistência local (SQLite) ou central (PostgreSQL), esquemas e migrações (SQLite previsto em E1.04).
-- Implementações reais de `CompanyRepository` e `BranchRepository`.
-- Endpoints nas APIs local e central, que só criam a instância Fastify.
-- Ligação entre o desktop e a API local.
+- Integração da persistência em `services/local-api` (proposta E1.05) e localização de produção da base.
+- Regra de validação do NIF para qualquer jurisdição real. Sem ela, nenhuma empresa pode ficar `ACTIVE` (PD-09).
+- Endpoints nas APIs local e central; ligação entre o desktop e a API local.
 - Autenticação, autorização, sessões e utilizadores; o `TenantContext` ainda não provém de identidade autenticada.
+- PostgreSQL e persistência central.
 - Grupos empresariais (`BusinessGroup`) e relatórios consolidados.
 - Módulos e regras sectoriais, vendas, POS, facturação, stock.
 - Contabilidade e fiscalidade (pacotes com estado `not-implemented`).
@@ -104,14 +116,20 @@ Notas sobre o arranque do Electron:
 
 | ID | Descrição | Impacto | Estado |
 | --- | --- | --- | --- |
-| PD-01 | `pnpm --filter @kil-business/desktop test` não encontrava testes. | — | **Resolvida em E1.03** (`root` em `vitest.config.ts`, D-022). |
-| PD-02 | Os quatro sectores não estavam identificados. | — | **Resolvida em E1.03** (D-018). Âmbito funcional por sector continua pendente. |
-| PD-03 | As variáveis de `.env.example` (`LOCAL_API_*`, `CENTRAL_API_*`, `LOCAL_DATABASE_PATH`, `SYNC_INTERVAL_SECONDS`, `KIL_LICENSE_*`) ainda não são lidas por nenhum código. | Apenas documental; não há configuração efectiva. | Informativo; `LOCAL_DATABASE_PATH` é relevante para E1.04. |
-| PD-04 | A interface mostra “Sistema local disponível” sem qualquer verificação real. | Pode induzir em erro fora do contexto demonstrativo. | Rever quando existir ligação à API local. |
-| PD-05 | O directório `.git` pertence ao utilizador `CodexSandboxOffline`. Outros utilizadores Windows recebem *dubious ownership*. | Bloqueia comandos Git noutros agentes. | Contornado com `git -c safe.directory=C:/KIL-BUSINESS`; decisão sobre propriedade a cargo do responsável. |
-| PD-06 | O plano de etapas posteriores a E1.04 não consta do repositório. | Agentes não podem antecipar etapas. | Requer planeamento do responsável. |
-| PD-07 | Escolhas de concretização de E1.03 a confirmar: relação `Company.id`/`tenantId`, NIF sem formato nem unicidade, estados `ACTIVE`/`INACTIVE`, código de estabelecimento sem unicidade. | Definem restrições do esquema SQLite em E1.04. | Requer confirmação do responsável (ver [tasks/E1.03.md](tasks/E1.03.md)). |
-| PD-08 | A importação entre pacotes do workspace depende de `dist/`, que não é versionado. Pode afectar o `typecheck` num clone limpo quando `packages/database` importar `shared-types`. | Previsto para E1.04; não verificado por execução. | Resolver e validar em E1.04 (ver [tasks/E1.04.md](tasks/E1.04.md)). |
+| PD-01 | `pnpm --filter @kil-business/desktop test` não encontrava testes. | — | Resolvida em E1.03 (D-022). |
+| PD-02 | Os quatro sectores não estavam identificados. | — | Resolvida em E1.03 (D-018). |
+| PD-03 | As variáveis de `.env.example` ainda não são lidas por nenhum código. `LOCAL_DATABASE_PATH` passou a vazio, com regra documentada (D-038). | Apenas documental. | Informativo; leitura prevista na proposta E1.05. |
+| PD-04 | A interface mostra “Sistema local disponível” sem verificação real. | Pode induzir em erro fora do contexto demonstrativo. | Rever quando existir ligação à API local. |
+| PD-05 | O directório `.git` pertence ao utilizador `CodexSandboxOffline`. Outros utilizadores Windows recebem *dubious ownership*. | Bloqueia comandos Git noutros agentes. | Contornado com `git -c safe.directory=C:/KIL-BUSINESS`; decisão a cargo do responsável. |
+| PD-06 | O plano de etapas posteriores a E1.05 não consta do repositório. | Agentes não podem antecipar etapas. | Requer planeamento do responsável. |
+| PD-07 | Escolhas de concretização de E1.03. | — | Resolvida em E1.04 (D-023 a D-027). |
+| PD-08 | Consumo de pacotes do workspace através de `dist/`. | — | **Resolvida em E1.04** (D-037), demonstrada em clone limpo. |
+| PD-09 | Nenhuma regra de validação do NIF está configurada para uma jurisdição real (incluindo `AO`). Com a política fail-closed (D-030), nenhuma empresa pode ser criada como `ACTIVE`, nem passar a esse estado, fora dos testes. Empresas `DRAFT` podem ser criadas. | Bloqueia empresas activas reais. | Requer fonte normativa, versão e vigência (D-024, `AGENTS.md`). |
+| PD-10 | O `better-sqlite3` 12.11.1 não tem binário pré-compilado para Node 20.16 em Windows x64 e é compilado na instalação (Visual Studio 2022 C++ e Python 3). Um runtime Electron exigiria compilação para a ABI do Electron. | Afecta máquinas de desenvolvimento, CI e distribuição. | Decidir runtime dos serviços locais e estratégia de distribuição. |
+| PD-11 | Interpretações de E1.04 a confirmar (D-031): `id ≠ tenantId`, NIF obrigatório só em `ACTIVE`, estados D-025 só nas empresas, NIF sem unicidade, transições de estado livres. | Definem regras de dados e o esquema. | Requer confirmação do responsável. |
+| PD-12 | O projecto exige Node.js `>=20.16 <23`. A linha 20 terminou o suporte oficial em 2026-04-30, segundo o calendário publicado do Node.js, e o `better-sqlite3` 13.x já exige Node ≥ 22. | Risco de manutenção e de segurança; a próxima actualização do driver exige Node 22. | Não actualizado por instrução (D-029); decisão do responsável. |
+
+| PD-13 | O smoke test do Electron registou de forma intermitente (2 de 4 execuções em 2026-11-13) a linha `ERROR:command_buffer_proxy_impl.cc(324)] GPU state invalid after WaitForGetOffsetInRange` no encerramento. Em todas as execuções terminou com `KIL_ELECTRON_SMOKE_OK` e código 0. `apps/desktop` não foi alterado em E1.04. | Ruído de log do Chromium; não falha a verificação. | Informativo; observar em execuções futuras. |
 
 As decisões arquitecturais ainda em aberto estão em [architecture.md](architecture.md#decisões-pendentes).
 
@@ -123,8 +141,8 @@ As decisões arquitecturais ainda em aberto estão em [architecture.md](architec
    git -c safe.directory=C:/KIL-BUSINESS log --oneline -n 10
    git -c safe.directory=C:/KIL-BUSINESS status
    ```
-   O último commit deve ser `feat: establish multi-tenant domain contracts` ou posterior a ele, com registo neste documento. Se não corresponder, actualizar este documento antes de outro trabalho.
-3. Executar `pnpm.cmd install` (se `node_modules` não existir) e `pnpm.cmd check` para obter a linha de base. Registar qualquer falha antes de alterar código.
-4. Identificar a tarefa activa em `docs/tasks/`. A E1.04 está definida mas **não autorizada**: pedir autorização ao responsável antes de implementar.
-5. Trabalhar apenas no âmbito da tarefa. Registar divergências na tabela de pendências e decisões novas aprovadas em `decisions.md`.
+   O último commit deve ser `feat: implement tenant-isolated sqlite persistence` ou posterior a ele, com registo neste documento. Se não corresponder, actualizar este documento antes de outro trabalho.
+3. Executar `pnpm.cmd install` (se `node_modules` não existir; ver os requisitos de compilação acima) e `pnpm.cmd check` para obter a linha de base. Registar qualquer falha antes de alterar código.
+4. Identificar a tarefa activa em `docs/tasks/`. A E1.05 é uma **proposta não autorizada**: pedir autorização ao responsável antes de implementar.
+5. Trabalhar apenas no âmbito da tarefa. Qualquer implementação nova de repositório tem de passar `tests/support/tenant-repository-contract.ts` (D-021). Registar divergências na tabela de pendências e decisões novas aprovadas em `decisions.md`.
 6. Ao concluir: executar `pnpm.cmd check` (e `smoke` se o desktop for alterado). Depois, actualizar o ficheiro da tarefa e este documento, criar um único commit com a mensagem indicada na tarefa e confirmar que a árvore de trabalho está limpa.

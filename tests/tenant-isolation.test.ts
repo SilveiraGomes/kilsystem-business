@@ -1,5 +1,7 @@
 import { createInMemoryTenantRepositories } from './support/in-memory-tenant-repositories';
+import { createSqliteHarness } from './support/sqlite-harness';
 import { describeTenantRepositoryContract } from './support/tenant-repository-contract';
 
-// A implementação em memória é apenas um duplo de teste; a SQLite (E1.04) reutilizará esta suite.
+// A mesma suite valida o duplo em memória (referência) e a implementação SQLite real (D-021).
 describeTenantRepositoryContract('in-memory test double', createInMemoryTenantRepositories);
+describeTenantRepositoryContract('SQLite on a temporary file', createSqliteHarness);

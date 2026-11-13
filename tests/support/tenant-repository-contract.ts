@@ -1,9 +1,11 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  COMPANY_STATUSES,
   createBranch,
-  createCompany,
-  RecordConflictError,
+  deactivateBranch,
+  deactivateCompany,
+  DomainValidationError,
   RecordNotFoundError,
   SECTOR_TYPES,
   TenantContextError,
@@ -14,11 +16,16 @@ import {
   type CompanyRepository,
   type TenantContext,
 } from '../../packages/shared-types/src/index';
-import { branchInput, companyInput, contextFor, newId, UPDATED_AT } from './fixtures';
+import { branchInput, contextFor, CREATED_AT, newCompany, newId, UPDATED_AT } from './fixtures';
 
 export interface TenantRepositories {
   readonly companies: CompanyRepository;
   readonly branches: BranchRepository;
+}
+
+export interface TenantRepositoryHarness extends TenantRepositories {
+  /** Liberta recursos (ex.: fecha a ligação e apaga a base temporária). */
+  readonly dispose?: () => void;
 }
 
 interface Scenario {
@@ -32,8 +39,8 @@ interface Scenario {
 }
 
 const seed = async ({ branches, companies }: TenantRepositories): Promise<Scenario> => {
-  const companyA = createCompany(companyInput({ legalName: 'Tenant A, Lda.' }));
-  const companyB = createCompany(companyInput({ legalName: 'Tenant B, Lda.' }));
+  const companyA = newCompany({ legalName: 'Tenant A, Lda.' });
+  const companyB = newCompany({ legalName: 'Tenant B, Lda.' });
   const contextA = contextFor(companyA.tenantId);
   const contextB = contextFor(companyB.tenantId);
   const pharmacyA = createBranch(branchInput(companyA, { code: 'A-FAR', sectorType: 'PHARMACY' }));
@@ -51,19 +58,23 @@ const seed = async ({ branches, companies }: TenantRepositories): Promise<Scenar
 
 /**
  * Suite de contrato reutilizável: qualquer implementação de repositório multiempresa
- * (memória, SQLite, PostgreSQL) deve passar exactamente estes testes.
+ * (memória, SQLite, PostgreSQL) deve passar exactamente estes testes (D-021).
  */
 export const describeTenantRepositoryContract = (
   implementation: string,
-  createRepositories: () => TenantRepositories,
+  createRepositories: () => TenantRepositoryHarness,
 ): void => {
   describe(`Multi-tenant repository contract (${implementation})`, () => {
-    let repositories: TenantRepositories;
+    let repositories: TenantRepositoryHarness;
     let scenario: Scenario;
 
     beforeEach(async () => {
       repositories = createRepositories();
       scenario = await seed(repositories);
+    });
+
+    afterEach(() => {
+      repositories.dispose?.();
     });
 
     describe('positive isolation', () => {
@@ -78,7 +89,7 @@ export const describeTenantRepositoryContract = (
 
       it('allows updates within the same tenant', async () => {
         const { companyA, contextA, pharmacyA } = scenario;
-        const renamedCompany = createCompany({ ...companyA, tradeName: 'Marca A', updatedAt: UPDATED_AT });
+        const renamedCompany = newCompany({ ...companyA, tradeName: 'Marca A', updatedAt: UPDATED_AT });
         const renamedBranch = createBranch({ ...pharmacyA, name: 'Farmácia Central', updatedAt: UPDATED_AT });
 
         await repositories.companies.update(contextA, renamedCompany);
@@ -88,24 +99,62 @@ export const describeTenantRepositoryContract = (
         await expect(repositories.branches.findById(contextA, pharmacyA.id)).resolves.toEqual(renamedBranch);
       });
 
-      it('keeps exactly one company per tenant (D-016)', async () => {
+      it('keeps exactly one company per tenant (D-016, D-023)', async () => {
         const { companyA, contextA } = scenario;
-        const second = createCompany(companyInput({ tenantId: companyA.tenantId }));
+        const second = newCompany({ tenantId: companyA.tenantId });
 
         await expect(repositories.companies.create(contextA, second)).rejects.toMatchObject({
           reason: 'tenant-already-has-company',
         });
       });
+
+      it('rejects identifiers that already exist', async () => {
+        const { companyA, contextA, pharmacyA } = scenario;
+        const sameCompanyId = newCompany({ id: companyA.id });
+        const sameBranchId = createBranch(branchInput(companyA, { code: 'A-NEW', id: pharmacyA.id }));
+
+        await expect(
+          repositories.companies.create(contextFor(sameCompanyId.tenantId), sameCompanyId),
+        ).rejects.toMatchObject({ reason: 'duplicate-id' });
+        await expect(repositories.branches.create(contextA, sameBranchId)).rejects.toMatchObject({
+          reason: 'duplicate-id',
+        });
+      });
+
+      it('rejects changes to the creation timestamp', async () => {
+        const { companyA, contextA, pharmacyA } = scenario;
+        const earlier = '2026-01-01T00:00:00.000Z';
+
+        await expect(
+          repositories.companies.update(contextA, newCompany({ ...companyA, createdAt: earlier })),
+        ).rejects.toMatchObject({ reason: 'immutable-field' });
+        await expect(
+          repositories.branches.update(contextA, createBranch({ ...pharmacyA, createdAt: earlier })),
+        ).rejects.toMatchObject({ reason: 'immutable-field' });
+      });
+
+      it('re-validates records instead of trusting forged objects', async () => {
+        const { companyA, contextA, pharmacyA } = scenario;
+        const forgedCompany = { ...companyA, status: 'DELETED' } as unknown as Company;
+        const forgedBranch = { ...pharmacyA, sectorType: 'CASINO' } as unknown as Branch;
+
+        await expect(repositories.companies.update(contextA, forgedCompany)).rejects.toBeInstanceOf(
+          DomainValidationError,
+        );
+        await expect(repositories.branches.update(contextA, forgedBranch)).rejects.toBeInstanceOf(
+          DomainValidationError,
+        );
+        await expect(repositories.companies.findById(contextA, companyA.id)).resolves.toEqual(companyA);
+      });
     });
 
     describe('branch association', () => {
-      it('lists only the branches of the requested company', async () => {
+      it('lists only the branches of the requested company, ordered by code', async () => {
         const { companyA, contextA, pharmacyA, restaurantA } = scenario;
 
         const listed = await repositories.branches.listByCompany(contextA, companyA.id);
 
-        expect(listed).toHaveLength(2);
-        expect(listed).toEqual(expect.arrayContaining([pharmacyA, restaurantA]));
+        expect(listed).toEqual([pharmacyA, restaurantA]);
         expect(listed.every((branch) => branch.companyId === companyA.id)).toBe(true);
       });
 
@@ -130,16 +179,62 @@ export const describeTenantRepositoryContract = (
         await expect(repositories.branches.create(contextA, foreign)).rejects.toBeInstanceOf(TenantMismatchError);
       });
 
-      it('refuses to delete a company that still has branches', async () => {
+      it('refuses to physically delete a company that still has branches (D-027)', async () => {
         const { companyA, contextA, pharmacyA, restaurantA } = scenario;
 
-        await expect(repositories.companies.delete(contextA, companyA.id)).rejects.toBeInstanceOf(RecordConflictError);
+        await expect(repositories.companies.delete(contextA, companyA.id)).rejects.toMatchObject({
+          reason: 'company-has-branches',
+        });
 
         await repositories.branches.delete(contextA, pharmacyA.id);
         await repositories.branches.delete(contextA, restaurantA.id);
         await repositories.companies.delete(contextA, companyA.id);
 
         await expect(repositories.companies.findById(contextA, companyA.id)).resolves.toBeUndefined();
+      });
+
+      it('supports logical deactivation without deleting data (D-027)', async () => {
+        const { companyA, contextA, pharmacyA } = scenario;
+
+        await repositories.branches.update(contextA, deactivateBranch(pharmacyA, UPDATED_AT));
+        await repositories.companies.update(contextA, deactivateCompany(companyA, UPDATED_AT));
+
+        await expect(repositories.companies.findById(contextA, companyA.id)).resolves.toMatchObject({
+          status: 'INACTIVE',
+        });
+        await expect(repositories.branches.findById(contextA, pharmacyA.id)).resolves.toMatchObject({
+          status: 'INACTIVE',
+        });
+      });
+    });
+
+    describe('branch code uniqueness (D-026)', () => {
+      it('rejects a normalised duplicate code within the same company', async () => {
+        const { companyA, contextA } = scenario;
+        const duplicate = createBranch(branchInput(companyA, { code: '  a-far ' }));
+
+        expect(duplicate.code).toBe('A-FAR');
+        await expect(repositories.branches.create(contextA, duplicate)).rejects.toMatchObject({
+          reason: 'duplicate-branch-code',
+        });
+      });
+
+      it('rejects renaming a branch to a code already used in the company', async () => {
+        const { contextA, pharmacyA } = scenario;
+        const clash = createBranch({ ...pharmacyA, code: 'a-res', updatedAt: UPDATED_AT });
+
+        await expect(repositories.branches.update(contextA, clash)).rejects.toMatchObject({
+          reason: 'duplicate-branch-code',
+        });
+      });
+
+      it('allows the same code in another company', async () => {
+        const { companyB, contextB } = scenario;
+        const sameCode = createBranch(branchInput(companyB, { code: 'A-FAR' }));
+
+        await repositories.branches.create(contextB, sameCode);
+
+        await expect(repositories.branches.findById(contextB, sameCode.id)).resolves.toEqual(sameCode);
       });
     });
 
@@ -156,7 +251,7 @@ export const describeTenantRepositoryContract = (
     describe('cross-tenant update', () => {
       it('rejects records that declare another tenant', async () => {
         const { companyA, contextB, pharmacyA } = scenario;
-        const changedCompany = createCompany({ ...companyA, legalName: 'Alterado por B', updatedAt: UPDATED_AT });
+        const changedCompany = newCompany({ ...companyA, legalName: 'Alterado por B', updatedAt: UPDATED_AT });
         const changedBranch = createBranch({ ...pharmacyA, name: 'Alterado por B', updatedAt: UPDATED_AT });
 
         await expect(repositories.companies.update(contextB, changedCompany)).rejects.toBeInstanceOf(TenantMismatchError);
@@ -165,7 +260,7 @@ export const describeTenantRepositoryContract = (
 
       it('rejects records re-labelled with the caller tenant', async () => {
         const { companyA, companyB, contextA, contextB, pharmacyA } = scenario;
-        const forgedCompany = createCompany({ ...companyA, tenantId: contextB.tenantId, legalName: 'Forjado' });
+        const forgedCompany = newCompany({ ...companyA, legalName: 'Forjado', tenantId: contextB.tenantId });
         const forgedBranch = createBranch({
           ...pharmacyA,
           companyId: companyB.id,
@@ -196,7 +291,7 @@ export const describeTenantRepositoryContract = (
     describe('operations without tenant context', () => {
       const operations: readonly (readonly [string, (context: TenantContext) => Promise<unknown>])[] = [
         ['companies.findById', (context) => repositories.companies.findById(context, scenario.companyA.id)],
-        ['companies.create', (context) => repositories.companies.create(context, createCompany(companyInput()))],
+        ['companies.create', (context) => repositories.companies.create(context, newCompany())],
         ['companies.update', (context) => repositories.companies.update(context, scenario.companyA)],
         ['companies.delete', (context) => repositories.companies.delete(context, scenario.companyA.id)],
         ['branches.findById', (context) => repositories.branches.findById(context, scenario.pharmacyA.id)],
@@ -241,6 +336,29 @@ export const describeTenantRepositoryContract = (
       });
     });
 
+    describe('company statuses (D-025)', () => {
+      it.each(COMPANY_STATUSES)('stores and reads a %s company', async (status) => {
+        const company = newCompany({ nif: status === 'DRAFT' ? undefined : 'NIF-TESTE-0003', status });
+        const context = contextFor(company.tenantId);
+
+        await repositories.companies.create(context, company);
+
+        await expect(repositories.companies.findById(context, company.id)).resolves.toEqual(company);
+      });
+
+      it('promotes a draft company once it is valid', async () => {
+        const draft = newCompany({ nif: undefined, status: 'DRAFT' });
+        const context = contextFor(draft.tenantId);
+        await repositories.companies.create(context, draft);
+
+        const active = newCompany({ ...draft, nif: 'NIF-TESTE-0004', status: 'ACTIVE', updatedAt: UPDATED_AT });
+        await repositories.companies.update(context, active);
+
+        await expect(repositories.companies.findById(context, draft.id)).resolves.toEqual(active);
+        expect(active.createdAt).toBe(CREATED_AT);
+      });
+    });
+
     describe('sectors (D-018)', () => {
       it('stores and isolates branches of every sector consistently', async () => {
         const { companyA, contextA, contextB } = scenario;
@@ -260,3 +378,4 @@ export const describeTenantRepositoryContract = (
     });
   });
 };
+

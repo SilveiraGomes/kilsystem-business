@@ -25,7 +25,7 @@ export interface Branch {
   readonly tenantId: TenantId;
   readonly companyId: CompanyId;
   readonly name: string;
-  /** Código interno do estabelecimento. */
+  /** Código interno normalizado; único dentro da empresa (D-026). */
   readonly code: string;
   readonly sectorType: SectorType;
   readonly status: BranchStatus;
@@ -46,6 +46,16 @@ export interface BranchInput {
   readonly updatedAt?: Date | string | undefined;
 }
 
+/**
+ * Normalização explícita do código (D-026): remove espaços nas extremidades, aplica Unicode NFKC,
+ * converte para maiúsculas e reduz espaços internos consecutivos a um único espaço.
+ */
+export const normalizeBranchCode = (value: unknown, field = 'code'): string =>
+  parseRequiredText(
+    parseRequiredText(value, field).normalize('NFKC').toUpperCase().replace(/\s+/g, ' '),
+    field,
+  );
+
 export const createBranch = (input: BranchInput): Branch => {
   const createdAt = parseTimestamp(input.createdAt, 'createdAt');
   const updatedAt =
@@ -57,10 +67,14 @@ export const createBranch = (input: BranchInput): Branch => {
     tenantId: parseTenantId(input.tenantId),
     companyId: parseCompanyId(input.companyId),
     name: parseRequiredText(input.name, 'name'),
-    code: parseRequiredText(input.code, 'code'),
+    code: normalizeBranchCode(input.code),
     sectorType: parseSectorType(input.sectorType),
     status: parseOneOf(input.status, BRANCH_STATUSES, 'status'),
     createdAt,
     updatedAt,
   });
 };
+
+/** Desactivação lógica (D-027); não elimina dados. */
+export const deactivateBranch = (branch: Branch, at: Date | string): Branch =>
+  createBranch({ ...branch, status: 'INACTIVE', updatedAt: at });

@@ -12,24 +12,35 @@ import type { TenantContext } from './tenant-context.js';
  * - registo cujo `tenantId` difere do contexto: `TenantMismatchError`;
  * - leitura de registo de outro tenant: `undefined`, indistinguível de inexistente;
  * - alteração ou eliminação de registo de outro tenant: `RecordNotFoundError`,
- *   sem revelar a existência do registo.
+ *   sem revelar a existência do registo;
+ * - registo estruturalmente inválido (ex.: objecto forjado): `DomainValidationError`;
+ * - identificador repetido: `RecordConflictError('duplicate-id')`;
+ * - `createdAt` alterado numa actualização: `RecordConflictError('immutable-field')`.
  */
 
 export interface CompanyRepository {
   findById(context: TenantContext, id: CompanyId): Promise<Company | undefined>;
-  /** Recusa um segundo registo no mesmo tenant (D-016) com `RecordConflictError`. */
+  /** Recusa um segundo registo no mesmo tenant (D-016, D-023) com `RecordConflictError`. */
   create(context: TenantContext, company: Company): Promise<void>;
   update(context: TenantContext, company: Company): Promise<void>;
-  /** Recusa empresas com estabelecimentos associados com `RecordConflictError`. */
+  /**
+   * Eliminação física, recusada para empresas com estabelecimentos (`RecordConflictError`, D-027).
+   * Preferir a desactivação lógica (`deactivateCompany`); não exposta a funcionalidades de produção.
+   */
   delete(context: TenantContext, id: CompanyId): Promise<void>;
 }
 
 export interface BranchRepository {
   findById(context: TenantContext, id: BranchId): Promise<Branch | undefined>;
+  /** Ordenados por código. */
   listByCompany(context: TenantContext, companyId: CompanyId): Promise<readonly Branch[]>;
-  /** Exige que a empresa indicada exista no tenant do contexto (`RecordNotFoundError`). */
+  /**
+   * Exige que a empresa indicada exista no tenant do contexto (`RecordNotFoundError`) e que o
+   * código normalizado seja único na empresa (`RecordConflictError('duplicate-branch-code')`, D-026).
+   */
   create(context: TenantContext, branch: Branch): Promise<void>;
   update(context: TenantContext, branch: Branch): Promise<void>;
+  /** Eliminação física; preferir a desactivação lógica (`deactivateBranch`, D-027). */
   delete(context: TenantContext, id: BranchId): Promise<void>;
 }
 

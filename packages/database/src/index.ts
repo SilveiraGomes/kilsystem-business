@@ -1,1 +1,7 @@
 export type DatabaseTarget = 'local-sqlite' | 'central-postgresql';
+
+export * from './connection.js';
+export * from './errors.js';
+export * from './location.js';
+export * from './migrations.js';
+export * from './sqlite-tenant-persistence.js';

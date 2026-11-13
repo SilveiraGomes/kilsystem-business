@@ -1,8 +1,10 @@
 import {
   assertSameTenant,
   assertTenantContext,
+  createBranch,
   RecordConflictError,
   RecordNotFoundError,
+  restoreCompany,
   type Branch,
   type BranchId,
   type BranchRepository,
@@ -11,12 +13,12 @@ import {
   type CompanyRepository,
   type TenantContext,
 } from '../../packages/shared-types/src/index';
-import type { TenantRepositories } from './tenant-repository-contract';
+import type { TenantRepositoryHarness } from './tenant-repository-contract';
 
 /*
  * Implementação em memória EXCLUSIVA PARA TESTES. Não é persistência real, não sobrevive ao
- * processo e não deve ser importada por código de produção. Serve para exercitar os contratos
- * de `packages/shared-types` até existir a implementação SQLite (E1.04).
+ * processo e não deve ser importada por código de produção. Serve de referência executável
+ * da suite de contrato, ao lado da implementação SQLite de `packages/database`.
  */
 
 // Converte excepções síncronas em promessas rejeitadas, como numa implementação assíncrona real.
@@ -25,7 +27,7 @@ const settle = <T>(operation: () => T): Promise<T> =>
     resolve(operation());
   });
 
-export const createInMemoryTenantRepositories = (): TenantRepositories => {
+export const createInMemoryTenantRepositories = (): TenantRepositoryHarness => {
   const companies = new Map<CompanyId, Company>();
   const branches = new Map<BranchId, Branch>();
 
@@ -39,15 +41,25 @@ export const createInMemoryTenantRepositories = (): TenantRepositories => {
     return branch?.tenantId === context.tenantId ? branch : undefined;
   };
 
+  const assertBranchWritable = (context: TenantContext, branch: Branch): void => {
+    if (!companyInTenant(context, branch.companyId)) throw new RecordNotFoundError('Company');
+    const codeTaken = [...branches.values()].some(
+      (existing) =>
+        existing.companyId === branch.companyId && existing.code === branch.code && existing.id !== branch.id,
+    );
+    if (codeTaken) throw new RecordConflictError('duplicate-branch-code');
+  };
+
   const companyRepository: CompanyRepository = {
     findById: (context, id) =>
       settle(() => {
         assertTenantContext(context);
         return companyInTenant(context, id);
       }),
-    create: (context, company) =>
+    create: (context, candidate) =>
       settle(() => {
         assertTenantContext(context);
+        const company = restoreCompany(candidate);
         assertSameTenant(context, company);
         if (companies.has(company.id)) throw new RecordConflictError('duplicate-id');
         if ([...companies.values()].some((existing) => existing.tenantId === context.tenantId)) {
@@ -55,11 +67,14 @@ export const createInMemoryTenantRepositories = (): TenantRepositories => {
         }
         companies.set(company.id, company);
       }),
-    update: (context, company) =>
+    update: (context, candidate) =>
       settle(() => {
         assertTenantContext(context);
+        const company = restoreCompany(candidate);
         assertSameTenant(context, company);
-        if (!companyInTenant(context, company.id)) throw new RecordNotFoundError('Company');
+        const current = companyInTenant(context, company.id);
+        if (!current) throw new RecordNotFoundError('Company');
+        if (current.createdAt !== company.createdAt) throw new RecordConflictError('immutable-field');
         companies.set(company.id, company);
       }),
     delete: (context, id) =>
@@ -82,24 +97,28 @@ export const createInMemoryTenantRepositories = (): TenantRepositories => {
     listByCompany: (context, companyId) =>
       settle(() => {
         assertTenantContext(context);
-        return [...branches.values()].filter(
-          (branch) => branch.tenantId === context.tenantId && branch.companyId === companyId,
-        );
+        return [...branches.values()]
+          .filter((branch) => branch.tenantId === context.tenantId && branch.companyId === companyId)
+          .sort((left, right) => (left.code < right.code ? -1 : left.code > right.code ? 1 : 0));
       }),
-    create: (context, branch) =>
+    create: (context, candidate) =>
       settle(() => {
         assertTenantContext(context);
+        const branch = createBranch(candidate);
         assertSameTenant(context, branch);
+        assertBranchWritable(context, branch);
         if (branches.has(branch.id)) throw new RecordConflictError('duplicate-id');
-        if (!companyInTenant(context, branch.companyId)) throw new RecordNotFoundError('Company');
         branches.set(branch.id, branch);
       }),
-    update: (context, branch) =>
+    update: (context, candidate) =>
       settle(() => {
         assertTenantContext(context);
+        const branch = createBranch(candidate);
         assertSameTenant(context, branch);
-        if (!branchInTenant(context, branch.id)) throw new RecordNotFoundError('Branch');
-        if (!companyInTenant(context, branch.companyId)) throw new RecordNotFoundError('Company');
+        const current = branchInTenant(context, branch.id);
+        if (!current) throw new RecordNotFoundError('Branch');
+        assertBranchWritable(context, branch);
+        if (current.createdAt !== branch.createdAt) throw new RecordConflictError('immutable-field');
         branches.set(branch.id, branch);
       }),
     delete: (context, id) =>
