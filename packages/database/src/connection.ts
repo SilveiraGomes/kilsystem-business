@@ -8,17 +8,23 @@ export interface OpenSqliteOptions {
   /** Caminho validado por `resolveDatabaseLocation`, ou `:memory:`. */
   readonly filename: string;
   readonly busyTimeoutMs?: number;
+  /** Quando `true`, recusa abrir (e criar) um ficheiro inexistente. */
+  readonly fileMustExist?: boolean;
 }
 
 /**
  * Abre uma ligação SQLite com integridade referencial obrigatória. Destina-se à camada de
  * serviços locais (D-028); não deve ser usada no renderer nem no processo principal Electron.
  */
-export const openSqliteDatabase = ({ filename, busyTimeoutMs = 5000 }: OpenSqliteOptions): SqliteDatabase => {
+export const openSqliteDatabase = ({
+  filename,
+  busyTimeoutMs = 5000,
+  fileMustExist = false,
+}: OpenSqliteOptions): SqliteDatabase => {
   if (!Number.isInteger(busyTimeoutMs) || busyTimeoutMs < 0) {
     throw new RangeError('busyTimeoutMs deve ser um inteiro não negativo.');
   }
-  const database = new Database(filename);
+  const database = new Database(filename, { fileMustExist });
   try {
     database.pragma('foreign_keys = ON');
     database.pragma(`busy_timeout = ${busyTimeoutMs}`);

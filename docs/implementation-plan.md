@@ -1,6 +1,6 @@
 # Plano de implementação
 
-Este plano regista apenas as etapas confirmadas no repositório e a próxima etapa proposta. O planeamento posterior a E1.05 não consta do repositório (pendência PD-06 em [project-status.md](project-status.md)) e não deve ser antecipado.
+Este plano regista apenas as etapas confirmadas no repositório. O planeamento posterior a E1.05 não consta do repositório (pendência PD-06 em [project-status.md](project-status.md)) e não deve ser antecipado. A próxima etapa aguarda definição e autorização do responsável.
 
 ## Princípios
 
@@ -17,8 +17,9 @@ Este plano regista apenas as etapas confirmadas no repositório e a próxima eta
 | [E1.02](tasks/E1.02.md) | Aplicação desktop Electron funcional com interface demonstrativa | Concluída | `b113388` |
 | E1.02-H | Handoff multi-IA: documentação de continuidade, sem alterações de código | Concluída | `68b7f98` |
 | [E1.03](tasks/E1.03.md) | Contratos multiempresa e isolamento lógico | Concluída | `7ce5bb0` |
-| [E1.04](tasks/E1.04.md) | Persistência SQLite, migrações versionadas e repositórios multiempresa | Concluída | `feat: implement tenant-isolated sqlite persistence` |
-| [E1.05](tasks/E1.05.md) | Proposta: composição do serviço local de dados | Proposta, **não autorizada** | — |
+| [E1.04](tasks/E1.04.md) | Persistência SQLite, migrações versionadas e repositórios multiempresa | Concluída | `d713c3c` |
+| [E1.05](tasks/E1.05.md) | Inicialização e ciclo de vida do serviço local | Concluída | `feat: implement local service lifecycle` |
+| — | Próxima etapa | Não definida; aguarda autorização | — |
 
 ## Dependências entre funcionalidades e decisões pendentes
 
@@ -26,7 +27,7 @@ Relação entre as funcionalidades ainda não desenvolvidas e as decisões pende
 
 | Funcionalidade | Decisões necessárias antes de implementar |
 | --- | --- |
-| Serviço local de dados (E1.05) | Processo e runtime dos serviços locais; localização da base por instalação |
+| Instalação do serviço local | Localização da base por instalação, cópias de segurança; quem inicia e supervisiona o processo |
 | Empresas `ACTIVE` em produção | Regra de validação do NIF para `AO`, com fonte normativa (D-024) |
 | Persistência central | Driver PostgreSQL, modelo de tenancy e row-level security |
 | Utilizadores e autenticação | Autenticação, autorização e sessões; origem autenticada do `TenantContext` |

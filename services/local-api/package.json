@@ -3,7 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "scripts": { "build": "tsc -p tsconfig.json" },
-  "dependencies": { "fastify": "catalog:" },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/main.js",
+    "start:check": "node dist/main.js --check"
+  },
+  "dependencies": {
+    "@kil-business/database": "workspace:*",
+    "@kil-business/shared-types": "workspace:*",
+    "fastify": "catalog:"
+  },
   "devDependencies": { "@types/node": "catalog:", "typescript": "catalog:" }
 }

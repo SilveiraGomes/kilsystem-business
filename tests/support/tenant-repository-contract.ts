@@ -25,7 +25,7 @@ export interface TenantRepositories {
 
 export interface TenantRepositoryHarness extends TenantRepositories {
   /** Liberta recursos (ex.: fecha a ligação e apaga a base temporária). */
-  readonly dispose?: () => void;
+  readonly dispose?: () => void | Promise<void>;
 }
 
 interface Scenario {
@@ -62,19 +62,19 @@ const seed = async ({ branches, companies }: TenantRepositories): Promise<Scenar
  */
 export const describeTenantRepositoryContract = (
   implementation: string,
-  createRepositories: () => TenantRepositoryHarness,
+  createRepositories: () => TenantRepositoryHarness | Promise<TenantRepositoryHarness>,
 ): void => {
   describe(`Multi-tenant repository contract (${implementation})`, () => {
     let repositories: TenantRepositoryHarness;
     let scenario: Scenario;
 
     beforeEach(async () => {
-      repositories = createRepositories();
+      repositories = await createRepositories();
       scenario = await seed(repositories);
     });
 
-    afterEach(() => {
-      repositories.dispose?.();
+    afterEach(async () => {
+      await repositories.dispose?.();
     });
 
     describe('positive isolation', () => {

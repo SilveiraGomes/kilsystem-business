@@ -2,7 +2,7 @@
 
 ## Estado deste documento
 
-Este documento regista a fundação E1.01, a primeira aplicação desktop E1.02, a arquitectura de negócio consolidada em E1.02-H, os contratos multiempresa de E1.03 e a persistência SQLite de E1.04. “Definido” significa uma decisão já fornecida ou validada pelo projecto; “pendente” requer validação posterior e não deve ser inferido.
+Este documento regista a fundação E1.01, a primeira aplicação desktop E1.02, a arquitectura de negócio consolidada em E1.02-H, os contratos multiempresa de E1.03, a persistência SQLite de E1.04 e o ciclo de vida do serviço local de E1.05. “Definido” significa uma decisão já fornecida ou validada pelo projecto; “pendente” requer validação posterior e não deve ser inferido.
 
 ## Visão geral
 
@@ -19,16 +19,16 @@ apps/mobile-monitor (futuro) ─────────────────
 packages/licensing ──> adaptador futuro ──> servidor KIL independente
 ```
 
-Nenhuma seta representa um endpoint já existente; indica somente limites e direcções arquitecturais pretendidas. A base SQLite pertence à camada de serviços locais, nunca ao renderer React nem ao processo principal Electron (D-028).
+Nenhuma seta representa um endpoint já existente; indica somente limites e direcções arquitecturais pretendidas. A base SQLite pertence à camada de serviços locais, nunca ao renderer React nem ao processo principal Electron (D-028). Desde E1.05, `services/local-api` é um processo Node.js independente que gere a base (D-041). A seta `apps/desktop ──> services/local-api` continua por implementar e o respectivo canal está pendente.
 
 ## Arquitectura de negócio
 
-| Pilar | Definição registada | Estado na implementação (E1.04) |
+| Pilar | Definição registada | Estado na implementação (E1.05) |
 | --- | --- | --- |
 | Multiempresa | Definido: isolamento obrigatório por tenant/empresa em todas as camadas (`AGENTS.md`). Cada empresa juridicamente independente é um tenant identificado por UUID distinto do da empresa, em relação 1:1; o NIF não é chave (D-016, D-023). Grupos empresariais organizam empresas sem eliminar o isolamento (D-017). | Contratos em `packages/shared-types` e repositórios SQLite em `packages/database`, com filtro por tenant em todas as consultas e integridade garantida pelo esquema. `BusinessGroup` não implementado. A “empresa activa” na interface continua a ser texto fixo demonstrativo. |
 | Quatro sectores | Definido (D-018): `PHARMACY` (Farmácia), `SUPERMARKET` (Supermercado), `FUEL_STATION` (Posto de combustível), `RESTAURANT` (Restauração). Uma empresa pode ter estabelecimentos de sectores diferentes. | `SECTOR_TYPES` no domínio e catálogo `sector_types` na base. Não existem módulos nem regras sectoriais. |
 | Contabilidade integrada | Definido: fronteira `packages/accounting`, valores decimais seguros, lançamentos imutáveis ou corrigidos de forma auditável (`AGENTS.md`). | O pacote apenas exporta `accountingModuleStatus = 'not-implemented'`. O modelo de integração entre operações e contabilidade está pendente. |
-| Funcionamento offline | Definido: o desktop opera com serviços e dados locais em SQLite. | Persistência SQLite local implementada em `packages/database`, ainda não integrada em `services/local-api` nem no desktop. A estratégia offline está pendente. |
+| Funcionamento offline | Definido: o desktop opera com serviços e dados locais em SQLite. | Persistência SQLite local em `packages/database`, gerida pelo serviço local Node.js (`services/local-api`), que ainda não comunica com o desktop. A estratégia offline está pendente. |
 | Sincronização | Definido: `services/sync-service` liga o ambiente local aos serviços centrais em PostgreSQL. | Fronteira sem implementação (`syncServiceStatus = 'contract-pending'`); protocolo pendente. |
 | Monitor opcional | Definido: KIL Business Monitor em React Native, opcional, limitado à consulta de indicadores sincronizados. | `apps/mobile-monitor` é um marcador TypeScript sem dependências móveis. |
 
@@ -86,6 +86,56 @@ Os pacotes que outros pacotes consomem (`shared-types`, `database`) declaram uma
 - `vitest.config.ts` define `resolve.conditions: ['source']`.
 - O build de `packages/database` usa `tsconfig.build.json`, sem a condição, e consome `shared-types` a partir de `dist/`. O `pnpm -r build` respeita a ordem pela dependência `workspace:*`.
 - Em execução Node, sem a condição, os pacotes resolvem para `dist/`.
+- `services/local-api` segue o mesmo padrão desde E1.05: `tsconfig.json` com a condição `source` para lint e editor, e `tsconfig.build.json` para o build.
+
+## Serviço local (E1.05)
+
+Localização: `services/local-api/src`. É um processo Node.js independente do Electron (D-041), sem servidor HTTP, sem portas de rede e sem integração com a interface. `app.ts` (fábrica Fastify de E1.01) não é usado pelo serviço.
+
+```text
+main.ts ──> cli.ts ──> config.ts (process.env → LocalServiceConfig validada)
+                  └──> local-service.ts ──> packages/database ──> SQLite (ficheiro fora do repositório)
+                                       └──> logger.ts (JSON Lines para stdout)
+```
+
+- **Configuração** (`config.ts`, D-043): `loadLocalServiceConfigFromEnv(env, { protectedDirectories })` lê as variáveis abaixo de um ambiente injectado. Nenhum ficheiro `.env` é carregado. `parseLocalServiceConfig` recusa propriedades desconhecidas, pelo que a configuração não admite SQL, pragmas nem migrações.
+
+  | Variável | Valores | Por omissão |
+  | --- | --- | --- |
+  | `LOCAL_DATABASE_PATH` | caminho absoluto `.sqlite`/`.sqlite3`/`.db` fora dos directórios protegidos | — (obrigatória) |
+  | `LOCAL_SERVICE_ENVIRONMENT` | `development`, `test`, `production` | — (obrigatória) |
+  | `LOCAL_SERVICE_INSTANCE_ID` | 1–64 caracteres `[A-Za-z0-9._-]` | — (obrigatória) |
+  | `LOCAL_SERVICE_LOG_LEVEL` | `debug`, `info`, `warn`, `error` | `info` |
+  | `LOCAL_SERVICE_ON_MISSING_DATABASE` | `create`, `fail` | — (obrigatória) |
+  | `LOCAL_SERVICE_ON_PENDING_MIGRATIONS` | `apply`, `fail` | — (obrigatória) |
+
+- **Directórios protegidos** (`protected-directories.ts`, D-045): a raiz do pacote do serviço e a raiz do monorepositório, derivadas da localização do código.
+- **Ciclo de vida** (`local-service.ts`): `createLocalService(config, { logger, protectedDirectories, openDatabase? })`.
+
+  | Estado | Transições permitidas | Significado |
+  | --- | --- | --- |
+  | `STOPPED` | `STARTING` | Sem ligação aberta (estado inicial). |
+  | `STARTING` | `READY`, `FAILED` | Validação da localização, abertura, inspecção e aplicação de migrações. |
+  | `READY` | `STOPPING` | Ligação aberta; repositórios disponíveis. |
+  | `STOPPING` | `STOPPED`, `FAILED` | Repositórios desligados e ligação a fechar. |
+  | `FAILED` | `STARTING`, `STOPPED` | Arranque falhado; ligação já fechada; nova tentativa ou encerramento. |
+
+  - `start()`: em `READY` não faz nada. Em `STARTING` devolve o arranque em curso. Em `STOPPING` aguarda o encerramento e depois arranca. A partir de `STOPPED` ou `FAILED`, inicia (D-042).
+  - `stop()`: em `STOPPED` não faz nada. Em `STARTING` aguarda o arranque e depois encerra. Em `FAILED` passa a `STOPPED`. Em `READY` fecha a ligação.
+  - Sequência de arranque:
+    1. valida a localização;
+    2. aplica `onMissingDatabase` (`fail` usa `fileMustExist` e não cria ficheiros);
+    3. abre o SQLite;
+    4. corre `inspectMigrations` (integridade);
+    5. aplica `onPendingMigrations` (`fail` recusa sem alterar);
+    6. corre `runMigrations`;
+    7. cria os repositórios.
+
+    Qualquer falha fecha a ligação antes de `FAILED`, com motivo `invalid-location`, `database-missing`, `database-open-failed`, `migration-integrity`, `pending-migrations`, `migration-failed` ou `unexpected` (D-048).
+  - `companies`, `branches` e `transaction` delegam nos repositórios SQLite (isolamento por tenant inalterado) e recusam qualquer operação fora de `READY` com `LocalServiceStateError('not-ready')` (D-047).
+- **Registos** (`logger.ts`, D-046): uma linha JSON por evento, com `time`, `level`, `event`, `instanceId` e campos escalares. Os eventos são `service.state_changed`, `service.starting`, `service.database_opened`, `service.ready`, `service.start_failed`, `service.stopped`, `service.stop_failed`, `service.release_failed`, `service.config_invalid`, `service.arguments_invalid`, `service.waiting_for_shutdown` e `service.shutdown_requested`. A base é identificada só pelo nome do ficheiro, as causas por nome e motivo, e as chaves sensíveis são redigidas.
+- **Executável** (`main.ts`, `cli.ts`, D-049): `node dist/main.js` fica em `READY` até `SIGINT`/`SIGTERM` (e `SIGBREAK` em Windows); `--check` arranca e encerra. Códigos de saída: 0, 1 (arranque ou encerramento) e 2 (configuração ou argumentos).
+- **Verificação**: `tests/local-service.test.ts` cobre o ciclo de vida, as falhas, a recuperação, a configuração, os registos, a CLI e a independência do Electron. A suite de contrato corre também através do serviço (D-051).
 
 ## Decisões definidas
 
@@ -110,13 +160,14 @@ Os pacotes que outros pacotes consomem (`shared-types`, `database`) declaram uma
 - Código de estabelecimento normalizado e único por empresa (D-026).
 - Desactivação lógica preferida à eliminação física; eliminação física bloqueada com estabelecimentos (D-027).
 - SQLite na camada de serviços locais, com `better-sqlite3` (D-028, D-029).
+- Serviço local como processo Node.js independente do Electron, sem HTTP nem rede (D-041).
 
 ## Estrutura do monorepositório
 
 - `apps/desktop`: processo Electron e renderer React.
 - `apps/admin-portal`: portal web administrativo.
 - `apps/mobile-monitor`: marcador de fronteira para o futuro cliente React Native; sem dependências móveis nesta etapa.
-- `services/local-api`: composição da API local Fastify.
+- `services/local-api`: serviço local Node.js (configuração, ciclo de vida, persistência SQLite e executável). A fábrica Fastify de E1.01 (`app.ts`) mantém-se sem uso.
 - `services/central-api`: composição da API central Fastify.
 - `services/sync-service`: fronteira do futuro mecanismo de sincronização.
 - `packages/shared-types`: contratos de domínio multiempresa e interfaces de repositório, sem dependência de infraestrutura.
@@ -125,7 +176,7 @@ Os pacotes que outros pacotes consomem (`shared-types`, `database`) declaram uma
 - `packages/fiscal`: fronteira do domínio fiscal.
 - `packages/licensing`: porta de integração com licenciamento.
 - `packages/ui`: componentes visuais partilháveis.
-- `tests`: testes transversais; `tests/support` contém dados de teste, a suite de contrato, o duplo em memória e o suporte a bases SQLite temporárias.
+- `tests`: testes transversais; `tests/support` contém dados de teste, a suite de contrato, o duplo em memória, o suporte a bases SQLite temporárias e o suporte ao serviço local.
 
 ## Decisões pendentes
 
@@ -140,7 +191,7 @@ Os pacotes que outros pacotes consomem (`shared-types`, `database`) declaram uma
 - Requisitos fiscais angolanos detalhados, respectivas fontes normativas e processo de actualização, incluindo a regra de validação do NIF para `AO` (D-024).
 - Âmbito funcional e regras de cada sector (D-018 identifica os sectores, não as respectivas regras).
 - Modelo de integração contabilística: que operações geram lançamentos, em que momento e com que plano de contas.
-- Canal entre o processo Electron e `services/local-api`, processo e runtime onde os serviços locais correm, e respectivo modelo de segurança. Um runtime Electron exigiria recompilar o `better-sqlite3` para a ABI do Electron.
+- Canal entre o processo Electron e o serviço local (processo Node.js independente desde D-041), quem o inicia e supervisiona em instalação, e respectivo modelo de segurança.
 - Localização definitiva da base local por instalação, cópias de segurança e recuperação.
 - Unicidade do NIF (por jurisdição ou global) e obrigatoriedade do NIF em `SUSPENDED`/`INACTIVE`.
 - Transições permitidas entre estados empresariais e respectiva auditoria.
@@ -149,4 +200,4 @@ Os pacotes que outros pacotes consomem (`shared-types`, `database`) declaram uma
 
 ## Restrições da fundação
 
-E1.01 a E1.04 não criam bases de produção, endpoints de negócio, POS, facturação, contabilidade ou módulos sectoriais. A persistência SQLite existe apenas como biblioteca, sem localização de produção definida. Os indicadores visuais da aplicação desktop são explicitamente demonstrativos. Os pacotes de domínio contêm apenas contratos e validações estruturais, sem regras fiscais, contabilísticas ou sectoriais.
+E1.01 a E1.05 não criam bases de produção, endpoints de negócio, POS, facturação, contabilidade ou módulos sectoriais. A persistência SQLite é gerida pelo serviço local, sem servidor HTTP e sem localização de produção definida. Os indicadores visuais da aplicação desktop são explicitamente demonstrativos. Os pacotes de domínio contêm apenas contratos e validações estruturais, sem regras fiscais, contabilísticas ou sectoriais.

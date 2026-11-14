@@ -30,14 +30,14 @@ Para validar o arranque do Electron após a compilação:
 pnpm --filter @kil-business/desktop smoke
 ```
 
-Copie `.env.example` para `.env` apenas no ambiente local e substitua os marcadores. Nunca versione credenciais.
+Copie `.env.example` para `.env` apenas no ambiente local e substitua os marcadores. Nunca versione credenciais. O serviço local não lê ficheiros `.env`: as variáveis `LOCAL_DATABASE_PATH` e `LOCAL_SERVICE_*` têm de estar definidas no ambiente do processo.
 
 ## Estrutura
 
 - `apps/desktop`: aplicação Electron + React + Vite.
 - `apps/admin-portal`: portal administrativo React + Vite.
 - `apps/mobile-monitor`: espaço reservado para o futuro KIL Business Monitor em React Native.
-- `services/local-api`: API Fastify para operações locais.
+- `services/local-api`: serviço local Node.js que gere o ciclo de vida da base SQLite (sem HTTP nesta fase); ver [docs/tasks/E1.05.md](docs/tasks/E1.05.md).
 - `services/central-api`: API Fastify para serviços centrais.
 - `services/sync-service`: futuro serviço de sincronização.
 - `packages/shared-types`: contratos de domínio multiempresa.

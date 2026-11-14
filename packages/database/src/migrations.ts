@@ -94,6 +94,45 @@ const assertSequence = (migrations: readonly Migration[]): void => {
   });
 };
 
+export interface MigrationStatus {
+  /** Versões aplicadas, já verificadas contra as migrações conhecidas. */
+  readonly appliedVersions: readonly number[];
+  readonly pendingVersions: readonly number[];
+  readonly targetVersion: number;
+}
+
+/**
+ * Verifica o estado das migrações sem alterar a base. Recusa bases com migrações alteradas
+ * (`migration-checksum-mismatch`) ou de versão superior (`unknown-schema-version`).
+ */
+export const inspectMigrations = (
+  database: SqliteDatabase,
+  migrations: readonly Migration[] = MIGRATIONS,
+): MigrationStatus => {
+  assertSequence(migrations);
+  const tracked =
+    database.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'").get() !==
+    undefined;
+  const applied = tracked ? readApplied(database) : [];
+  for (const record of applied) {
+    const known = migrations.find((migration) => migration.version === record.version);
+    if (known === undefined) throw new PersistenceError('unknown-schema-version');
+    if (migrationChecksum(known) !== record.checksum) {
+      throw new PersistenceError('migration-checksum-mismatch');
+    }
+  }
+
+  const appliedVersions = applied.map((record) => record.version);
+  const appliedSet = new Set(appliedVersions);
+  return {
+    appliedVersions,
+    pendingVersions: migrations
+      .filter((migration) => !appliedSet.has(migration.version))
+      .map((migration) => migration.version),
+    targetVersion: migrations.length,
+  };
+};
+
 /**
  * Aplica as migrações pendentes, cada uma na sua transacção. É seguro reexecutar: migrações
  * aplicadas são ignoradas, mas a respectiva soma de verificação tem de coincidir.
@@ -110,22 +149,14 @@ export const runMigrations = (
     applied_at TEXT NOT NULL
   ) STRICT`);
 
-  const applied = readApplied(database);
-  for (const record of applied) {
-    const known = migrations.find((migration) => migration.version === record.version);
-    if (known === undefined) throw new PersistenceError('unknown-schema-version');
-    if (migrationChecksum(known) !== record.checksum) {
-      throw new PersistenceError('migration-checksum-mismatch');
-    }
-  }
-
-  const appliedVersions = new Set(applied.map((record) => record.version));
+  const { pendingVersions } = inspectMigrations(database, migrations);
+  const pending = new Set(pendingVersions);
   const register = database.prepare(
     'INSERT INTO schema_migrations (version, name, checksum, applied_at) VALUES (?, ?, ?, ?)',
   );
   const appliedNow: number[] = [];
   for (const migration of migrations) {
-    if (appliedVersions.has(migration.version)) continue;
+    if (!pending.has(migration.version)) continue;
     database
       .transaction(() => {
         database.exec(migration.sql);
