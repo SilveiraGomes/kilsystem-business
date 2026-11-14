@@ -14,10 +14,18 @@ Este documento é o ponto de retoma para qualquer agente ou pessoa. Contém apen
 | E1.03 — Contratos multiempresa e isolamento lógico | Concluída | `7ce5bb0` | [tasks/E1.03.md](tasks/E1.03.md) |
 | E1.04 — Persistência SQLite e repositórios multiempresa | Concluída | `d713c3c` | [tasks/E1.04.md](tasks/E1.04.md) |
 | E1.05 — Inicialização e ciclo de vida do serviço local | Concluída | `5f1b36e` | [tasks/E1.05.md](tasks/E1.05.md) |
-| E1.06 — Modernização e estabilização do ambiente | Concluída | `chore: modernize and stabilize runtime environment` | [tasks/E1.06.md](tasks/E1.06.md) |
+| E1.06 — Modernização e estabilização do ambiente | Concluída | `7270646` | [tasks/E1.06.md](tasks/E1.06.md) |
+| Política Git/GitHub | Adoptada | `docs: adopt git and github publication policy` | `AGENTS.md` (“Git e GitHub”), D-074 |
 | E1.07 a E1.10 | Planeadas, não autorizadas | — | [implementation-plan.md](implementation-plan.md) |
 
 Tarefa activa: nenhuma. A E1.07 exige autorização explícita.
+
+## Repositório remoto
+
+- Repositório oficial: `https://github.com/SilveiraGomes/kilsystem-business`, configurado como `origin` (configuração local do repositório).
+- Branch autorizada: `main`, salvo indicação diferente do responsável.
+- Antes da adopção da política (2026-11-14), o repositório remoto existia mas estava vazio (`git ls-remote` sem referências). O histórico local de E1.01 a E1.06 nunca tinha sido publicado.
+- O estado de publicação não é registado aqui, porque mudaria a cada *push*. Verifica-se com `git fetch origin` e `git status -sb`, ou comparando `git rev-parse HEAD` com `git ls-remote origin refs/heads/main`.
 
 ## Ambiente de referência
 
@@ -163,12 +171,14 @@ As decisões arquitecturais ainda em aberto estão em [architecture.md](architec
 
 1. Ler [AGENTS.md](../AGENTS.md), este documento, [architecture.md](architecture.md), [decisions.md](decisions.md) e [implementation-plan.md](implementation-plan.md).
 2. Activar o Node 24.22.3 (ver “Ambiente de referência”) e confirmar com `node -v`.
-3. Confirmar o estado real:
+3. Confirmar o estado real, local e remoto (`AGENTS.md`, “Git e GitHub”):
    ```sh
+   git -c safe.directory=C:/KIL-BUSINESS remote -v          # origin → github.com/SilveiraGomes/kilsystem-business
+   git -c safe.directory=C:/KIL-BUSINESS fetch origin
+   git -c safe.directory=C:/KIL-BUSINESS status -sb         # sem "ahead"/"behind" inesperados
    git -c safe.directory=C:/KIL-BUSINESS log --oneline -n 10
-   git -c safe.directory=C:/KIL-BUSINESS status
    ```
-   O último commit deve ser `chore: modernize and stabilize runtime environment` ou posterior a ele, com registo neste documento. Se não corresponder, actualizar este documento antes de outro trabalho.
+   O último commit deve ser `docs: adopt git and github publication policy` ou posterior a ele, com registo neste documento. Se não corresponder, ou se o remoto divergir, registar e comunicar antes de outro trabalho; nunca forçar.
 4. Executar `pnpm.cmd install --frozen-lockfile` (se `node_modules` não existir ou se a versão do Node mudou) e `pnpm.cmd check` para obter a linha de base. Registar qualquer falha antes de alterar código.
 5. Identificar a tarefa activa em `docs/tasks/`. As etapas E1.07–E1.10 estão **planeadas mas não autorizadas**: pedir autorização ao responsável antes de implementar.
 6. Trabalhar apenas no âmbito da tarefa. Regras a manter:
@@ -176,4 +186,11 @@ As decisões arquitecturais ainda em aberto estão em [architecture.md](architec
    - o acesso à base passa pelo serviço local em `READY` (D-047).
 
    Registar divergências na tabela de pendências e decisões novas aprovadas em `decisions.md`.
-7. Ao concluir: executar `pnpm.cmd check` (e `smoke` se o desktop for alterado). Depois, actualizar o ficheiro da tarefa e este documento, criar um único commit com a mensagem indicada na tarefa e confirmar que a árvore de trabalho está limpa.
+7. Ao concluir:
+   1. Executar `pnpm.cmd check` (e `smoke` se o desktop for alterado).
+   2. Actualizar o ficheiro da tarefa e este documento.
+   3. Criar um único commit com a mensagem indicada na tarefa e confirmar que a árvore de trabalho está limpa.
+   4. Publicar com `git push origin main`, sem *force*.
+   5. Confirmar que `git rev-parse HEAD` é igual a `git ls-remote origin refs/heads/main`.
+
+   A tarefa só conta como publicada depois desta confirmação. Se a autenticação falhar, comunicar o bloqueio. A ferramenta `gh` não está instalada nesta máquina; o `push` usa o gestor de credenciais do Git.

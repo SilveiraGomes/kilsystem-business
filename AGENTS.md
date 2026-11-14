@@ -59,3 +59,30 @@ Estas regras complementam as anteriores e aplicam-se a qualquer agente (Codex, C
 - Ao concluir, executar `pnpm check`, actualizar o ficheiro da tarefa e `docs/project-status.md`, criar o commit indicado na tarefa e confirmar que a árvore de trabalho ficou limpa.
 - Não alterar configuração global da máquina (política de execução do PowerShell, `git config --global`, PATH, instalações de Node.js) para contornar bloqueios; usar as alternativas locais descritas em `docs/project-status.md`.
 - Executar todos os comandos com a versão de Node.js de `.node-version`. O `engine-strict` recusa instalações com outra versão; resultados obtidos noutra versão não contam como validação.
+
+## Git e GitHub
+
+Repositório oficial: https://github.com/SilveiraGomes/kilsystem-business (remoto `origin`). Estas regras aplicam-se ao Codex, ao Claude Code e a qualquer outro agente.
+
+Antes de iniciar cada tarefa:
+
+- Confirmar que `origin` aponta para o repositório oficial (`git remote -v`).
+- Verificar a branch activa e a árvore de trabalho (`git status`).
+- Executar `git fetch origin` e verificar divergências entre o histórico local e o remoto (`git status -sb`, `git log --oneline HEAD..origin/<branch>` e `origin/<branch>..HEAD`).
+- Não eliminar alterações existentes.
+
+Após concluir cada tarefa:
+
+- Executar todas as validações obrigatórias.
+- Actualizar a documentação e o estado do projecto.
+- Criar um commit descritivo.
+- Publicar as alterações na branch autorizada do GitHub (`main`, salvo indicação diferente do responsável).
+- Confirmar que o checkpoint local corresponde ao remoto (`git rev-parse HEAD` igual a `git ls-remote origin refs/heads/<branch>`).
+
+Proibições:
+
+- Nunca publicar credenciais, ficheiros `.env` reais, bases de dados operacionais, chaves privadas ou informações de clientes.
+- Não usar *force push*, *reset* destrutivo nem sobrescrever trabalho de outros agentes.
+- Perante conflito, erro de autenticação ou divergência no histórico, comunicar o bloqueio sem forçar a publicação.
+
+Uma tarefa só é considerada publicada quando o *push* estiver efectivamente confirmado.

@@ -8,6 +8,7 @@ Este plano regista as etapas concluídas e o planeamento inicial da fase E1 até
 - Nenhuma funcionalidade de negócio antes de as decisões que a bloqueiam estarem registadas em [decisions.md](decisions.md).
 - Cada etapa termina com `pnpm check` aprovado, documentação actualizada e um único commit.
 - Uma etapa só começa com autorização explícita do responsável do projecto.
+- Uma etapa só está publicada quando o *push* para a branch autorizada de `origin` estiver confirmado (`AGENTS.md`, “Git e GitHub”; D-074).
 
 ## Etapas
 
@@ -19,7 +20,7 @@ Este plano regista as etapas concluídas e o planeamento inicial da fase E1 até
 | [E1.03](tasks/E1.03.md) | Contratos multiempresa e isolamento lógico | Concluída | `7ce5bb0` |
 | [E1.04](tasks/E1.04.md) | Persistência SQLite, migrações versionadas e repositórios multiempresa | Concluída | `d713c3c` |
 | [E1.05](tasks/E1.05.md) | Inicialização e ciclo de vida do serviço local | Concluída | `5f1b36e` |
-| [E1.06](tasks/E1.06.md) | Modernização e estabilização do ambiente tecnológico | Concluída | `chore: modernize and stabilize runtime environment` |
+| [E1.06](tasks/E1.06.md) | Modernização e estabilização do ambiente tecnológico | Concluída | `7270646` |
 | [E1.07](tasks/E1.07.md) | Identidade, autenticação e autorização local | Planeada, **não autorizada** | — |
 | [E1.08](tasks/E1.08.md) | API local segura e integração Electron | Planeada, **não autorizada** | — |
 | [E1.09](tasks/E1.09.md) | Infraestrutura de serviços centrais e PostgreSQL | Planeada, **não autorizada** | — |
