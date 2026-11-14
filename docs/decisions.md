@@ -55,3 +55,25 @@ Decisões em vigor no projecto, com a etapa e o commit de origem. As entradas n�
 | D-049 | Executável `node dist/main.js`: sem argumentos, fica em `READY` até `SIGINT`/`SIGTERM` (e `SIGBREAK` em Windows); com `--check`, arranca e encerra. Códigos de saída: 0 sucesso, 1 falha de arranque ou encerramento, 2 configuração ou argumentos inválidos. | E1.05 |
 | D-050 | `packages/database` ganha a opção `fileMustExist` em `openSqliteDatabase` e `inspectMigrations` (verificação sem escrita); `runMigrations` passa a usá-la, com comportamento inalterado. | E1.05 |
 | D-051 | A suite de contrato multiempresa corre também através do serviço local em `READY` (D-021), com factory assíncrona. | E1.05 |
+| D-052 | `CompanyId` e `TenantId` são UUID distintos, com relação obrigatória 1:1. Confirma D-023 e a interpretação `id ≠ tenantId` de D-031. | E1.06 (decisão do responsável; encerra PD-11) |
+| D-053 | O NIF pode estar ausente numa empresa `DRAFT`. Confirma D-024. | E1.06 (decisão do responsável) |
+| D-054 | O NIF é obrigatório em `ACTIVE` e sujeito à política fiscal aplicável. Confirma D-024. | E1.06 (decisão do responsável) |
+| D-055 | Empresas anteriormente activadas preservam o NIF em `SUSPENDED` e `INACTIVE`. **Substitui** a interpretação de D-031 (“NIF estruturalmente obrigatório apenas em `ACTIVE`”). Implementação pendente: PD-14. | E1.06 (decisão do responsável) |
+| D-056 | Estados empresariais `DRAFT`, `ACTIVE`, `SUSPENDED` e `INACTIVE`. Confirma D-025. | E1.06 (decisão do responsável) |
+| D-057 | Estados dos estabelecimentos `ACTIVE` e `INACTIVE`. Confirma a interpretação de D-031. | E1.06 (decisão do responsável) |
+| D-058 | O NIF é único por jurisdição e entidade jurídica, após normalização segundo a política fiscal aplicável. Implementação pendente: PD-15 (depende de PD-09). | E1.06 (decisão do responsável) |
+| D-059 | Código do estabelecimento único dentro da empresa. Confirma D-026. | E1.06 (decisão do responsável) |
+| D-060 | Desactivação lógica preferencial, com preservação do histórico. Confirma e reforça D-027. Histórico pendente: PD-16. | E1.06 (decisão do responsável) |
+| D-061 | Transições entre estados empresariais controladas por regras explícitas. Implementação pendente: PD-16. | E1.06 (decisão do responsável) |
+| D-062 | Modo de implantação **A — Autónomo**: serviço local e interface no mesmo computador, base SQLite local e comunicação futura autenticada por loopback. | E1.06 (decisão do responsável) |
+| D-063 | Modo de implantação **B — Centralizado**: serviço operacional no servidor da empresa e vários terminais ligados ao serviço por HTTPS autenticado (futuro). Nenhum terminal acede directamente ao ficheiro SQLite por SMB ou outro mecanismo de partilha. | E1.06 (decisão do responsável) |
+| D-064 | Modo de implantação **C — Multiestabelecimento**: serviços locais independentes, operação offline por estabelecimento, sincronização futura com serviços centrais e monitorização móvel opcional. | E1.06 (decisão do responsável) |
+| D-065 | O serviço local será instalado futuramente como serviço Windows, com ciclo de vida independente do Electron. Complementa D-041. | E1.06 (decisão do responsável) |
+| D-066 | A API empresarial usará REST e Fastify, com autenticação, autorização e isolamento por empresa. | E1.06 (decisão do responsável) |
+| D-067 | Licenciamento: a licença principal é independente do Monitor; o Monitor é opcional, e a sua expiração não interrompe as operações locais autorizadas. Mantém D-009. | E1.06 (decisão do responsável; registo de decisão já aprovada) |
+| D-068 | Licenciamento: os módulos sectoriais são activáveis individualmente. | E1.06 (decisão do responsável; registo de decisão já aprovada) |
+| D-069 | Node.js 24 LTS (“Krypton”) como versão de referência, revisão **24.22.3**. Suporte oficial até 2028-04-30, em *Maintenance* desde 2026-10-20. Fixada em `.node-version` e em `engines.node` (`>=24.22.3 <25`), com `engine-strict=true` (`.npmrc`). Substitui o requisito `>=20.16.0 <23` de E1.01 e encerra PD-12. | E1.06 |
+| D-070 | O `better-sqlite3` mantém-se em 12.11.1. Publica binário pré-compilado `node-v137-win32-x64` para Node 24, e a 13.1.1 não publica binários Windows. Não há razão técnica para actualizar. Complementa D-040. | E1.06 |
+| D-071 | `@types/node` alinhado com o runtime: `^24.19.2` no catálogo do workspace, também usado pela raiz. | E1.06 |
+| D-072 | ESLint 10 (`eslint ^10.15.0`, `@eslint/js ^10.0.1`). O ESLint 9 chegou ao fim de suporte; o typescript-eslint 8.72.2 declara `eslint ^10` e a configuração *flat* não mudou. | E1.06 |
+| D-073 | O pnpm mantém-se em 9.15.9 (compatível com Node 24). A mudança para o pnpm 10 ou superior altera a política de *build scripts* e fica para avaliação própria (PD-20). | E1.06 |

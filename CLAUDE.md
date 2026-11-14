@@ -13,5 +13,6 @@ Este ficheiro é apenas um ponto de entrada. As regras do projecto estão em `AG
 
 ## Notas deste ambiente (Windows)
 
+- Node.js 24.22.3 isolado em `%LOCALAPPDATA%\KIL-Tools\node\node-v24.22.3-win-x64`; o Node do sistema (20.16.0) não é suportado pelo projecto. Em cada comando PowerShell, antes de `pnpm.cmd`: `$env:Path = "$env:LOCALAPPDATA\KIL-Tools\node\node-v24.22.3-win-x64;" + $env:Path`. Nunca alterar o PATH global.
 - Usar `pnpm.cmd` em PowerShell; validação final: `pnpm.cmd check`.
 - Se o Git indicar *dubious ownership*, usar `git -c safe.directory=C:/KIL-BUSINESS <comando>` em cada invocação, sem alterar a configuração global.

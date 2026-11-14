@@ -57,4 +57,5 @@ Estas regras complementam as anteriores e aplicam-se a qualquer agente (Codex, C
 - Divergências entre planeamento e implementação são registadas como pendências em `docs/project-status.md`; decisões arquitecturais não são tomadas por iniciativa própria.
 - Decisões aprovadas são acrescentadas a `docs/decisions.md`; uma decisão substituída recebe nova entrada que a referencia, sem reescrever o histórico.
 - Ao concluir, executar `pnpm check`, actualizar o ficheiro da tarefa e `docs/project-status.md`, criar o commit indicado na tarefa e confirmar que a árvore de trabalho ficou limpa.
-- Não alterar configuração global da máquina (política de execução do PowerShell, `git config --global`) para contornar bloqueios; usar as alternativas locais descritas em `docs/project-status.md`.
+- Não alterar configuração global da máquina (política de execução do PowerShell, `git config --global`, PATH, instalações de Node.js) para contornar bloqueios; usar as alternativas locais descritas em `docs/project-status.md`.
+- Executar todos os comandos com a versão de Node.js de `.node-version`. O `engine-strict` recusa instalações com outra versão; resultados obtidos noutra versão não contam como validação.

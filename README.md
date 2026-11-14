@@ -4,17 +4,20 @@ Fundação tecnológica do ERP multiempresa, multissectorial, híbrido e modular
 
 ## Pré-requisitos
 
-- Node.js 20.16 ou superior (LTS recomendado; inferior a 23)
-- pnpm 9.15.x
-- Git 2.x
-- Ferramentas de compilação nativa para o `better-sqlite3` quando não existir binário pré-compilado para a plataforma. Em Windows com Node 20: Visual Studio 2022 com a carga de trabalho “Desenvolvimento para desktop com C++” e Python 3.
+- Node.js **24.22.3** (LTS “Krypton”; versão em [`.node-version`](.node-version)). O ficheiro `.npmrc` activa `engine-strict`, pelo que o `pnpm install` recusa outras versões (`engines.node`: `>=24.22.3 <25`).
+- pnpm 9.15.9 (`packageManager` em `package.json`).
+- Git 2.x.
+- Em Windows x64 com Node 24 não são necessárias ferramentas de compilação C++: o `better-sqlite3` 12.11.1 descarrega um binário pré-compilado. Noutras plataformas sem binário, o `node-gyp` precisa de compilador C++ e Python 3.
+
+Instale o Node 24.22.3 a partir de [nodejs.org](https://nodejs.org/dist/v24.22.3/) ou com um gestor de versões que leia `.node-version` (por exemplo, fnm). Para manter outra versão no sistema, use um Node isolado e ponha-o à frente no PATH apenas na sessão; ver [docs/project-status.md](docs/project-status.md#ambiente-de-referência).
 
 No Windows, se a política de execução bloquear `pnpm.ps1`, use `pnpm.cmd` sem alterar a política global.
 
 ## Começar
 
 ```sh
-pnpm install
+node -v                          # v24.22.3
+pnpm install --frozen-lockfile
 pnpm check
 ```
 

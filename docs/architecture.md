@@ -2,7 +2,7 @@
 
 ## Estado deste documento
 
-Este documento regista a fundação E1.01, a primeira aplicação desktop E1.02, a arquitectura de negócio consolidada em E1.02-H, os contratos multiempresa de E1.03, a persistência SQLite de E1.04 e o ciclo de vida do serviço local de E1.05. “Definido” significa uma decisão já fornecida ou validada pelo projecto; “pendente” requer validação posterior e não deve ser inferido.
+Este documento regista a fundação E1.01, a primeira aplicação desktop E1.02, a arquitectura de negócio consolidada em E1.02-H, os contratos multiempresa de E1.03, a persistência SQLite de E1.04, o ciclo de vida do serviço local de E1.05 e o ambiente de execução, os modos de implantação e as decisões de domínio de E1.06. “Definido” significa uma decisão já fornecida ou validada pelo projecto; “pendente” requer validação posterior e não deve ser inferido.
 
 ## Visão geral
 
@@ -30,7 +30,39 @@ Nenhuma seta representa um endpoint já existente; indica somente limites e dire
 | Contabilidade integrada | Definido: fronteira `packages/accounting`, valores decimais seguros, lançamentos imutáveis ou corrigidos de forma auditável (`AGENTS.md`). | O pacote apenas exporta `accountingModuleStatus = 'not-implemented'`. O modelo de integração entre operações e contabilidade está pendente. |
 | Funcionamento offline | Definido: o desktop opera com serviços e dados locais em SQLite. | Persistência SQLite local em `packages/database`, gerida pelo serviço local Node.js (`services/local-api`), que ainda não comunica com o desktop. A estratégia offline está pendente. |
 | Sincronização | Definido: `services/sync-service` liga o ambiente local aos serviços centrais em PostgreSQL. | Fronteira sem implementação (`syncServiceStatus = 'contract-pending'`); protocolo pendente. |
-| Monitor opcional | Definido: KIL Business Monitor em React Native, opcional, limitado à consulta de indicadores sincronizados. | `apps/mobile-monitor` é um marcador TypeScript sem dependências móveis. |
+| Monitor opcional | Definido: KIL Business Monitor em React Native, opcional, limitado à consulta de indicadores sincronizados. A licença principal é independente do Monitor, e a expiração do Monitor não interrompe as operações locais autorizadas (D-067). | `apps/mobile-monitor` é um marcador TypeScript sem dependências móveis. |
+
+## Modos de implantação (E1.06)
+
+Decisões do responsável, ainda não implementadas: não existem instaladores, serviço Windows, HTTP nem comunicação Electron/serviço.
+
+| Modo | Topologia | Dados | Comunicação futura |
+| --- | --- | --- | --- |
+| **A — Autónomo** (D-062) | Serviço local e interface no mesmo computador. | SQLite local. | Autenticada, por loopback. |
+| **B — Centralizado** (D-063) | Serviço operacional no servidor da empresa; vários terminais ligados ao serviço. | SQLite no servidor. **Nenhum terminal acede ao ficheiro SQLite por SMB ou outra partilha.** | HTTPS autenticado. |
+| **C — Multiestabelecimento** (D-064) | Serviços locais independentes por estabelecimento. | SQLite por estabelecimento, com operação offline. | Sincronização com serviços centrais; Monitor móvel opcional. |
+
+Em todos os modos:
+- o serviço local será instalado como serviço Windows, com ciclo de vida independente do Electron (D-065);
+- a API empresarial será REST em Fastify, com autenticação, autorização e isolamento por empresa (D-066).
+
+## Licenciamento (decisões registadas em E1.06)
+
+- O servidor de licenciamento KIL é independente e é integrado por adaptador, sem endpoints presumidos (D-009).
+- A licença principal é independente do Monitor. O Monitor é opcional, e a sua expiração não interrompe as operações locais autorizadas (D-067).
+- Os módulos sectoriais são activáveis individualmente (D-068).
+- Nada disto está implementado; `packages/licensing` contém apenas a interface `LicenseProvider`.
+
+## Ambiente de execução (E1.06)
+
+| Componente | Versão | Nota |
+| --- | --- | --- |
+| Node.js (serviços, ferramentas, testes) | 24.22.3 (`.node-version`; `engines.node >=24.22.3 <25`) | LTS “Krypton”, em *Maintenance* desde 2026-10-20 e com suporte até 2028-04-30. O Node 26 é a *Active LTS* desde 2026-10-28 (PD-21). |
+| pnpm | 9.15.9 (`packageManager`; `engines.pnpm >=9.15.0 <10`) | `engine-strict=true` em `.npmrc` recusa versões fora de `engines` (D-069, D-073). |
+| `better-sqlite3` | 12.11.1 | Binário pré-compilado `node-v137-win32-x64`, sem compilação local (D-070). |
+| Electron | 33.4.11 (Node embutido 20.18.3) | Runtime próprio, independente do Node do sistema. Fora de suporte, com alertas de segurança (PD-17). |
+| TypeScript / Vite / Vitest | 5.9.3 / 6.4.6 / 2.1.9 | Vitest com alertas apenas de desenvolvimento (PD-18). |
+| ESLint | 10.15.0 (`@eslint/js` 10.0.1, typescript-eslint 8.72.2) | Actualizado em E1.06 (D-072). |
 
 ## Contratos multiempresa (E1.03, revistos em E1.04)
 
@@ -161,6 +193,10 @@ main.ts ──> cli.ts ──> config.ts (process.env → LocalServiceConfig val
 - Desactivação lógica preferida à eliminação física; eliminação física bloqueada com estabelecimentos (D-027).
 - SQLite na camada de serviços locais, com `better-sqlite3` (D-028, D-029).
 - Serviço local como processo Node.js independente do Electron, sem HTTP nem rede (D-041).
+- Decisões de domínio da PD-11 (D-052 a D-061): identidades 1:1 distintas; NIF ausente só em `DRAFT`; NIF obrigatório em `ACTIVE` e preservado em `SUSPENDED`/`INACTIVE` após activação; NIF único por jurisdição e entidade jurídica após normalização; estados de empresa e de estabelecimento; código único por empresa; desactivação lógica com histórico; transições com regras explícitas.
+- Modos de implantação A, B e C; serviço Windows; API REST em Fastify (D-062 a D-066).
+- Licença principal independente do Monitor; módulos sectoriais activáveis individualmente (D-067, D-068).
+- Node.js 24.22.3 como referência; ESLint 10 (D-069 a D-073).
 
 ## Estrutura do monorepositório
 
@@ -191,13 +227,13 @@ main.ts ──> cli.ts ──> config.ts (process.env → LocalServiceConfig val
 - Requisitos fiscais angolanos detalhados, respectivas fontes normativas e processo de actualização, incluindo a regra de validação do NIF para `AO` (D-024).
 - Âmbito funcional e regras de cada sector (D-018 identifica os sectores, não as respectivas regras).
 - Modelo de integração contabilística: que operações geram lançamentos, em que momento e com que plano de contas.
-- Canal entre o processo Electron e o serviço local (processo Node.js independente desde D-041), quem o inicia e supervisiona em instalação, e respectivo modelo de segurança.
+- Transporte concreto entre a interface e o serviço local: mecanismo de loopback no modo A e terminação HTTPS e certificados no modo B (os princípios estão em D-062 e D-063). Inclui a tecnologia do serviço Windows (D-065) e o modelo de segurança.
 - Localização definitiva da base local por instalação, cópias de segurança e recuperação.
-- Unicidade do NIF (por jurisdição ou global) e obrigatoriedade do NIF em `SUSPENDED`/`INACTIVE`.
-- Transições permitidas entre estados empresariais e respectiva auditoria.
+- Regras concretas de normalização do NIF por jurisdição, que dependem da política fiscal (D-058, PD-09).
+- Tabela concreta de transições permitidas entre estados empresariais e respectiva auditoria (o princípio está em D-061).
 - Modelo de `BusinessGroup`, autorização de relatórios consolidados e respectiva auditoria (D-017).
 - Política de eliminação de dados empresariais em produção (D-027).
 
 ## Restrições da fundação
 
-E1.01 a E1.05 não criam bases de produção, endpoints de negócio, POS, facturação, contabilidade ou módulos sectoriais. A persistência SQLite é gerida pelo serviço local, sem servidor HTTP e sem localização de produção definida. Os indicadores visuais da aplicação desktop são explicitamente demonstrativos. Os pacotes de domínio contêm apenas contratos e validações estruturais, sem regras fiscais, contabilísticas ou sectoriais.
+E1.01 a E1.06 não criam bases de produção, endpoints de negócio, POS, facturação, contabilidade ou módulos sectoriais. A persistência SQLite é gerida pelo serviço local, sem servidor HTTP e sem localização de produção definida. Os indicadores visuais da aplicação desktop são explicitamente demonstrativos. Os pacotes de domínio contêm apenas contratos e validações estruturais, sem regras fiscais, contabilísticas ou sectoriais.
