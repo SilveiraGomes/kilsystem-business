@@ -17,7 +17,7 @@ export interface JsonLoggerOptions {
 }
 
 // Defesa em profundidade: estes campos nunca são escritos, mesmo que algum chamador os envie.
-const SENSITIVE_KEY = /nif|tax|password|passwd|secret|token|credential|legal.?name|email|phone/i;
+const SENSITIVE_KEY = /nif|tax|password|passwd|secret|token|credential|legal.?name|email|phone|user.?name|display.?name/i;
 
 const sanitize = (fields: LogFields): LogFields =>
   Object.fromEntries(

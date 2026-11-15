@@ -27,6 +27,11 @@ import { createTemporaryDatabase, type TemporaryDatabase } from './support/sqlit
 
 const repositoryRoot = fileURLToPath(new URL('..', import.meta.url));
 
+// Derivados da lista de migrações (E1.07-A acrescentou a versão 2), para que estes testes
+// verifiquem sempre o esquema completo em vez de um número fixo.
+const ALL_VERSIONS = MIGRATIONS.map((migration) => migration.version);
+const LATEST_VERSION = MIGRATIONS.length;
+
 const insertCompanyRow = (database: SqliteDatabase, values: Record<string, string | null> = {}): void => {
   database
     .prepare(
@@ -106,7 +111,7 @@ describe('SQLite persistence (E1.04)', () => {
 
       const reopened = temporary.open();
 
-      expect(reopened.prepare('SELECT version FROM schema_migrations').pluck().all()).toEqual([1]);
+      expect(reopened.prepare('SELECT version FROM schema_migrations').pluck().all()).toEqual(ALL_VERSIONS);
       expect(reopened.pragma('foreign_keys', { simple: true })).toBe(1);
     });
   });
@@ -115,7 +120,7 @@ describe('SQLite persistence (E1.04)', () => {
     it('creates the versioned schema, isolation indexes and audit record', () => {
       const database = temporary.open();
 
-      expect(runMigrations(database)).toEqual({ applied: [1], currentVersion: 1 });
+      expect(runMigrations(database)).toEqual({ applied: ALL_VERSIONS, currentVersion: LATEST_VERSION });
 
       const objects = database
         .prepare("SELECT name FROM sqlite_master WHERE type IN ('table', 'index') ORDER BY name")
@@ -124,9 +129,14 @@ describe('SQLite persistence (E1.04)', () => {
       expect(objects).toEqual(
         expect.arrayContaining(['branches', 'branches_tenant_company_idx', 'companies', 'schema_migrations', 'sector_types']),
       );
-      expect(database.prepare('SELECT version, name, checksum FROM schema_migrations').all()).toEqual([
-        { checksum: migrationChecksum(MIGRATIONS[0] as Migration), name: 'create_companies_and_branches', version: 1 },
-      ]);
+      expect(database.prepare('SELECT version, name, checksum FROM schema_migrations').all()).toEqual(
+        MIGRATIONS.map((migration) => ({
+          checksum: migrationChecksum(migration),
+          name: migration.name,
+          version: migration.version,
+        })),
+      );
+      expect(MIGRATIONS[0]).toMatchObject({ name: 'create_companies_and_branches', version: 1 });
     });
 
     it('keeps the sector catalogue aligned with SECTOR_TYPES', () => {
@@ -143,12 +153,12 @@ describe('SQLite persistence (E1.04)', () => {
       const company = newCompany();
       await createSqliteTenantPersistence(database).companies.create(contextFor(company.tenantId), company);
 
-      expect(runMigrations(database)).toEqual({ applied: [], currentVersion: 1 });
+      expect(runMigrations(database)).toEqual({ applied: [], currentVersion: LATEST_VERSION });
       database.close();
-      expect(runMigrations(temporary.open())).toEqual({ applied: [], currentVersion: 1 });
+      expect(runMigrations(temporary.open())).toEqual({ applied: [], currentVersion: LATEST_VERSION });
 
       const reopened = temporary.open();
-      expect(count(reopened, 'schema_migrations')).toBe(1);
+      expect(count(reopened, 'schema_migrations')).toBe(MIGRATIONS.length);
       expect(count(reopened, 'companies')).toBe(1);
     });
 
@@ -162,8 +172,8 @@ describe('SQLite persistence (E1.04)', () => {
     it('refuses a database created by a newer schema version', () => {
       const database = migratedDatabase();
       database
-        .prepare("INSERT INTO schema_migrations VALUES (2, 'futura', 'x', '2026-12-01T00:00:00.000Z')")
-        .run();
+        .prepare("INSERT INTO schema_migrations VALUES (?, 'futura', 'x', '2026-12-01T00:00:00.000Z')")
+        .run(LATEST_VERSION + 1);
 
       expectPersistenceError(() => runMigrations(database), 'unknown-schema-version');
     });
@@ -173,18 +183,18 @@ describe('SQLite persistence (E1.04)', () => {
       const broken: Migration = {
         name: 'broken',
         sql: 'CREATE TABLE partial_table (id TEXT) STRICT; INSERT INTO missing_table VALUES (1);',
-        version: 2,
+        version: LATEST_VERSION + 1,
       };
 
       expect(() => runMigrations(database, [...MIGRATIONS, broken])).toThrow(/missing_table/);
 
       expect(database.prepare("SELECT name FROM sqlite_master WHERE name = 'partial_table'").get()).toBeUndefined();
-      expect(count(database, 'schema_migrations')).toBe(1);
+      expect(count(database, 'schema_migrations')).toBe(MIGRATIONS.length);
     });
 
     it('rejects a non-sequential migration list', () => {
       const database = temporary.open();
-      const gap: Migration = { name: 'gap', sql: 'SELECT 1;', version: 3 };
+      const gap: Migration = { name: 'gap', sql: 'SELECT 1;', version: LATEST_VERSION + 2 };
 
       expectPersistenceError(() => runMigrations(database, [...MIGRATIONS, gap]), 'migration-sequence-invalid');
     });

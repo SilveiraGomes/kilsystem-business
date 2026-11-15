@@ -2,7 +2,7 @@
 
 ## Estado deste documento
 
-Este documento regista a fundação E1.01, a primeira aplicação desktop E1.02, a arquitectura de negócio consolidada em E1.02-H, os contratos multiempresa de E1.03, a persistência SQLite de E1.04, o ciclo de vida do serviço local de E1.05, o ambiente de execução e as decisões de E1.06, a actualização segura do Electron em E1.06-S1 e a modernização do Vitest em E1.06-S2. “Definido” significa uma decisão já fornecida ou validada pelo projecto; “pendente” requer validação posterior e não deve ser inferido.
+Este documento regista a fundação E1.01, a primeira aplicação desktop E1.02, a arquitectura de negócio consolidada em E1.02-H, os contratos multiempresa de E1.03, a persistência SQLite de E1.04, o ciclo de vida do serviço local de E1.05, o ambiente de execução e as decisões de E1.06, a actualização segura do Electron em E1.06-S1, a modernização do Vitest em E1.06-S2 e a identidade local com associações multiempresa de E1.07-A. “Definido” significa uma decisão já fornecida ou validada pelo projecto; “pendente” requer validação posterior e não deve ser inferido.
 
 ## Visão geral
 
@@ -25,7 +25,7 @@ Nenhuma seta representa um endpoint já existente; indica somente limites e dire
 
 | Pilar | Definição registada | Estado na implementação (E1.05) |
 | --- | --- | --- |
-| Multiempresa | Definido: isolamento obrigatório por tenant/empresa em todas as camadas (`AGENTS.md`). Cada empresa juridicamente independente é um tenant identificado por UUID distinto do da empresa, em relação 1:1; o NIF não é chave (D-016, D-023). Grupos empresariais organizam empresas sem eliminar o isolamento (D-017). | Contratos em `packages/shared-types` e repositórios SQLite em `packages/database`, com filtro por tenant em todas as consultas e integridade garantida pelo esquema. `BusinessGroup` não implementado. A “empresa activa” na interface continua a ser texto fixo demonstrativo. |
+| Multiempresa | Definido: isolamento obrigatório por tenant/empresa em todas as camadas (`AGENTS.md`). Cada empresa juridicamente independente é um tenant identificado por UUID distinto do da empresa, em relação 1:1; o NIF não é chave (D-016, D-023). Grupos empresariais organizam empresas sem eliminar o isolamento (D-017). | Contratos em `packages/shared-types` e repositórios SQLite em `packages/database`, com filtro por tenant em todas as consultas e integridade garantida pelo esquema. `BusinessGroup` não implementado. Desde E1.07-A, identidades locais com associações explícitas a empresas e estabelecimentos (D-080 a D-082), sem autenticação. A “empresa activa” na interface continua a ser texto fixo demonstrativo. |
 | Quatro sectores | Definido (D-018): `PHARMACY` (Farmácia), `SUPERMARKET` (Supermercado), `FUEL_STATION` (Posto de combustível), `RESTAURANT` (Restauração). Uma empresa pode ter estabelecimentos de sectores diferentes. | `SECTOR_TYPES` no domínio e catálogo `sector_types` na base. Não existem módulos nem regras sectoriais. |
 | Contabilidade integrada | Definido: fronteira `packages/accounting`, valores decimais seguros, lançamentos imutáveis ou corrigidos de forma auditável (`AGENTS.md`). | O pacote apenas exporta `accountingModuleStatus = 'not-implemented'`. O modelo de integração entre operações e contabilidade está pendente. |
 | Funcionamento offline | Definido: o desktop opera com serviços e dados locais em SQLite. | Persistência SQLite local em `packages/database`, gerida pelo serviço local Node.js (`services/local-api`), que ainda não comunica com o desktop. A estratégia offline está pendente. |
@@ -179,6 +179,41 @@ main.ts ──> cli.ts ──> config.ts (process.env → LocalServiceConfig val
 - **Registos** (`logger.ts`, D-046): uma linha JSON por evento, com `time`, `level`, `event`, `instanceId` e campos escalares. Os eventos são `service.state_changed`, `service.starting`, `service.database_opened`, `service.ready`, `service.start_failed`, `service.stopped`, `service.stop_failed`, `service.release_failed`, `service.config_invalid`, `service.arguments_invalid`, `service.waiting_for_shutdown` e `service.shutdown_requested`. A base é identificada só pelo nome do ficheiro, as causas por nome e motivo, e as chaves sensíveis são redigidas.
 - **Executável** (`main.ts`, `cli.ts`, D-049): `node dist/main.js` fica em `READY` até `SIGINT`/`SIGTERM` (e `SIGBREAK` em Windows); `--check` arranca e encerra. Códigos de saída: 0, 1 (arranque ou encerramento) e 2 (configuração ou argumentos).
 - **Verificação**: `tests/local-service.test.ts` cobre o ciclo de vida, as falhas, a recuperação, a configuração, os registos, a CLI e a independência do Electron. A suite de contrato corre também através do serviço (D-051).
+- **Identidades e associações (E1.07-A)**: o serviço compõe internamente `identityProvisioning.users`, `companyMemberships`, `branchMemberships` e `membershipScopes` sobre a mesma ligação. Estão sujeitos à mesma guarda de `READY`, verificada em cada chamada, pelo que referências antigas falham depois do encerramento. Não são expostos pela CLI nem por qualquer canal externo (D-087).
+
+## Identidade e associações (E1.07-A)
+
+Localização: domínio em `packages/shared-types/src` (`user.ts`, `membership.ts`, `identity-repositories.ts`); persistência em `packages/database/src` (`sqlite-user-directory.ts`, `sqlite-membership-persistence.ts`). Não há autenticação nem autorização funcional: os contratos de identidade não provam quem é o utilizador, e o `TenantContext` continua a ser construído pelo chamador (PD-27).
+
+```text
+autoridade da instalação                         contexto empresarial (TenantContext)
+┌────────────────────────────┐                   ┌──────────────────────────────────────────────┐
+│ UserDirectory (interno)    │  userId apenas    │ CompanyMembershipRepository  (D-020)          │
+│ users: id, username,       │◀──────────────────│ BranchMembershipRepository   (D-020)          │
+│ displayName, email?, phone?│                   │ MembershipScopeReader → elegibilidade (D-088) │
+│ status                     │                   └──────────────────────────────────────────────┘
+└────────────────────────────┘
+```
+
+- **Identidade (D-080, D-085):** `User` é local à instalação, identificada por `UserId` (UUID) e independente de empresa, tenant, estabelecimento e credenciais.
+  - O username é normalizado (ASCII `[a-z0-9._-]`, 3–64) e único.
+  - Email e telefone são opcionais, não únicos e nunca chaves.
+  - Estados: `ACTIVE`, `SUSPENDED` e `INACTIVE`. Só `ACTIVE` é elegível para autenticação futura.
+  - O contrato não tem credenciais.
+- **Associações (D-081, D-082, D-086):**
+  - `CompanyMembership` é única por utilizador e tenant, com âmbito `COMPANY_WIDE` ou `BRANCH_RESTRICTED`.
+  - `BranchMembership` liga uma associação `BRANCH_RESTRICTED` a um estabelecimento da mesma empresa.
+  - Ambas usam desactivação lógica, sem eliminação.
+  - A base garante a pertença ao mesmo tenant e empresa com chaves estrangeiras compostas, e as FK usam `ON DELETE RESTRICT`.
+- **Elegibilidade (D-088):** `evaluateMembershipScope` indica se há âmbito efectivo, que estabelecimentos `ACTIVE` abrange e se a empresa é operacional (`ACTIVE`). Não é autorização: perfis e permissões ficam para E1.07-D.
+- **Fronteira (D-087):**
+  - O directório de identidades não tem contexto empresarial nem pesquisa ou listagem.
+  - Os repositórios empresariais só devolvem dados de associação.
+  - Nada é exposto por HTTP, IPC Electron ou interface. O desktop não referencia estes módulos, o que é verificado por teste.
+- **Administração KIL (D-083):** autoridade distinta da administração empresarial, sem superutilizador global. Não implementada.
+- **Licenciamento (D-084):** independente da identidade e da autorização.
+- **Esquema (migração 2):** tabelas `users`, `company_memberships` e `branch_memberships`, e índice único `branches (id, tenant_id, company_id)`. Detalhe em [tasks/E1.07-A.md](tasks/E1.07-A.md#modelo-de-dados-e-migração-2-packagesdatabase).
+- **Verificação:** suite de contrato `tests/support/membership-repository-contract.ts` (D-089) sobre SQLite e através do serviço, `tests/identity-contracts.test.ts` e `tests/identity-persistence.test.ts`.
 
 ## Decisões definidas
 
@@ -210,6 +245,7 @@ main.ts ──> cli.ts ──> config.ts (process.env → LocalServiceConfig val
 - Node.js 24.22.3 como referência; ESLint 10 (D-069 a D-073).
 - Electron 45.3.2 como runtime suportado e política explícita de menor privilégio para renderer, sessão, navegação e recursos locais (D-075 e D-076).
 - Vitest 5.1.0, com condições de resolução `source` declaradas para os ambientes `client` e `ssr` (D-077 e D-078).
+- Identidade local com `UserId` próprio; acesso a empresas só por associação explícita; âmbitos `COMPANY_WIDE`/`BRANCH_RESTRICTED` sem permissões; administração KIL como autoridade distinta; identidade, autorização e licenciamento separados (D-080 a D-084). Concretização em E1.07-A (D-085 a D-089).
 
 ## Estrutura do monorepositório
 
@@ -219,8 +255,8 @@ main.ts ──> cli.ts ──> config.ts (process.env → LocalServiceConfig val
 - `services/local-api`: serviço local Node.js (configuração, ciclo de vida, persistência SQLite e executável). A fábrica Fastify de E1.01 (`app.ts`) mantém-se sem uso.
 - `services/central-api`: composição da API central Fastify.
 - `services/sync-service`: fronteira do futuro mecanismo de sincronização.
-- `packages/shared-types`: contratos de domínio multiempresa e interfaces de repositório, sem dependência de infraestrutura.
-- `packages/database`: persistência SQLite local (ligação, migrações e repositórios multiempresa); fronteira futura para PostgreSQL.
+- `packages/shared-types`: contratos de domínio multiempresa, de identidade e de associações, e interfaces de repositório, sem dependência de infraestrutura.
+- `packages/database`: persistência SQLite local (ligação, migrações, repositórios multiempresa, directório de identidades e associações); fronteira futura para PostgreSQL.
 - `packages/accounting`: fronteira do domínio contabilístico.
 - `packages/fiscal`: fronteira do domínio fiscal.
 - `packages/licensing`: porta de integração com licenciamento.
@@ -233,7 +269,7 @@ main.ts ──> cli.ts ──> config.ts (process.env → LocalServiceConfig val
 - Estratégia e protocolo de sincronização, resolução de conflitos, idempotência e operação offline.
 - Modelo de tenancy no PostgreSQL (colunas, schemas ou bases separadas), row-level security e driver PostgreSQL.
 - Framework de empacotamento, actualizações e assinatura de código do Electron.
-- Estratégia de autenticação, autorização, gestão de sessões e recuperação de conta; origem autenticada do `TenantContext`.
+- Estratégia de autenticação, autorização, gestão de sessões e recuperação de conta; origem autenticada do `TenantContext` (E1.07-B a E1.07-D; o modelo de identidade e associações está definido desde E1.07-A).
 - Hosting, observabilidade, backups, recuperação de desastre e topologia de implantação.
 - Biblioteca de componentes e sistema visual definitivo.
 - Versões e arquitectura concretas do React Native quando começar o monitor móvel.
@@ -249,4 +285,4 @@ main.ts ──> cli.ts ──> config.ts (process.env → LocalServiceConfig val
 
 ## Restrições da fundação
 
-E1.01 a E1.06 não criam bases de produção, endpoints de negócio, POS, facturação, contabilidade ou módulos sectoriais. A persistência SQLite é gerida pelo serviço local, sem servidor HTTP e sem localização de produção definida. Os indicadores visuais da aplicação desktop são explicitamente demonstrativos. Os pacotes de domínio contêm apenas contratos e validações estruturais, sem regras fiscais, contabilísticas ou sectoriais.
+E1.01 a E1.07-A não criam bases de produção, endpoints de negócio, POS, facturação, contabilidade ou módulos sectoriais. E1.07-A cria identidades e associações sem credenciais, autenticação, sessões ou permissões. A persistência SQLite é gerida pelo serviço local, sem servidor HTTP e sem localização de produção definida. Os indicadores visuais da aplicação desktop são explicitamente demonstrativos. Os pacotes de domínio contêm apenas contratos e validações estruturais, sem regras fiscais, contabilísticas ou sectoriais.

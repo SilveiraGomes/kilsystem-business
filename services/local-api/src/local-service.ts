@@ -2,7 +2,9 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 
 import {
+  createSqliteMembershipPersistence,
   createSqliteTenantPersistence,
+  createSqliteUserDirectory,
   inspectMigrations,
   openSqliteDatabase,
   PersistenceError,
@@ -10,10 +12,18 @@ import {
   runMigrations,
   type OpenSqliteOptions,
   type SqliteDatabase,
+  type SqliteMembershipPersistence,
   type SqliteTenantPersistence,
   type TenantStores,
 } from '@kil-business/database';
-import type { BranchRepository, CompanyRepository } from '@kil-business/shared-types';
+import type {
+  BranchMembershipRepository,
+  BranchRepository,
+  CompanyMembershipRepository,
+  CompanyRepository,
+  MembershipScopeReader,
+  UserDirectory,
+} from '@kil-business/shared-types';
 
 import type { LocalServiceConfig } from './config.js';
 import type { LogFields, Logger } from './logger.js';
@@ -92,6 +102,24 @@ export interface LocalService {
   readonly companies: CompanyRepository;
   readonly branches: BranchRepository;
   transaction<T>(work: (stores: TenantStores) => T): T;
+  /**
+   * Provisionamento INTERNO de identidades locais (D-087): sem contexto empresarial, reservado à
+   * composição interna do serviço; nunca exposto por HTTP, IPC Electron nem interface pública.
+   * Recusa operações fora de `READY`.
+   */
+  readonly identityProvisioning: { readonly users: UserDirectory };
+  /** Associações empresariais e locais; exigem `TenantContext` e recusam operações fora de `READY`. */
+  readonly companyMemberships: CompanyMembershipRepository;
+  readonly branchMemberships: BranchMembershipRepository;
+  /** Avaliação interna de elegibilidade (D-088); não é autenticação nem autorização. */
+  readonly membershipScopes: MembershipScopeReader;
+}
+
+/** Repositórios activos enquanto a ligação está aberta; descartados no encerramento. */
+interface ServiceStores {
+  readonly tenant: SqliteTenantPersistence;
+  readonly users: UserDirectory;
+  readonly memberships: SqliteMembershipPersistence;
 }
 
 // Os registos identificam a causa pelo nome e motivo, nunca pela mensagem (pode conter caminhos ou SQL).
@@ -115,7 +143,7 @@ export const createLocalService = (
 ): LocalService => {
   let state: LocalServiceState = 'STOPPED';
   let database: SqliteDatabase | undefined;
-  let persistence: SqliteTenantPersistence | undefined;
+  let stores: ServiceStores | undefined;
   let starting: Promise<void> | undefined;
   let stopping: Promise<void> | undefined;
   let startupReport: StartupReport | undefined;
@@ -131,7 +159,7 @@ export const createLocalService = (
   };
 
   const release = (): void => {
-    persistence = undefined;
+    stores = undefined;
     const connection = database;
     database = undefined;
     if (connection?.open) connection.close();
@@ -166,7 +194,11 @@ export const createLocalService = (
       throw new LocalServiceStartupError('pending-migrations');
     }
     const result = attempt('migration-failed', () => runMigrations(connection));
-    persistence = createSqliteTenantPersistence(connection);
+    stores = {
+      memberships: createSqliteMembershipPersistence(connection),
+      tenant: createSqliteTenantPersistence(connection),
+      users: createSqliteUserDirectory(connection),
+    };
     return { appliedMigrations: result.applied, createdDatabase: !existed, schemaVersion: result.currentVersion };
   };
 
@@ -253,27 +285,62 @@ export const createLocalService = (
     }
   };
 
-  const ready = (): SqliteTenantPersistence => {
-    if (state !== 'READY' || persistence === undefined) throw new LocalServiceStateError('not-ready', state);
-    return persistence;
+  // Cada chamada volta a verificar o estado: referências obtidas antes do encerramento deixam de
+  // funcionar, porque nunca apontam directamente para os repositórios da ligação.
+  const ready = (): ServiceStores => {
+    if (state !== 'READY' || stores === undefined) throw new LocalServiceStateError('not-ready', state);
+    return stores;
   };
 
-  const guarded = <T>(operation: (current: SqliteTenantPersistence) => Promise<T>): Promise<T> =>
+  const guarded = <T>(operation: (current: ServiceStores) => Promise<T>): Promise<T> =>
     settle(() => operation(ready()));
 
   const companies: CompanyRepository = {
-    findById: (context, id) => guarded((current) => current.companies.findById(context, id)),
-    create: (context, company) => guarded((current) => current.companies.create(context, company)),
-    update: (context, company) => guarded((current) => current.companies.update(context, company)),
-    delete: (context, id) => guarded((current) => current.companies.delete(context, id)),
+    findById: (context, id) => guarded((current) => current.tenant.companies.findById(context, id)),
+    create: (context, company) => guarded((current) => current.tenant.companies.create(context, company)),
+    update: (context, company) => guarded((current) => current.tenant.companies.update(context, company)),
+    delete: (context, id) => guarded((current) => current.tenant.companies.delete(context, id)),
   };
 
   const branches: BranchRepository = {
-    findById: (context, id) => guarded((current) => current.branches.findById(context, id)),
-    listByCompany: (context, companyId) => guarded((current) => current.branches.listByCompany(context, companyId)),
-    create: (context, branch) => guarded((current) => current.branches.create(context, branch)),
-    update: (context, branch) => guarded((current) => current.branches.update(context, branch)),
-    delete: (context, id) => guarded((current) => current.branches.delete(context, id)),
+    findById: (context, id) => guarded((current) => current.tenant.branches.findById(context, id)),
+    listByCompany: (context, companyId) =>
+      guarded((current) => current.tenant.branches.listByCompany(context, companyId)),
+    create: (context, branch) => guarded((current) => current.tenant.branches.create(context, branch)),
+    update: (context, branch) => guarded((current) => current.tenant.branches.update(context, branch)),
+    delete: (context, id) => guarded((current) => current.tenant.branches.delete(context, id)),
+  };
+
+  const users: UserDirectory = {
+    findById: (id) => guarded((current) => current.users.findById(id)),
+    create: (user) => guarded((current) => current.users.create(user)),
+    changeStatus: (id, status, at) => guarded((current) => current.users.changeStatus(id, status, at)),
+  };
+
+  const companyMemberships: CompanyMembershipRepository = {
+    findById: (context, id) => guarded((current) => current.memberships.companyMemberships.findById(context, id)),
+    findByUser: (context, userId) =>
+      guarded((current) => current.memberships.companyMemberships.findByUser(context, userId)),
+    listByCompany: (context, companyId) =>
+      guarded((current) => current.memberships.companyMemberships.listByCompany(context, companyId)),
+    create: (context, membership) =>
+      guarded((current) => current.memberships.companyMemberships.create(context, membership)),
+    update: (context, membership) =>
+      guarded((current) => current.memberships.companyMemberships.update(context, membership)),
+  };
+
+  const branchMemberships: BranchMembershipRepository = {
+    findById: (context, id) => guarded((current) => current.memberships.branchMemberships.findById(context, id)),
+    listByCompanyMembership: (context, companyMembershipId) =>
+      guarded((current) => current.memberships.branchMemberships.listByCompanyMembership(context, companyMembershipId)),
+    create: (context, membership) =>
+      guarded((current) => current.memberships.branchMemberships.create(context, membership)),
+    update: (context, membership) =>
+      guarded((current) => current.memberships.branchMemberships.update(context, membership)),
+  };
+
+  const membershipScopes: MembershipScopeReader = {
+    evaluate: (context, userId) => guarded((current) => current.memberships.scopes.evaluate(context, userId)),
   };
 
   return {
@@ -290,6 +357,10 @@ export const createLocalService = (
     stop,
     companies,
     branches,
-    transaction: (work) => ready().transaction(work),
+    transaction: (work) => ready().tenant.transaction(work),
+    identityProvisioning: Object.freeze({ users }),
+    companyMemberships,
+    branchMemberships,
+    membershipScopes,
   };
 };

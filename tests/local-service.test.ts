@@ -4,7 +4,7 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { openSqliteDatabase, type OpenSqliteOptions } from '../packages/database/src/index';
+import { MIGRATIONS, openSqliteDatabase, type OpenSqliteOptions } from '../packages/database/src/index';
 import { createBranch } from '../packages/shared-types/src/index';
 import { LOCAL_SERVICE_EXIT_CODES, runLocalServiceCli } from '../services/local-api/src/cli';
 import {
@@ -32,7 +32,11 @@ import {
 } from './support/local-service-harness';
 import { createTemporaryDatabase, type TemporaryDatabase } from './support/sqlite-harness';
 
-const deferred = (): { readonly promise: Promise<void>; readonly resolve: () => void } => {
+// Derivados da lista de migrações (E1.07-A acrescentou a versão 2).
+const ALL_VERSIONS = MIGRATIONS.map((migration) => migration.version);
+const LATEST_VERSION = MIGRATIONS.length;
+
+const deferred = ():{ readonly promise: Promise<void>; readonly resolve: () => void } => {
   let resolve: () => void = () => undefined;
   const promise = new Promise<void>((settle) => {
     resolve = settle;
@@ -151,10 +155,14 @@ describe('Local service lifecycle (E1.05)', () => {
       await harness.service.start();
 
       expect(existsSync(temporary.filename)).toBe(true);
-      expect(harness.service.startupReport).toEqual({ appliedMigrations: [1], createdDatabase: true, schemaVersion: 1 });
+      expect(harness.service.startupReport).toEqual({
+        appliedMigrations: ALL_VERSIONS,
+        createdDatabase: true,
+        schemaVersion: LATEST_VERSION,
+      });
       const [connection] = harness.connections;
       expect(connection?.pragma('foreign_keys', { simple: true })).toBe(1);
-      expect(connection?.prepare('SELECT version FROM schema_migrations').pluck().all()).toEqual([1]);
+      expect(connection?.prepare('SELECT version FROM schema_migrations').pluck().all()).toEqual(ALL_VERSIONS);
     });
 
     it('opens a single connection when start is called repeatedly', async () => {
@@ -196,13 +204,17 @@ describe('Local service lifecycle (E1.05)', () => {
       await harness.service.stop();
       await harness.service.start();
 
-      expect(harness.service.startupReport).toEqual({ appliedMigrations: [], createdDatabase: false, schemaVersion: 1 });
+      expect(harness.service.startupReport).toEqual({
+        appliedMigrations: [],
+        createdDatabase: false,
+        schemaVersion: LATEST_VERSION,
+      });
       await harness.service.stop();
       const strict = newService({ startupPolicy: { onMissingDatabase: 'fail', onPendingMigrations: 'fail' } });
       await strict.service.start();
       await strict.service.stop();
 
-      expect(countMigrations(temporary.filename)).toBe(1);
+      expect(countMigrations(temporary.filename)).toBe(MIGRATIONS.length);
     });
   });
 

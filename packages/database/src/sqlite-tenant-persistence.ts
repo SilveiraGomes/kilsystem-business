@@ -1,28 +1,25 @@
-import Database from 'better-sqlite3';
+import type Database from 'better-sqlite3';
 
 import {
   assertSameTenant,
   assertTenantContext,
   createBranch,
-  DomainValidationError,
   RecordConflictError,
   RecordNotFoundError,
   restoreCompany,
-  TenantContextError,
-  TenantMismatchError,
   type Branch,
   type BranchId,
-  type BranchInput,
   type BranchRepository,
   type Company,
   type CompanyId,
-  type CompanyInput,
   type CompanyRepository,
   type TenantContext,
 } from '@kil-business/shared-types';
 
 import type { SqliteDatabase } from './connection.js';
 import { PersistenceError } from './errors.js';
+import { BRANCH_COLUMNS, COMPANY_COLUMNS, toBranch, toCompany } from './sqlite-rows.js';
+import { isPromiseLike, prepareAll, settle, translated } from './sqlite-support.js';
 
 /** Versões síncronas dos repositórios, disponíveis apenas dentro de `transaction`. */
 export interface CompanyStore {
@@ -55,12 +52,6 @@ export interface SqliteTenantPersistence {
   readonly transaction: <T>(work: (stores: TenantStores) => T) => T;
 }
 
-const COMPANY_COLUMNS = `id, tenant_id AS tenantId, jurisdiction, legal_name AS legalName,
-  trade_name AS tradeName, nif, status, created_at AS createdAt, updated_at AS updatedAt`;
-
-const BRANCH_COLUMNS = `id, tenant_id AS tenantId, company_id AS companyId, name, code,
-  sector_type AS sectorType, status, created_at AS createdAt, updated_at AS updatedAt`;
-
 // Todas as consultas a dados empresariais filtram por `tenant_id`; apenas as verificações de
 // unicidade de chave primária são globais, porque os identificadores são UUID globais.
 const SQL = {
@@ -89,96 +80,6 @@ const SQL = {
     WHERE tenant_id = @tenantId AND id = @id AND company_id = @companyId`,
   deleteBranch: 'DELETE FROM branches WHERE tenant_id = @tenantId AND id = @id',
 } as const;
-
-const DOMAIN_ERRORS = [
-  DomainValidationError,
-  PersistenceError,
-  RecordConflictError,
-  RecordNotFoundError,
-  TenantContextError,
-  TenantMismatchError,
-] as const;
-
-const translateError = (error: unknown): unknown => {
-  if (DOMAIN_ERRORS.some((type) => error instanceof type)) return error;
-  if (error instanceof Database.SqliteError) {
-    return new PersistenceError(error.code.startsWith('SQLITE_CONSTRAINT') ? 'constraint' : 'sqlite', {
-      cause: error,
-    });
-  }
-  return error;
-};
-
-const translated = <T>(operation: () => T): T => {
-  try {
-    return operation();
-  } catch (error) {
-    throw translateError(error);
-  }
-};
-
-// Converte excepções síncronas em promessas rejeitadas, mantendo o contrato assíncrono.
-const settle = <T>(operation: () => T): Promise<T> =>
-  new Promise<T>((resolve) => {
-    resolve(translated(operation));
-  });
-
-const isPromiseLike = (value: unknown): boolean =>
-  typeof value === 'object' && value !== null && 'then' in value && typeof value.then === 'function';
-
-const readRow = (row: unknown): Record<string, unknown> => {
-  if (typeof row !== 'object' || row === null) throw new PersistenceError('invalid-stored-record');
-  return row as Record<string, unknown>;
-};
-
-const text = (row: Record<string, unknown>, key: string): string => {
-  const value = row[key];
-  if (typeof value !== 'string') throw new PersistenceError('invalid-stored-record');
-  return value;
-};
-
-const optionalText = (row: Record<string, unknown>, key: string): string | undefined =>
-  row[key] === null ? undefined : text(row, key);
-
-const restoreStored = <T>(restore: () => T): T => {
-  try {
-    return restore();
-  } catch (error) {
-    throw new PersistenceError('invalid-stored-record', { cause: error });
-  }
-};
-
-const toCompany = (value: unknown): Company => {
-  const row = readRow(value);
-  const input: CompanyInput = {
-    createdAt: text(row, 'createdAt'),
-    id: text(row, 'id'),
-    jurisdiction: text(row, 'jurisdiction'),
-    legalName: text(row, 'legalName'),
-    nif: optionalText(row, 'nif'),
-    status: text(row, 'status'),
-    tenantId: text(row, 'tenantId'),
-    tradeName: optionalText(row, 'tradeName'),
-    updatedAt: text(row, 'updatedAt'),
-  };
-  return restoreStored(() => restoreCompany(input));
-};
-
-const toBranch = (value: unknown): Branch => {
-  const row = readRow(value);
-  const input: BranchInput = {
-    code: text(row, 'code'),
-    companyId: text(row, 'companyId'),
-    createdAt: text(row, 'createdAt'),
-    id: text(row, 'id'),
-    name: text(row, 'name'),
-    sectorType: text(row, 'sectorType'),
-    status: text(row, 'status'),
-    tenantId: text(row, 'tenantId'),
-    updatedAt: text(row, 'updatedAt'),
-  };
-  return restoreStored(() => createBranch(input));
-};
 
 const companyParameters = (company: Company): Record<string, string | null> => ({
   createdAt: company.createdAt,
@@ -209,9 +110,7 @@ const branchParameters = (branch: Branch): Record<string, string> => ({
  * `@kil-business/shared-types` e devem passar a suite de contrato (D-021).
  */
 export const createSqliteTenantPersistence = (database: SqliteDatabase): SqliteTenantPersistence => {
-  const statements = Object.fromEntries(
-    Object.entries(SQL).map(([key, sql]) => [key, database.prepare(sql)]),
-  ) as Record<keyof typeof SQL, Database.Statement>;
+  const statements: Record<keyof typeof SQL, Database.Statement> = prepareAll(database, SQL);
 
   const createStores = (assertOpen: () => void): TenantStores => {
     const companyInTenant = (context: TenantContext, id: CompanyId): Company | undefined => {
