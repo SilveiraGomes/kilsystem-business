@@ -1,6 +1,6 @@
 # Estado do projecto
 
-Última verificação: 2026-11-15, após a integração de E1.06-S2 em `main` (`d29a629`, PR #2).
+Última verificação: 2026-11-15, na revisão E1.06-S2-M, sobre `main` em `0bb435c` (integração de E1.06-S2 pelo PR #2, merge `d29a629`).
 
 Este documento é o ponto de retoma para qualquer agente ou pessoa. Contém apenas factos verificados no repositório ou por execução; o que não foi executado está marcado como tal.
 
@@ -19,10 +19,11 @@ Este documento é o ponto de retoma para qualquer agente ou pessoa. Contém apen
 | E1.06-S1 — Actualização e segurança do Electron | Concluída e integrada | `c3219ad` | [tasks/E1.06-S1.md](tasks/E1.06-S1.md) |
 | E1.06-S1-M — Revisão e integração da actualização Electron | Concluída e integrada | `2ca5b90` | [tasks/E1.06-S1-M.md](tasks/E1.06-S1-M.md) |
 | E1.06-S2 — Modernização do Vitest e segurança dos testes | Concluída e integrada (PR #2) | `c5a23a0`; merge `d29a629` | [tasks/E1.06-S2.md](tasks/E1.06-S2.md) |
+| E1.06-S2-M — Revisão e integração da modernização Vitest | Concluída | `docs: record vitest integration review` | [tasks/E1.06-S2-M.md](tasks/E1.06-S2-M.md) |
 | Política Git/GitHub | Adoptada | `docs: adopt git and github publication policy` | `AGENTS.md` (“Git e GitHub”), D-074 |
 | E1.07 a E1.10 | Planeadas, não autorizadas | — | [implementation-plan.md](implementation-plan.md) |
 
-Tarefa activa: nenhuma. E1.06-S2 está integrada em `main` através do PR #2. E1.07 continua planeada, não iniciada e não autorizada.
+Tarefa activa: nenhuma. E1.06-S2 está integrada em `main` através do PR #2, e a revisão E1.06-S2-M está concluída. E1.07 continua planeada, não iniciada e não autorizada. Por D-079, a PD-19 não a bloqueia por si só.
 
 ## Repositório remoto
 
@@ -33,6 +34,10 @@ Tarefa activa: nenhuma. E1.06-S2 está integrada em `main` através do PR #2. E1
 - O PR [#1](https://github.com/SilveiraGomes/kilsystem-business/pull/1) foi integrado em 2026-11-15. `main` local e `origin/main` foram alinhadas no merge commit `2ca5b90a4157e8d82e955a64ea28f9e2d543012e`, que contém a cabeça da branch. O repositório continua público e a visibilidade não foi alterada.
 - E1.06-S2 partiu de `main` = `origin/main` = `b890a892d2b1268c8a1b7a6c9c538c6e88d73103`, confirmado após `git fetch`, e criou a branch local `chore/e106-s2-vitest-security`. A API pública do GitHub voltou a confirmar `private: false` e `visibility: public`. O responsável autorizou expressamente, em 2026-11-15, a publicação desta branch nessa condição. O commit técnico é `c5a23a0`, e o registo de publicação é `79430f3`. Não houve merge automático.
 - O PR [#2](https://github.com/SilveiraGomes/kilsystem-business/pull/2) foi integrado pelo responsável em 2026-11-15. A `main` local avançou por fast-forward para o merge commit `d29a629768904b1273b50fefd94d2b13f4f127d9`, cuja árvore é idêntica à cabeça da branch, e ficou alinhada com `origin/main`. Neste código integrado, `pnpm check` (281/281, 12/12), os testes do desktop (6/6) e o smoke Electron foram repetidos e aprovados.
+- E1.06-S2-M: após `git fetch`, `main` local = `origin/main` = `0bb435cc5f989a11e25d78038aff04c60cfdce0b`. A API do GitHub confirmou o PR #2 (`merged: true`, cabeça `79430f3`, base `b890a89`, merge `d29a629`) e o repositório público.
+  - Revisão do diff: dois commits autorizados; nenhum ficheiro de testes ou de código de aplicação alterado.
+  - Validações: `lint`, `typecheck`, `test`, `build`, `check`, desktop, smoke e `git diff --check`, todas repetidas e aprovadas.
+  - Detalhe em [tasks/E1.06-S2-M.md](tasks/E1.06-S2-M.md).
 
 ## Ambiente de referência
 
@@ -191,13 +196,13 @@ Notas sobre o arranque do Electron:
 | PD-15 | Implementar D-058: unicidade do NIF por jurisdição e entidade jurídica após normalização. | NIF duplicados possíveis. | Aberta; depende da normalização fiscal (PD-09). |
 | PD-16 | Implementar D-060 e D-061: histórico de alterações e tabela explícita de transições de estado das empresas. | Transições livres; sem histórico. | Aberta. |
 | PD-17 | Electron 33.4.11 fora de suporte e 48 alertas na cadeia do runtime. | Segurança do desktop distribuído. | **Resolvida em E1.06-S1** (D-075, D-076): Electron 45.3.2 suportado; 0 alertas do Electron/`extract-zip`; smoke e instalação limpa aprovados. |
-| PD-18 | Vitest 2.1.9 (só desenvolvimento): 3 alertas críticos (servidor UI do Vitest e `tinypool`) e outros via Vite 5 interno e `@vitest/mocker`. Não eram exploráveis no uso actual (sem servidor UI, sem entradas não confiáveis). | — | **Resolvida em E1.06-S2** (D-077, D-078): Vitest 5.1.0; os 15 alertas do Vitest, do Vite 5.4.21 interno, do `esbuild` 0.21.5 e do `tinypool` foram eliminados (15 → 0), com 281/281 testes e instalação limpa aprovados. |
-| PD-19 | `minimatch` 10.2.6 (moderado, ReDoS, `GHSA-g3hv-75wg-m249`; corrigido em ≥ 11.0.1) via typescript-eslint 8.72.2. | Só desenvolvimento (lint). | Aberta. Reverificada em E1.06-S2: a 8.72.2 continua a ser a `latest` e declara `minimatch ^10.2.2`. Aguarda correcção a montante; sem *override*. |
+| PD-18 | Vitest 2.1.9 (só desenvolvimento): 3 alertas críticos (servidor UI do Vitest e `tinypool`) e outros via Vite 5 interno e `@vitest/mocker`. Não eram exploráveis no uso actual (sem servidor UI, sem entradas não confiáveis). | — | **Resolvida em E1.06-S2** (D-077, D-078): Vitest 5.1.0; os 15 alertas do Vitest, do Vite 5.4.21 interno, do `esbuild` 0.21.5 e do `tinypool` foram eliminados (15 → 0), com 281/281 testes e instalação limpa aprovados. **Encerrada** após a confirmação da integração em `main` (PR #2, `d29a629`) e a revalidação em E1.06-S2-M. |
+| PD-19 | `minimatch` 10.2.6 (moderado, ReDoS, `GHSA-g3hv-75wg-m249`; corrigido em ≥ 11.0.1) via typescript-eslint 8.72.2. | Só desenvolvimento (lint). | Aberta. Reverificada em E1.06-S2: a 8.72.2 continua a ser a `latest` e declara `minimatch ^10.2.2`. Aguarda correcção a montante; sem *override*. Por D-079 (decisão do responsável em E1.06-S2-M), não bloqueia por si só a E1.07, desde que a avaliação de risco se mantenha documentada: só lint de desenvolvimento, padrões definidos pelo projecto, fora do runtime distribuído, `audit --prod` com 0. |
 | PD-20 | pnpm 9.15.9 é uma linha antiga (última 12.18.0). O pnpm 10 ou superior bloqueia *build scripts* por omissão (`better-sqlite3`, `electron`, `esbuild`). | Manutenção do gestor de pacotes. | Aberta; avaliação própria. |
 | PD-21 | O Node 24 está em *Maintenance* LTS (fim a 2028-04-30); o Node 26 é a *Active LTS* desde 2026-10-28. O `better-sqlite3` 12.11.1 não publica binário Windows para o Node 26. | Planeamento futuro. | Aberta; planear a migração antes do fim de suporte. |
 | PD-22 | Um processo lançado por outro que ignore Ctrl+C (`SetConsoleCtrlHandler(NULL, TRUE)` herdado) não recebe `SIGINT`. Observado em E1.06 a partir de uma shell não interactiva. | Encerramento por Ctrl+C depende de quem lança o serviço. | Informativo; em instalação, o encerramento será feito pelo gestor de serviços Windows (E1.10). |
 | PD-23 | Outras dependências com versões principais novas, sem alertas de segurança: React 19, Vite 8, TypeScript 7, jsdom 31, `@vitejs/plugin-react` 6, `lucide-react` 1.x, entre outras. Não foram actualizadas, por instrução. | Dívida técnica. | Informativo; lista em [tasks/E1.06.md](tasks/E1.06.md). O Vitest foi actualizado em E1.06-S2 (D-077). |
-| PD-24 | O intervalo declarado do Vite (`^6.0.3` na raiz e no catálogo) admite versões abaixo do mínimo exigido pelo Vitest 5 (`>=6.4.0`). O lockfile fixa a 6.4.6, que cumpre o requisito. | Uma resolução nova fora do lockfile poderia escolher um Vite incompatível. | Aberta, de baixo impacto; alinhar o intervalo numa manutenção de dependências autorizada. |
+| PD-24 | O intervalo declarado do Vite (`^6.0.3` na raiz e no catálogo) admite versões abaixo do mínimo exigido pelo Vitest 5 (`>=6.4.0`). O lockfile fixa a 6.4.6, que cumpre o requisito. | Uma resolução nova fora do lockfile poderia escolher um Vite incompatível. | Aberta, de baixo impacto. Por decisão do responsável (E1.06-S2-M), a correcção do intervalo mínimo é feita numa tarefa controlada própria, e não nesta revisão. |
 | PD-25 | O pnpm reporta as subdependências descontinuadas `prebuild-install` 7.1.3 (via `better-sqlite3`) e `whatwg-encoding` 3.1.1 (via jsdom 25). Já existiam no lockfile da `main` antes de E1.06-S2. | Nenhum alerta de segurança associado. | Informativo; reavaliar com futuras versões de `better-sqlite3` e jsdom (PD-23). |
 
 As decisões arquitecturais ainda em aberto estão em [architecture.md](architecture.md#decisões-pendentes).
