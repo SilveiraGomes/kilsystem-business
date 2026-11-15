@@ -23,6 +23,7 @@ Este plano regista as etapas concluídas e o planeamento inicial da fase E1 até
 | [E1.06](tasks/E1.06.md) | Modernização e estabilização do ambiente tecnológico | Concluída | `7270646` |
 | [E1.06-G](tasks/E1.06-G.md) | Configuração e publicação inicial no GitHub | Concluída | `580d658` |
 | [E1.06-S1](tasks/E1.06-S1.md) | Actualização e segurança do Electron (PD-17) | Concluída e publicada | `chore: upgrade electron to supported secure runtime` |
+| [E1.06-S1-M](tasks/E1.06-S1-M.md) | Revisão e integração da actualização Electron | Revisão concluída; PR e integração pendentes | `docs: record electron integration review` |
 | [E1.06-S2](tasks/E1.06-S2.md) | Actualização do Vitest e alertas de ferramentas (PD-18) | Planeada, **não autorizada** | — |
 | [E1.07](tasks/E1.07.md) | Identidade, autenticação e autorização local | Planeada, **não autorizada** | — |
 | [E1.08](tasks/E1.08.md) | API local segura e integração Electron | Planeada, **não autorizada** | — |

@@ -17,11 +17,12 @@ Este documento é o ponto de retoma para qualquer agente ou pessoa. Contém apen
 | E1.06 — Modernização e estabilização do ambiente | Concluída | `7270646` | [tasks/E1.06.md](tasks/E1.06.md) |
 | E1.06-G — Configuração/publicação GitHub | Concluída | `580d658` | [tasks/E1.06-G.md](tasks/E1.06-G.md) |
 | E1.06-S1 — Actualização e segurança do Electron | Concluída e publicada | `chore: upgrade electron to supported secure runtime` | [tasks/E1.06-S1.md](tasks/E1.06-S1.md) |
+| E1.06-S1-M — Revisão e integração da actualização Electron | Revisão concluída; PR e integração pendentes | `docs: record electron integration review` | [tasks/E1.06-S1-M.md](tasks/E1.06-S1-M.md) |
 | E1.06-S2 — Actualização das ferramentas de teste | Planeada, não autorizada | — | [tasks/E1.06-S2.md](tasks/E1.06-S2.md) |
 | Política Git/GitHub | Adoptada | `docs: adopt git and github publication policy` | `AGENTS.md` (“Git e GitHub”), D-074 |
 | E1.07 a E1.10 | Planeadas, não autorizadas | — | [implementation-plan.md](implementation-plan.md) |
 
-Tarefa activa: nenhuma. E1.06-S1 está concluída e publicada na branch própria; E1.06-S2 e E1.07 continuam não autorizadas.
+Tarefa activa: E1.06-S1-M. A revisão está concluída; a criação do pull request e a integração autorizada em `main` permanecem pendentes. E1.06-S2 e E1.07 continuam não iniciadas e não autorizadas.
 
 ## Repositório remoto
 
@@ -29,6 +30,7 @@ Tarefa activa: nenhuma. E1.06-S1 está concluída e publicada na branch própria
 - `main` local e `origin/main` foram confirmadas em `580d6580fd945022999b0709801b37c9cfcfdc8c`, sem divergências, no início de E1.06-S1.
 - A API pública do GitHub confirmou `private: false` e `visibility: public`. Nenhuma configuração administrativa foi alterada.
 - Branch de E1.06-S1: `chore/e106-s1-electron-security`, publicada após confirmação expressa do responsável em 2026-11-15. O checkpoint local e o remoto foram comparados após o push. Não houve integração em `main`.
+- Revisão E1.06-S1-M repetida em 2026-11-15: o repositório continua público e a visibilidade não foi alterada; o merge não está autorizado. A criação automática do PR ficou indisponível por ausência de uma ligação GitHub instalada/conectada e da ferramenta `gh`.
 
 ## Ambiente de referência
 
@@ -52,7 +54,7 @@ Noutra máquina, instale o Node 24.22.3 (instalador oficial ou um gestor de vers
 
 ## Validação verificada
 
-Executada em 2026-11-14 com Node.js 24.22.3 e pnpm 9.15.9, no fecho técnico de E1.06-S1:
+Executada inicialmente em 2026-11-14 e repetida em 2026-11-15 com Node.js 24.22.3 e pnpm 9.15.9, na revisão E1.06-S1-M:
 
 - `pnpm.cmd lint` e `pnpm.cmd typecheck`: sem erros.
 - `pnpm.cmd test`: 7 ficheiros, **281 testes aprovados**:
