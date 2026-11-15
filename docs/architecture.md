@@ -2,7 +2,7 @@
 
 ## Estado deste documento
 
-Este documento regista a fundação E1.01, a primeira aplicação desktop E1.02, a arquitectura de negócio consolidada em E1.02-H, os contratos multiempresa de E1.03, a persistência SQLite de E1.04, o ciclo de vida do serviço local de E1.05, o ambiente de execução e as decisões de E1.06 e a actualização segura do Electron em E1.06-S1. “Definido” significa uma decisão já fornecida ou validada pelo projecto; “pendente” requer validação posterior e não deve ser inferido.
+Este documento regista a fundação E1.01, a primeira aplicação desktop E1.02, a arquitectura de negócio consolidada em E1.02-H, os contratos multiempresa de E1.03, a persistência SQLite de E1.04, o ciclo de vida do serviço local de E1.05, o ambiente de execução e as decisões de E1.06, a actualização segura do Electron em E1.06-S1 e a modernização do Vitest em E1.06-S2. “Definido” significa uma decisão já fornecida ou validada pelo projecto; “pendente” requer validação posterior e não deve ser inferido.
 
 ## Visão geral
 
@@ -61,7 +61,8 @@ Em todos os modos:
 | pnpm | 9.15.9 (`packageManager`; `engines.pnpm >=9.15.0 <10`) | `engine-strict=true` em `.npmrc` recusa versões fora de `engines` (D-069, D-073). |
 | `better-sqlite3` | 12.11.1 | Binário pré-compilado `node-v137-win32-x64`, sem compilação local (D-070). |
 | Electron | 45.3.2 (Chromium 156.0.8078.100; Node embutido 24.22.2) | Linha estável suportada, independente do Node 24.22.3 dos serviços. Windows 10 ou superior, apenas x64/arm64 (D-075). |
-| TypeScript / Vite / Vitest | 5.9.3 / 6.4.6 / 2.1.9 | Vitest com alertas apenas de desenvolvimento (PD-18). |
+| TypeScript / Vite | 5.9.3 / 6.4.6 | Sem alteração desde E1.06. |
+| Vitest | 5.1.0 | Linha com correcções regulares; usa o Vite 6.4.6 do projecto como dependência par, sem Vite interno próprio (D-077, E1.06-S2). |
 | ESLint | 10.15.0 (`@eslint/js` 10.0.1, typescript-eslint 8.72.2) | Actualizado em E1.06 (D-072). |
 
 ## Segurança do Electron (E1.06-S1)
@@ -125,7 +126,7 @@ Localização: `packages/database/src`. Driver `better-sqlite3` 12.x (D-029, D-0
 Os pacotes que outros pacotes consomem (`shared-types`, `database`) declaram uma condição de exportação `source → ./src/index.ts`, antes de `types` e `default`, que apontam para `dist/` (D-037):
 
 - `tsconfig.json` da raiz e `packages/database/tsconfig.json` definem `customConditions: ["source"]`. O typecheck e o lint usam o código-fonte e não dependem de `dist/`.
-- `vitest.config.ts` define `resolve.conditions: ['source']`.
+- `vitest.config.ts` define `resolve.conditions: ['source']` para o ambiente `client` do Vite (testes jsdom) e `ssr.resolve.conditions: ['source', 'import', 'default']` para o ambiente `ssr`, que o Vitest usa nos testes Node desde a versão 4 (D-078). Os 281 testes passam sem nenhum `dist/` presente.
 - O build de `packages/database` usa `tsconfig.build.json`, sem a condição, e consome `shared-types` a partir de `dist/`. O `pnpm -r build` respeita a ordem pela dependência `workspace:*`.
 - Em execução Node, sem a condição, os pacotes resolvem para `dist/`.
 - `services/local-api` segue o mesmo padrão desde E1.05: `tsconfig.json` com a condição `source` para lint e editor, e `tsconfig.build.json` para o build.
@@ -208,6 +209,7 @@ main.ts ──> cli.ts ──> config.ts (process.env → LocalServiceConfig val
 - Licença principal independente do Monitor; módulos sectoriais activáveis individualmente (D-067, D-068).
 - Node.js 24.22.3 como referência; ESLint 10 (D-069 a D-073).
 - Electron 45.3.2 como runtime suportado e política explícita de menor privilégio para renderer, sessão, navegação e recursos locais (D-075 e D-076).
+- Vitest 5.1.0, com condições de resolução `source` declaradas para os ambientes `client` e `ssr` (D-077 e D-078).
 
 ## Estrutura do monorepositório
 
