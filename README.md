@@ -39,6 +39,11 @@ ferramentas do monorepositório. O renderer corre com isolamento de contexto,
 sandbox e segurança web activos, sem integração Node.js; permissões, novas janelas,
 `webview` e navegação para documentos externos são recusadas.
 
+Os testes usam Vitest **5.1.0** com a configuração única `vitest.config.ts` da
+raiz. Executam o código-fonte dos pacotes (`src/`), sem depender de `dist/`, e
+podem ser lançados a partir da raiz (`pnpm test`) ou do desktop
+(`pnpm --filter @kil-business/desktop test`).
+
 Copie `.env.example` para `.env` apenas no ambiente local e substitua os marcadores. Nunca versione credenciais. O serviço local não lê ficheiros `.env`: as variáveis `LOCAL_DATABASE_PATH` e `LOCAL_SERVICE_*` têm de estar definidas no ambiente do processo.
 
 ## Estrutura

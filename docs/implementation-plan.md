@@ -24,7 +24,7 @@ Este plano regista as etapas concluídas e o planeamento inicial da fase E1 até
 | [E1.06-G](tasks/E1.06-G.md) | Configuração e publicação inicial no GitHub | Concluída | `580d658` |
 | [E1.06-S1](tasks/E1.06-S1.md) | Actualização e segurança do Electron (PD-17) | Concluída e integrada | `c3219ad` |
 | [E1.06-S1-M](tasks/E1.06-S1-M.md) | Revisão e integração da actualização Electron | Concluída e integrada | `2ca5b90` |
-| [E1.06-S2](tasks/E1.06-S2.md) | Actualização do Vitest e alertas de ferramentas (PD-18) | Planeada, **não autorizada** | — |
+| [E1.06-S2](tasks/E1.06-S2.md) | Modernização do Vitest e segurança da infraestrutura de testes (PD-18) | Concluída e publicada na branch `chore/e106-s2-vitest-security`; PR para `main` por integrar | `c5a23a0` |
 | [E1.07](tasks/E1.07.md) | Identidade, autenticação e autorização local | Planeada, **não autorizada** | — |
 | [E1.08](tasks/E1.08.md) | API local segura e integração Electron | Planeada, **não autorizada** | — |
 | [E1.09](tasks/E1.09.md) | Infraestrutura de serviços centrais e PostgreSQL | Planeada, **não autorizada** | — |
@@ -39,6 +39,8 @@ Precisa de autorização e de uma posição no plano, a decidir pelo responsáve
 | Implementação das decisões de domínio D-055, D-058, D-060 e D-061 | PD-14, PD-15, PD-16 | Antes de empresas reais; PD-15 depende de PD-09 |
 | Avaliação do pnpm 10 ou superior | PD-20 | Sem urgência |
 | Plano de migração para o Node 26 LTS | PD-21 | Antes de 2028-04-30 |
+| Correcção do `minimatch` quando o typescript-eslint a publicar | PD-19 | Quando existir versão a montante |
+| Alinhar o intervalo declarado do Vite com o mínimo do Vitest 5 | PD-24 | Na próxima manutenção de dependências |
 
 ## Dependências entre funcionalidades e decisões pendentes
 
