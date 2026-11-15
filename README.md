@@ -33,6 +33,12 @@ Para validar o arranque do Electron após a compilação:
 pnpm --filter @kil-business/desktop smoke
 ```
 
+O desktop usa Electron **45.3.2** (Chromium 156.0.8078.100 e Node.js 24.22.2
+incorporados), independentemente do Node.js 24.22.3 usado pelos serviços e pelas
+ferramentas do monorepositório. O renderer corre com isolamento de contexto,
+sandbox e segurança web activos, sem integração Node.js; permissões, novas janelas,
+`webview` e navegação para documentos externos são recusadas.
+
 Copie `.env.example` para `.env` apenas no ambiente local e substitua os marcadores. Nunca versione credenciais. O serviço local não lê ficheiros `.env`: as variáveis `LOCAL_DATABASE_PATH` e `LOCAL_SERVICE_*` têm de estar definidas no ambiente do processo.
 
 ## Estrutura

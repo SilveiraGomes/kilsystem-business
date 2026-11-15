@@ -14,9 +14,11 @@ export const createWindowOptions = (
   webPreferences: {
     allowRunningInsecureContent: false,
     contextIsolation: true,
+    navigateOnDragDrop: false,
     nodeIntegration: false,
     preload: preloadPath,
     sandbox: true,
+    webviewTag: false,
     webSecurity: true,
   },
 });

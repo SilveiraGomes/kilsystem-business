@@ -1,6 +1,6 @@
 # Estado do projecto
 
-Última verificação: 2026-11-14, no fecho da tarefa E1.06 (ponto de partida `5f1b36e`).
+Última verificação: 2026-11-15, na publicação de E1.06-S1 (ponto de partida `580d658`).
 
 Este documento é o ponto de retoma para qualquer agente ou pessoa. Contém apenas factos verificados no repositório ou por execução; o que não foi executado está marcado como tal.
 
@@ -15,17 +15,22 @@ Este documento é o ponto de retoma para qualquer agente ou pessoa. Contém apen
 | E1.04 — Persistência SQLite e repositórios multiempresa | Concluída | `d713c3c` | [tasks/E1.04.md](tasks/E1.04.md) |
 | E1.05 — Inicialização e ciclo de vida do serviço local | Concluída | `5f1b36e` | [tasks/E1.05.md](tasks/E1.05.md) |
 | E1.06 — Modernização e estabilização do ambiente | Concluída | `7270646` | [tasks/E1.06.md](tasks/E1.06.md) |
+| E1.06-G — Configuração/publicação GitHub | Concluída | `580d658` | [tasks/E1.06-G.md](tasks/E1.06-G.md) |
+| E1.06-S1 — Actualização e segurança do Electron | Concluída e publicada | `chore: upgrade electron to supported secure runtime` | [tasks/E1.06-S1.md](tasks/E1.06-S1.md) |
+| E1.06-S1-M — Revisão e integração da actualização Electron | Revisão concluída; PR e integração pendentes | `docs: record electron integration review` | [tasks/E1.06-S1-M.md](tasks/E1.06-S1-M.md) |
+| E1.06-S2 — Actualização das ferramentas de teste | Planeada, não autorizada | — | [tasks/E1.06-S2.md](tasks/E1.06-S2.md) |
 | Política Git/GitHub | Adoptada | `docs: adopt git and github publication policy` | `AGENTS.md` (“Git e GitHub”), D-074 |
 | E1.07 a E1.10 | Planeadas, não autorizadas | — | [implementation-plan.md](implementation-plan.md) |
 
-Tarefa activa: nenhuma. A E1.07 exige autorização explícita.
+Tarefa activa: E1.06-S1-M. A revisão está concluída; a criação do pull request e a integração autorizada em `main` permanecem pendentes. E1.06-S2 e E1.07 continuam não iniciadas e não autorizadas.
 
 ## Repositório remoto
 
 - Repositório oficial: `https://github.com/SilveiraGomes/kilsystem-business`, configurado como `origin` (configuração local do repositório).
-- Branch autorizada: `main`, salvo indicação diferente do responsável.
-- Antes da adopção da política (2026-11-14), o repositório remoto existia mas estava vazio (`git ls-remote` sem referências). O histórico local de E1.01 a E1.06 nunca tinha sido publicado.
-- O estado de publicação não é registado aqui, porque mudaria a cada *push*. Verifica-se com `git fetch origin` e `git status -sb`, ou comparando `git rev-parse HEAD` com `git ls-remote origin refs/heads/main`.
+- `main` local e `origin/main` foram confirmadas em `580d6580fd945022999b0709801b37c9cfcfdc8c`, sem divergências, no início de E1.06-S1.
+- A API pública do GitHub confirmou `private: false` e `visibility: public`. Nenhuma configuração administrativa foi alterada.
+- Branch de E1.06-S1: `chore/e106-s1-electron-security`, publicada após confirmação expressa do responsável em 2026-11-15. O checkpoint local e o remoto foram comparados após o push. Não houve integração em `main`.
+- Revisão E1.06-S1-M repetida em 2026-11-15: o repositório continua público e a visibilidade não foi alterada; o merge não está autorizado. A criação automática do PR ficou indisponível por ausência de uma ligação GitHub instalada/conectada e da ferramenta `gh`.
 
 ## Ambiente de referência
 
@@ -49,30 +54,32 @@ Noutra máquina, instale o Node 24.22.3 (instalador oficial ou um gestor de vers
 
 ## Validação verificada
 
-Executada em 2026-11-14 com Node.js 24.22.3 e pnpm 9.15.9, no fecho de E1.06:
+Executada inicialmente em 2026-11-14 e repetida em 2026-11-15 com Node.js 24.22.3 e pnpm 9.15.9, na revisão E1.06-S1-M:
 
-- `pnpm.cmd lint` (ESLint 10.15.0; 62 ficheiros, 93 regras activas) e `pnpm.cmd typecheck`: sem erros.
-- `pnpm.cmd test`: 7 ficheiros, **279 testes aprovados**:
-  - `foundation` 1, `desktop-security` 2, `desktop-ui` 2;
+- `pnpm.cmd lint` e `pnpm.cmd typecheck`: sem erros.
+- `pnpm.cmd test`: 7 ficheiros, **281 testes aprovados**:
+  - `foundation` 1, `desktop-security` 4, `desktop-ui` 2;
   - `domain-contracts` 56;
   - `tenant-isolation` 132;
   - `sqlite-persistence` 34;
   - `local-service` 52.
 - `pnpm.cmd build`: 12 de 12 projectos.
 - `pnpm.cmd check`: código de saída 0.
-- `pnpm.cmd --filter @kil-business/desktop test`: 4/4 aprovados.
-- `pnpm.cmd --filter @kil-business/desktop smoke`: `KIL_ELECTRON_SMOKE_OK`, código 0, com a mensagem GPU da PD-13.
-- **Instalação limpa** num directório externo, a partir dos ficheiros versionáveis:
-  - `pnpm install --frozen-lockfile` com *store* e cache npm novos e sem cache de efeitos colaterais: 455 pacotes descarregados;
-  - `better-sqlite3-v12.11.1-node-v137-win32-x64.tar.gz` descarregado, sem compilação local;
-  - `pnpm check` (279 testes, 12/12) e testes do desktop aprovados.
+- `pnpm.cmd --filter @kil-business/desktop test`: 6/6 aprovados.
+- `pnpm.cmd --filter @kil-business/desktop smoke`: código 0, `KIL_ELECTRON_RUNTIME electron=45.3.2 chromium=156.0.8078.100 node=24.22.2` e `KIL_ELECTRON_SMOKE_OK`. O teste percorreu as oito áreas e verificou preload, API mínima e isolamento do renderer.
+- Sete arranques/encerramentos do Electron terminaram com código 0, incluindo a cópia limpa; a mensagem GPU da PD-13 não ocorreu.
+- **Instalação limpa** numa cópia temporária externa, a partir dos ficheiros versionáveis e não ignorados:
+  - `pnpm install --frozen-lockfile` com *store*, cache npm e cache Electron novos: 407 pacotes descarregados, 0 reutilizados;
+  - `better-sqlite3` usou o binário pré-compilado, sem `node-gyp`;
+  - `pnpm check` (281 testes, 12/12), testes do desktop (6/6) e smoke Electron real aprovados.
 - **SQLite real e código compilado** (Node puro):
   - o serviço `dist/main.js --check` criou a base, aplicou a migração 1 e voltou a abri-la com a política estrita;
   - o pacote `database` compilado executou migrações e uma transacção com ABI 137.
 - **Ctrl+C numa consola real**: um `CTRL_C_EVENT` enviado por `GenerateConsoleCtrlEvent` produziu `SIGINT`, `READY→STOPPING→STOPPED`, código 0 e nenhum `-wal` residual (detalhe e ressalva em [tasks/E1.06.md](tasks/E1.06.md)).
 - **Auditoria** (`pnpm audit`):
   - produção: 0 alertas;
-  - desenvolvimento: 64 alertas (3 críticos, 15 altos, 36 moderados, 10 baixos), todos via Electron 33, Vitest 2 e typescript-eslint (PD-17, PD-18, PD-19).
+  - desenvolvimento: 16 alertas (3 críticos, 1 alto, 11 moderados, 1 baixo), apenas via Vitest 2 e typescript-eslint (PD-18, PD-19);
+  - Electron: 46 → 0; `extract-zip` antigo: 2 altos → 0.
 - **Não verificado**: `pnpm --filter @kil-business/desktop dev` (processo interactivo de longa duração).
 
 ## Comandos
@@ -107,14 +114,14 @@ Notas sobre o arranque do Electron:
 
 - `dev` inicia o Vite em `http://127.0.0.1:5173` (porta fixa, `--strictPort`), compila o processo principal e o preload, aguarda a porta e arranca o Electron com `VITE_DEV_SERVER_URL`.
 - Não existe script `start` no desktop. Fora do modo `dev`, o arranque é feito por `apps/desktop/scripts/run-electron.mjs` sobre o resultado do `build`, que é o mecanismo usado pelo `smoke`.
-- O Electron usa o seu próprio runtime (Node 20.18.3 embutido no Electron 33), independente do Node do sistema.
+- O Electron usa o seu próprio runtime (Electron 45.3.2, Chromium 156.0.8078.100 e Node 24.22.2), independente do Node 24.22.3 dos serviços e ferramentas.
 
 ## Funcionalidades
 
 ### Implementadas
 
 - Monorepositório pnpm com 12 projectos, TypeScript estrito, ESLint 10 com verificação de tipos e Vitest. Os pacotes do workspace resolvem a partir de `src/` em typecheck, lint e testes, e a partir de `dist/` em execução.
-- Processo principal Electron com renderer isolado e preload mínimo e imutável; modo de smoke test.
+- Processo principal Electron suportado, com renderer isolado, CSP, permissões negadas, navegação/janelas/`webview` bloqueados e preload mínimo e imutável; modo de smoke test real ampliado.
 - Navegação funcional entre 8 áreas da interface desktop (estado React em memória).
 - Contratos de domínio multiempresa (`packages/shared-types`).
 - Persistência SQLite local (`packages/database`).
@@ -153,11 +160,11 @@ Notas sobre o arranque do Electron:
 | PD-10 | Compilação nativa do driver SQLite. | — | **Resolvida em E1.06** para Windows x64 com Node 24: binário pré-compilado `node-v137-win32-x64` obtido numa instalação limpa (caches vazias), sem compilação local (D-070). Outras plataformas ou versões de Node exigem nova verificação. |
 | PD-11 | Decisões de domínio por confirmar. | — | **Encerrada em E1.06** (D-052 a D-061). A implementação em falta está em PD-14 a PD-16. |
 | PD-12 | Node 20 fora de suporte desde 2026-04-30. | — | **Resolvida em E1.06** (D-069): migração efectiva para o Node 24.22.3 e validação completa executada nesta versão. |
-| PD-13 | Mensagens GPU ocasionais no encerramento do Electron (`GPU state invalid after WaitForGetOffsetInRange`). O smoke test terminou sempre com `KIL_ELECTRON_SMOKE_OK` e código 0. | Ruído de log do Chromium. | Mantida; voltou a ocorrer em E1.06. |
+| PD-13 | Mensagens GPU ocasionais no encerramento do Electron 33 (`GPU state invalid after WaitForGetOffsetInRange`). | Ruído de log do Chromium; não afectou o código de saída. | Em observação: não ocorreu em sete execuções do Electron 45.3.2, incluindo uma instalação/cache limpa. Por ser ocasional, não se declara eliminada definitivamente. |
 | PD-14 | Implementar D-055: preservar o NIF em `SUSPENDED`/`INACTIVE` nas empresas anteriormente activadas. Hoje o NIF só é exigido em `ACTIVE` (contrato e `CHECK` SQLite). | Uma empresa activada pode perder o NIF ao mudar de estado. | Aberta; exige registo da activação ou regras de transição (PD-16). |
 | PD-15 | Implementar D-058: unicidade do NIF por jurisdição e entidade jurídica após normalização. | NIF duplicados possíveis. | Aberta; depende da normalização fiscal (PD-09). |
 | PD-16 | Implementar D-060 e D-061: histórico de alterações e tabela explícita de transições de estado das empresas. | Transições livres; sem histórico. | Aberta. |
-| PD-17 | Electron 33.4.11 fora de suporte (linhas suportadas 43–45; última 45.3.2), com Node 20.18.3 embutido. 46 alertas do Electron (12 altos) e 2 altos do `extract-zip`. O Electron é dependência de desenvolvimento, mas é o runtime distribuído. | Segurança do desktop distribuído. | Aberta. Tarefa própria **antes de E1.08**; obrigatória antes do Gate E1. |
+| PD-17 | Electron 33.4.11 fora de suporte e 48 alertas na cadeia do runtime. | Segurança do desktop distribuído. | **Resolvida em E1.06-S1** (D-075, D-076): Electron 45.3.2 suportado; 0 alertas do Electron/`extract-zip`; smoke e instalação limpa aprovados. |
 | PD-18 | Vitest 2.1.9 (só desenvolvimento): 3 alertas críticos (servidor UI do Vitest e `tinypool`) e outros via Vite 5 interno e `@vitest/mocker`. Não são exploráveis no uso actual (sem servidor UI, sem entradas não confiáveis), mas o Vitest tem de ir para ≥ 4.1.12 (última 5.1.0). | Ferramentas de desenvolvimento e CI. | Aberta; tarefa própria antes do Gate E1. |
 | PD-19 | `minimatch` (moderado, ReDoS) via typescript-eslint 8.72.2. | Só desenvolvimento. | Aberta; aguarda correcção a montante. |
 | PD-20 | pnpm 9.15.9 é uma linha antiga (última 12.18.0). O pnpm 10 ou superior bloqueia *build scripts* por omissão (`better-sqlite3`, `electron`, `esbuild`). | Manutenção do gestor de pacotes. | Aberta; avaliação própria. |
@@ -178,9 +185,9 @@ As decisões arquitecturais ainda em aberto estão em [architecture.md](architec
    git -c safe.directory=C:/KIL-BUSINESS status -sb         # sem "ahead"/"behind" inesperados
    git -c safe.directory=C:/KIL-BUSINESS log --oneline -n 10
    ```
-   O último commit deve ser `docs: adopt git and github publication policy` ou posterior a ele, com registo neste documento. Se não corresponder, ou se o remoto divergir, registar e comunicar antes de outro trabalho; nunca forçar.
+   O último checkpoint publicado em `main` deve ser `580d658` ou posterior, com registo neste documento. Se não corresponder, ou se o remoto divergir, registar e comunicar antes de outro trabalho; nunca forçar.
 4. Executar `pnpm.cmd install --frozen-lockfile` (se `node_modules` não existir ou se a versão do Node mudou) e `pnpm.cmd check` para obter a linha de base. Registar qualquer falha antes de alterar código.
-5. Identificar a tarefa activa em `docs/tasks/`. As etapas E1.07–E1.10 estão **planeadas mas não autorizadas**: pedir autorização ao responsável antes de implementar.
+5. Identificar a tarefa activa em `docs/tasks/`. E1.06-S2 e E1.07–E1.10 estão **planeadas mas não autorizadas**. E1.06-S1 já foi publicada na branch própria e não foi integrada em `main`.
 6. Trabalhar apenas no âmbito da tarefa. Regras a manter:
    - qualquer implementação nova de repositório tem de passar `tests/support/tenant-repository-contract.ts` (D-021);
    - o acesso à base passa pelo serviço local em `READY` (D-047).
