@@ -24,7 +24,7 @@ Este plano regista as etapas concluídas e o planeamento inicial da fase E1 até
 | [E1.06-G](tasks/E1.06-G.md) | Configuração e publicação inicial no GitHub | Concluída | `580d658` |
 | [E1.06-S1](tasks/E1.06-S1.md) | Actualização e segurança do Electron (PD-17) | Concluída e integrada | `c3219ad` |
 | [E1.06-S1-M](tasks/E1.06-S1-M.md) | Revisão e integração da actualização Electron | Concluída e integrada | `2ca5b90` |
-| [E1.06-S2](tasks/E1.06-S2.md) | Modernização do Vitest e segurança da infraestrutura de testes (PD-18) | Implementada e validada; commit local na branch `chore/e106-s2-vitest-security`, publicação a aguardar autorização | `chore: upgrade vitest and secure test infrastructure` |
+| [E1.06-S2](tasks/E1.06-S2.md) | Modernização do Vitest e segurança da infraestrutura de testes (PD-18) | Concluída e publicada na branch `chore/e106-s2-vitest-security`; PR para `main` por integrar | `c5a23a0` |
 | [E1.07](tasks/E1.07.md) | Identidade, autenticação e autorização local | Planeada, **não autorizada** | — |
 | [E1.08](tasks/E1.08.md) | API local segura e integração Electron | Planeada, **não autorizada** | — |
 | [E1.09](tasks/E1.09.md) | Infraestrutura de serviços centrais e PostgreSQL | Planeada, **não autorizada** | — |

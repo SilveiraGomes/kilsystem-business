@@ -18,11 +18,11 @@ Este documento é o ponto de retoma para qualquer agente ou pessoa. Contém apen
 | E1.06-G — Configuração/publicação GitHub | Concluída | `580d658` | [tasks/E1.06-G.md](tasks/E1.06-G.md) |
 | E1.06-S1 — Actualização e segurança do Electron | Concluída e integrada | `c3219ad` | [tasks/E1.06-S1.md](tasks/E1.06-S1.md) |
 | E1.06-S1-M — Revisão e integração da actualização Electron | Concluída e integrada | `2ca5b90` | [tasks/E1.06-S1-M.md](tasks/E1.06-S1-M.md) |
-| E1.06-S2 — Modernização do Vitest e segurança dos testes | Implementada e validada; commit local, publicação a aguardar autorização | `chore: upgrade vitest and secure test infrastructure` (branch `chore/e106-s2-vitest-security`) | [tasks/E1.06-S2.md](tasks/E1.06-S2.md) |
+| E1.06-S2 — Modernização do Vitest e segurança dos testes | Concluída e publicada na branch; PR para `main` por integrar | `c5a23a0` (branch `chore/e106-s2-vitest-security`) | [tasks/E1.06-S2.md](tasks/E1.06-S2.md) |
 | Política Git/GitHub | Adoptada | `docs: adopt git and github publication policy` | `AGENTS.md` (“Git e GitHub”), D-074 |
 | E1.07 a E1.10 | Planeadas, não autorizadas | — | [implementation-plan.md](implementation-plan.md) |
 
-Tarefa activa: E1.06-S2, autorizada e implementada na branch `chore/e106-s2-vitest-security`, com commit local. O repositório continua público e não existe autorização registada para publicar esta tarefa nessa condição; o push e o PR para `main` aguardam o responsável. E1.07 continua planeada, não iniciada e não autorizada.
+Tarefa activa: E1.06-S2, implementada na branch `chore/e106-s2-vitest-security` e publicada com autorização expressa do responsável (repositório público). O PR para `main` aguarda revisão e integração pelo responsável. E1.07 continua planeada, não iniciada e não autorizada.
 
 ## Repositório remoto
 
@@ -31,7 +31,7 @@ Tarefa activa: E1.06-S2, autorizada e implementada na branch `chore/e106-s2-vite
 - A API pública do GitHub confirmou `private: false` e `visibility: public`. Nenhuma configuração administrativa foi alterada.
 - Branch de E1.06-S1: `chore/e106-s1-electron-security`, publicada no checkpoint `a6ad525def75c5e301bc0b5ee559cf362107918f`.
 - O PR [#1](https://github.com/SilveiraGomes/kilsystem-business/pull/1) foi integrado em 2026-11-15. `main` local e `origin/main` foram alinhadas no merge commit `2ca5b90a4157e8d82e955a64ea28f9e2d543012e`, que contém a cabeça da branch. O repositório continua público e a visibilidade não foi alterada.
-- E1.06-S2 partiu de `main` = `origin/main` = `b890a892d2b1268c8a1b7a6c9c538c6e88d73103`, confirmado após `git fetch`, e criou a branch local `chore/e106-s2-vitest-security`. A API pública do GitHub voltou a confirmar `private: false` e `visibility: public`. A branch ainda não foi publicada.
+- E1.06-S2 partiu de `main` = `origin/main` = `b890a892d2b1268c8a1b7a6c9c538c6e88d73103`, confirmado após `git fetch`, e criou a branch local `chore/e106-s2-vitest-security`. A API pública do GitHub voltou a confirmar `private: false` e `visibility: public`. O responsável autorizou expressamente, em 2026-11-15, a publicação desta branch nessa condição. O commit técnico é `c5a23a0`, e o registo de publicação segue num commit `docs:` posterior. Não houve merge automático.
 
 ## Ambiente de referência
 
@@ -215,7 +215,7 @@ As decisões arquitecturais ainda em aberto estão em [architecture.md](architec
    O último checkpoint publicado em `main` deve ser `580d658` ou posterior, com registo neste documento. Se não corresponder, ou se o remoto divergir, registar e comunicar antes de outro trabalho; nunca forçar.
 4. Executar `pnpm.cmd install --frozen-lockfile` (se `node_modules` não existir ou se a versão do Node mudou) e `pnpm.cmd check` para obter a linha de base. Registar qualquer falha antes de alterar código.
 5. Identificar a tarefa activa em `docs/tasks/`.
-   - E1.06-S2 está implementada na branch local `chore/e106-s2-vitest-security`. Falta a autorização do responsável para publicar com o repositório público; depois, fazer o push da branch, confirmar os hashes e preparar o PR para `main`, sem merge (ver [tasks/E1.06-S2.md](tasks/E1.06-S2.md#retoma-por-outro-agente)).
+   - E1.06-S2 está publicada na branch `chore/e106-s2-vitest-security`. O PR para `main` aguarda integração pelo responsável; ver [tasks/E1.06-S2.md](tasks/E1.06-S2.md#retoma-por-outro-agente).
    - E1.07–E1.10 estão **planeadas mas não autorizadas**.
    - E1.06-S1 está integrada em `main` através do PR #1.
 6. Trabalhar apenas no âmbito da tarefa. Regras a manter:
