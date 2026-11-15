@@ -2,7 +2,7 @@
 
 ## Estado deste documento
 
-Este documento regista a fundação E1.01, a primeira aplicação desktop E1.02, a arquitectura de negócio consolidada em E1.02-H, os contratos multiempresa de E1.03, a persistência SQLite de E1.04, o ciclo de vida do serviço local de E1.05 e o ambiente de execução, os modos de implantação e as decisões de domínio de E1.06. “Definido” significa uma decisão já fornecida ou validada pelo projecto; “pendente” requer validação posterior e não deve ser inferido.
+Este documento regista a fundação E1.01, a primeira aplicação desktop E1.02, a arquitectura de negócio consolidada em E1.02-H, os contratos multiempresa de E1.03, a persistência SQLite de E1.04, o ciclo de vida do serviço local de E1.05, o ambiente de execução e as decisões de E1.06 e a actualização segura do Electron em E1.06-S1. “Definido” significa uma decisão já fornecida ou validada pelo projecto; “pendente” requer validação posterior e não deve ser inferido.
 
 ## Visão geral
 
@@ -60,9 +60,19 @@ Em todos os modos:
 | Node.js (serviços, ferramentas, testes) | 24.22.3 (`.node-version`; `engines.node >=24.22.3 <25`) | LTS “Krypton”, em *Maintenance* desde 2026-10-20 e com suporte até 2028-04-30. O Node 26 é a *Active LTS* desde 2026-10-28 (PD-21). |
 | pnpm | 9.15.9 (`packageManager`; `engines.pnpm >=9.15.0 <10`) | `engine-strict=true` em `.npmrc` recusa versões fora de `engines` (D-069, D-073). |
 | `better-sqlite3` | 12.11.1 | Binário pré-compilado `node-v137-win32-x64`, sem compilação local (D-070). |
-| Electron | 33.4.11 (Node embutido 20.18.3) | Runtime próprio, independente do Node do sistema. Fora de suporte, com alertas de segurança (PD-17). |
+| Electron | 45.3.2 (Chromium 156.0.8078.100; Node embutido 24.22.2) | Linha estável suportada, independente do Node 24.22.3 dos serviços. Windows 10 ou superior, apenas x64/arm64 (D-075). |
 | TypeScript / Vite / Vitest | 5.9.3 / 6.4.6 / 2.1.9 | Vitest com alertas apenas de desenvolvimento (PD-18). |
 | ESLint | 10.15.0 (`@eslint/js` 10.0.1, typescript-eslint 8.72.2) | Actualizado em E1.06 (D-072). |
+
+## Segurança do Electron (E1.06-S1)
+
+- `BrowserWindow` fixa `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true`, `webSecurity: true`, `allowRunningInsecureContent: false`, `webviewTag: false` e `navigateOnDragDrop: false`.
+- O preload sandboxed expõe por `contextBridge` apenas `kilDesktop.runtime.platform`, uma estrutura imutável sem `ipcRenderer`, `require`, acesso a ficheiros ou acesso à base.
+- O renderer não acede ao Node.js, ao serviço local nem ao SQLite. A base continua exclusivamente em `services/local-api`/`packages/database` (D-028, D-041).
+- A sessão nega explicitamente todas as verificações e pedidos de permissão. Não existem capacidades que necessitem de câmara, microfone, geolocalização, notificações, captura de ecrã ou protocolos externos nesta etapa.
+- Novas janelas e `webview` são recusadas. A navegação fica limitada ao documento da aplicação e aos seus fragmentos; em produção, o documento é carregado por `loadFile`, com caminho convertido por `pathToFileURL` para comparação canónica.
+- O renderer declara CSP sem fontes remotas, plugins, frames ou submissão de formulários; a única excepção de ligação é o WebSocket de desenvolvimento fixo em `ws://127.0.0.1:5173` para o Vite.
+- O smoke test real percorre as oito áreas, verifica dashboard, preload mínimo e ausência de `window.process`/`window.require`, e encerra a aplicação.
 
 ## Contratos multiempresa (E1.03, revistos em E1.04)
 
@@ -197,6 +207,7 @@ main.ts ──> cli.ts ──> config.ts (process.env → LocalServiceConfig val
 - Modos de implantação A, B e C; serviço Windows; API REST em Fastify (D-062 a D-066).
 - Licença principal independente do Monitor; módulos sectoriais activáveis individualmente (D-067, D-068).
 - Node.js 24.22.3 como referência; ESLint 10 (D-069 a D-073).
+- Electron 45.3.2 como runtime suportado e política explícita de menor privilégio para renderer, sessão, navegação e recursos locais (D-075 e D-076).
 
 ## Estrutura do monorepositório
 
