@@ -58,8 +58,68 @@ CREATE TABLE branches (
 CREATE INDEX branches_tenant_company_idx ON branches (tenant_id, company_id);
 `;
 
+// E1.07-A (D-086): identidades locais e associações. Só acrescenta objectos; não altera dados nem
+// tabelas existentes. O índice único sobre `branches` permite a chave estrangeira composta que
+// garante que um estabelecimento associado pertence à mesma empresa e ao mesmo tenant.
+const V2_USERS_AND_MEMBERSHIPS = `
+CREATE TABLE users (
+  id TEXT PRIMARY KEY NOT NULL,
+  username TEXT NOT NULL CHECK (
+    length(username) BETWEEN 3 AND 64 AND username = lower(username) AND username NOT GLOB '*[^a-z0-9._-]*'
+  ),
+  display_name TEXT NOT NULL CHECK (length(trim(display_name)) > 0),
+  email TEXT CHECK (email IS NULL OR length(trim(email)) > 0),
+  phone TEXT CHECK (phone IS NULL OR length(trim(phone)) > 0),
+  status TEXT NOT NULL CHECK (status IN ('ACTIVE', 'SUSPENDED', 'INACTIVE')),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  CONSTRAINT users_username_unique UNIQUE (username),
+  CONSTRAINT users_chronology CHECK (updated_at >= created_at)
+) STRICT;
+
+CREATE UNIQUE INDEX branches_id_tenant_company_unique ON branches (id, tenant_id, company_id);
+
+CREATE TABLE company_memberships (
+  id TEXT PRIMARY KEY NOT NULL,
+  user_id TEXT NOT NULL REFERENCES users (id) ON UPDATE RESTRICT ON DELETE RESTRICT,
+  tenant_id TEXT NOT NULL,
+  company_id TEXT NOT NULL,
+  scope TEXT NOT NULL CHECK (scope IN ('COMPANY_WIDE', 'BRANCH_RESTRICTED')),
+  status TEXT NOT NULL CHECK (status IN ('ACTIVE', 'INACTIVE')),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  CONSTRAINT company_memberships_company_fk FOREIGN KEY (company_id, tenant_id)
+    REFERENCES companies (id, tenant_id) ON UPDATE RESTRICT ON DELETE RESTRICT,
+  CONSTRAINT company_memberships_user_tenant_unique UNIQUE (user_id, tenant_id),
+  CONSTRAINT company_memberships_id_tenant_company_unique UNIQUE (id, tenant_id, company_id),
+  CONSTRAINT company_memberships_chronology CHECK (updated_at >= created_at)
+) STRICT;
+
+CREATE INDEX company_memberships_tenant_company_idx ON company_memberships (tenant_id, company_id);
+
+CREATE TABLE branch_memberships (
+  id TEXT PRIMARY KEY NOT NULL,
+  company_membership_id TEXT NOT NULL,
+  tenant_id TEXT NOT NULL,
+  company_id TEXT NOT NULL,
+  branch_id TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('ACTIVE', 'INACTIVE')),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  CONSTRAINT branch_memberships_membership_fk FOREIGN KEY (company_membership_id, tenant_id, company_id)
+    REFERENCES company_memberships (id, tenant_id, company_id) ON UPDATE RESTRICT ON DELETE RESTRICT,
+  CONSTRAINT branch_memberships_branch_fk FOREIGN KEY (branch_id, tenant_id, company_id)
+    REFERENCES branches (id, tenant_id, company_id) ON UPDATE RESTRICT ON DELETE RESTRICT,
+  CONSTRAINT branch_memberships_unique UNIQUE (company_membership_id, branch_id),
+  CONSTRAINT branch_memberships_chronology CHECK (updated_at >= created_at)
+) STRICT;
+
+CREATE INDEX branch_memberships_tenant_membership_idx ON branch_memberships (tenant_id, company_membership_id);
+`;
+
 export const MIGRATIONS: readonly Migration[] = Object.freeze([
   Object.freeze({ name: 'create_companies_and_branches', sql: V1_COMPANIES_AND_BRANCHES, version: 1 }),
+  Object.freeze({ name: 'create_users_and_memberships', sql: V2_USERS_AND_MEMBERSHIPS, version: 2 }),
 ]);
 
 export const migrationChecksum = (migration: Migration): string =>

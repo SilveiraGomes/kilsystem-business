@@ -33,7 +33,7 @@ export class TenantMismatchError extends Error {
   }
 }
 
-export type RecordKind = 'Company' | 'Branch';
+export type RecordKind = 'Company' | 'Branch' | 'User' | 'CompanyMembership' | 'BranchMembership';
 
 export class RecordNotFoundError extends Error {
   override readonly name = 'RecordNotFoundError';
@@ -48,7 +48,11 @@ export type RecordConflictReason =
   | 'tenant-already-has-company'
   | 'company-has-branches'
   | 'duplicate-branch-code'
-  | 'immutable-field';
+  | 'immutable-field'
+  | 'duplicate-username'
+  | 'duplicate-company-membership'
+  | 'duplicate-branch-membership'
+  | 'membership-not-branch-restricted';
 
 export class RecordConflictError extends Error {
   override readonly name = 'RecordConflictError';

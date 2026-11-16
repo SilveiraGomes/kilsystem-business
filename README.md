@@ -54,10 +54,15 @@ Copie `.env.example` para `.env` apenas no ambiente local e substitua os marcado
 - `services/local-api`: serviço local Node.js que gere o ciclo de vida da base SQLite (sem HTTP nesta fase); ver [docs/tasks/E1.05.md](docs/tasks/E1.05.md).
 - `services/central-api`: API Fastify para serviços centrais.
 - `services/sync-service`: futuro serviço de sincronização.
-- `packages/shared-types`: contratos de domínio multiempresa.
-- `packages/database`: persistência SQLite local isolada por empresa.
+- `packages/shared-types`: contratos de domínio multiempresa, identidades locais e associações a empresas e estabelecimentos.
+- `packages/database`: persistência SQLite local isolada por empresa, incluindo identidades e associações (migração 2).
 - Restantes `packages/*`: fronteiras partilhadas, ainda sem regras de negócio.
 - `tests`: verificações transversais iniciais.
 - `docs`: decisões de arquitectura.
+
+O sistema ainda **não tem autenticação nem autorização funcional**. Desde E1.07-A
+existem identidades locais e associações multiempresa, mas sem credenciais,
+sessões ou permissões, e apenas na composição interna do serviço local. O plano
+das subtarefas seguintes está em [docs/tasks/E1.07.md](docs/tasks/E1.07.md).
 
 Consulte [docs/architecture.md](docs/architecture.md) e [AGENTS.md](AGENTS.md) antes de contribuir. Para retomar o trabalho noutra sessão ou com outro agente, comece por [docs/project-status.md](docs/project-status.md).

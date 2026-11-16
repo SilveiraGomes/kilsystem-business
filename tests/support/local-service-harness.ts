@@ -4,6 +4,7 @@ import { openSqliteDatabase, type OpenSqliteOptions, type SqliteDatabase } from 
 import { parseLocalServiceConfig, type LocalServiceConfig } from '../../services/local-api/src/config';
 import { createLocalService, type LocalService } from '../../services/local-api/src/local-service';
 import { createJsonLogger } from '../../services/local-api/src/logger';
+import type { IdentityRepositoryHarness } from './membership-repository-contract';
 import { createTemporaryDatabase } from './sqlite-harness';
 import type { TenantRepositoryHarness } from './tenant-repository-contract';
 
@@ -75,5 +76,24 @@ export const createLocalServiceHarness = async (): Promise<TenantRepositoryHarne
       await service.stop();
       temporary.dispose();
     },
+  };
+};
+
+/** Identidades e associações através do serviço local em `READY` (E1.07-A, D-089). */
+export const createLocalServiceIdentityHarness = async (): Promise<IdentityRepositoryHarness> => {
+  const temporary = createTemporaryDatabase();
+  const { service } = createServiceUnderTest(serviceConfig(temporary.filename));
+  await service.start();
+  return {
+    branches: service.branches,
+    branchMemberships: service.branchMemberships,
+    companies: service.companies,
+    companyMemberships: service.companyMemberships,
+    dispose: async () => {
+      await service.stop();
+      temporary.dispose();
+    },
+    scopes: service.membershipScopes,
+    users: service.identityProvisioning.users,
   };
 };
