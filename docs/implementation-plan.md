@@ -34,8 +34,8 @@ Este plano regista as etapas concluídas e o planeamento inicial da fase E1 até
 | [E1.07-C-M](tasks/E1.07-C-M.md) | Revisão independente de segurança das sessões | Concluída | `e19ef76` (`docs: record independent session security review`) |
 | [E1.07-C-R1](tasks/E1.07-C-R1.md) | Correcções de segurança das sessões (RV-01, RV-03, RV-04, RV-05; migração 5) | Concluída e integrada (PR #6) | `d5f077e` (`fix: harden session clocks and revocation integrity`) |
 | [E1.07-C-R2](tasks/E1.07-C-R2.md) | Revisão independente final das correcções das sessões | Concluída; GO com ressalvas (o merge do PR #6 antecedeu a conclusão) | `docs: record final session security review` |
-| [E1.07-X](tasks/E1.07-X.md) | Exclusividade do serviço local por base (PD-43, PD-51) | Autorizada e implementada na branch `feat/e107-x-database-exclusivity`; revista em E1.07-X-M (GO com ressalvas); aguarda aprovação do merge; continua a bloquear E1.08 até à integração | `76c7709` (`test: cover session replacement with a new identifier`); `cfd11fe` (`feat: enforce exclusive local service ownership per database`) |
-| [E1.07-X-M](tasks/E1.07-X-M.md) | Revisão independente da exclusividade operacional SQLite | Concluída; GO com ressalvas; sem merge | `docs: record independent database exclusivity review` |
+| [E1.07-X](tasks/E1.07-X.md) | Exclusividade do serviço local por base (PD-43, PD-51) | Concluída e integrada (PR #7, merge `1872bdf`); revista em E1.07-X-M; PD-43 e PD-51 encerradas (D-140) | `76c7709` (`test: cover session replacement with a new identifier`); `cfd11fe` (`feat: enforce exclusive local service ownership per database`); merge `1872bdf` |
+| [E1.07-X-M](tasks/E1.07-X-M.md) | Revisão independente da exclusividade operacional SQLite | Concluída; GO com ressalvas, aprovado; integrada (PR #7) | `92b2cce` (`docs: record independent database exclusivity review`); `docs: record database exclusivity integration completion` |
 | [E1.07-D](tasks/E1.07-D.md) | Perfis, permissões e autorização RBAC | Planeada, **não autorizada** | — |
 | [E1.07-E](tasks/E1.07-E.md) | Protecção de contas e auditoria | Planeada, **não autorizada** | — |
 | [E1.07-F](tasks/E1.07-F.md) | Validação integrada da segurança | Planeada, **não autorizada** | — |
@@ -76,25 +76,26 @@ Decisões do responsável D-098 a D-106. A implementação continua sujeita à a
 
 | Trabalho | Pendência | Etapa |
 | --- | --- | --- |
-| Exclusividade do serviço local por base | PD-43 (D-121, D-127) | E1.07-X, antes de E1.08: implementada na branch (D-130 a D-134); encerramento após revisão e integração |
+| Exclusividade do serviço local por base | PD-43 (D-121, D-127) | E1.07-X (D-130 a D-134): **encerrada** com a integração pelo PR #7 (`1872bdf`, D-140) |
 | Retenção definitiva e referência temporal confiável para eliminar registos de sessões; crescimento dos registos | PD-47, PD-49 (D-125) | E1.07-E |
 | Ensaio de suspensão e retoma real do computador, incluindo a suspensão depois de um avanço corrigido do relógio de parede (E1.07-C-R2, RV-02) | PD-50 | Gate E1.07-F |
-| Teste para a reinserção de uma sessão com `id` novo e digest existente (lacuna da migração 5; E1.07-C-R2, RV-03) | PD-51 | Resolvida na branch de E1.07-X (variante do S64; O3 detectada); encerramento após integração |
+| Teste para a reinserção de uma sessão com `id` novo e digest existente (lacuna da migração 5; E1.07-C-R2, RV-03) | PD-51 | E1.07-X (variante do S64; O3 detectada): **encerrada** com a integração pelo PR #7 (`1872bdf`, D-140) |
 
 ### Trabalho atribuído em E1.07-X
 
 | Trabalho | Pendência | Etapa |
 | --- | --- | --- |
-| Unidades de rede mapeadas e sistemas de ficheiros locais além de NTFS: comportamento não verificado | PD-52 (D-136) | E1.10: validação da política de armazenamento (NTFS local homologado) |
-| Cópias de segurança e restauro pela instância proprietária, com confidencialidade, integridade e controlo de acesso das cópias; tratamento de `database-locked` (nova tentativa limitada) pelo gestor de serviços Windows | PD-53 (D-133, D-138) | Proposta: E1.10 |
-| Ctrl+C real numa consola interactiva sobre o serviço com a base detida (o ensaio automático entrega o sinal por `process.emit`); paragem pelo gestor de serviços | PD-54 (D-139) | Gate E1.07-F (consola); E1.10 (gestor de serviços) |
+| Unidades de rede mapeadas e sistemas de ficheiros locais além de NTFS: comportamento não verificado | PD-52 (D-136, D-141) | E1.10: validação operacional da política de armazenamento (NTFS local homologado) |
+| Cópias de segurança e restauro pela instância proprietária, com confidencialidade, integridade e controlo de acesso das cópias; tempos de aquisição e recuperação e novas tentativas limitadas perante `database-locked` | PD-53 (D-133, D-138, D-142) | E1.10 |
+| Ctrl+C real numa consola interactiva sobre o serviço com a base detida (o ensaio automático entrega o sinal por `process.emit`); paragem pelo gestor de serviços | PD-54 (D-139, D-143) | E1.07-F (consola); E1.10 (gestor de serviços) |
 
 ### Trabalho atribuído em E1.07-X-M
 
 | Trabalho | Pendência | Etapa |
 | --- | --- | --- |
-| Diagnóstico de um ficheiro em uso por outro programa sem partilha (hoje `database-access-denied`) | PD-55 | Por decidir (proposta: E1.10, instruções operacionais) |
-| `inspectDatabase` sem anular transacções que não abriu; `TEMP` isolado nos executores de mutações | PD-56 | Por decidir (tarefa de testes autorizada) |
+| Diagnóstico de um ficheiro em uso por outro programa sem partilha (hoje `database-access-denied`) | PD-55 (D-144) | E1.10 |
+| `inspectDatabase` sem anular transacções que não abriu; limpeza dos ensaios (`TEMP` isolado nos executores de mutações) | PD-56 (D-145) | E1.07-F |
+| Limpeza intermitente da pasta temporária no `afterEach` dos ensaios com processos (`ENOTEMPTY`, 1 em 9 execuções do X31) | PD-57 | Por decidir (proposta: com a PD-56 em E1.07-F) |
 
 ## Dependências entre funcionalidades e decisões pendentes
 
@@ -109,7 +110,7 @@ Relação entre as funcionalidades ainda não desenvolvidas e as decisões pende
 | Sessões (E1.07-C) | Implementadas (D-107 a D-116) e corrigidas em E1.07-C-R1 (D-124 a D-127). Por decidir: transporte e guarda do token até à interface (E1.08, PD-42); política por tipo de posto; impacto operacional do fim das sessões no reinício (PD-41) |
 | Autorização RBAC (E1.07-D) | E1.07-C integrada; catálogo de perfis e permissões por sector; segregação de funções com fonte normativa; autoridade sobre a administração de sessões |
 | Protecção de contas e auditoria (E1.07-E) | Limiares de bloqueio; retenção e consulta da auditoria, incluindo eventos de sessão (PD-26) |
-| API local e integração Electron (E1.08) | E1.07-B a E1.07-F; exclusividade do serviço por base (E1.07-X, PD-43, D-121; implementada na branch, por integrar); transporte em loopback e do token de sessão, nunca em `localStorage` (PD-42, D-120); E1.06-S1 concluída; PD-27 e PD-28 resolvidas (bloqueantes, D-106); PD-29 resolvida (D-099); medidas contra a negação de serviço da instância (PD-35, PD-39) |
+| API local e integração Electron (E1.08) | E1.07-B a E1.07-F; exclusividade do serviço por base (E1.07-X, PD-43, D-121; integrada pelo PR #7, D-140); transporte em loopback e do token de sessão, nunca em `localStorage` (PD-42, D-120); E1.06-S1 concluída; PD-27 e PD-28 resolvidas (bloqueantes, D-106); PD-29 resolvida (D-099); medidas contra a negação de serviço da instância (PD-35, PD-39) |
 | Ciclo de vida das empresas | Tabela de transições e auditoria (D-061); preservação do NIF (D-055) |
 | Grupos empresariais | Modelo de `BusinessGroup`, autorização e auditoria de relatórios consolidados (D-017) |
 | Módulos sectoriais | Âmbito funcional e regras de cada sector (D-018); activação por licença (D-068) |
