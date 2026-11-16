@@ -1,6 +1,6 @@
 # Estado do projecto
 
-Última verificação: 2026-11-16, na branch `feat/e107-b-local-authentication` (E1.07-B), a partir de `main` em `a44c494`.
+Última verificação: 2026-11-16, em `main` = `8e77091` (E1.07-B-M, revisão de segurança da autenticação local).
 
 Este documento é o ponto de retoma para qualquer agente ou pessoa. Contém apenas factos verificados no repositório ou por execução; o que não foi executado está marcado como tal.
 
@@ -22,18 +22,19 @@ Este documento é o ponto de retoma para qualquer agente ou pessoa. Contém apen
 | E1.06-S2-M — Revisão e integração da modernização Vitest | Concluída | `docs: record vitest integration review` | [tasks/E1.06-S2-M.md](tasks/E1.06-S2-M.md) |
 | Política Git/GitHub | Adoptada | `docs: adopt git and github publication policy` | `AGENTS.md` (“Git e GitHub”), D-074 |
 | E1.07-A — Identidade, utilizadores e associações multiempresa | Concluída e integrada (PR #3) | `cc4adc0`; merge `4d0302b` | [tasks/E1.07-A.md](tasks/E1.07-A.md) |
-| E1.07-B — Credenciais, autenticação local e provisionamento inicial | Implementada e validada; integração por PR | `feat: implement secure offline authentication` (branch `feat/e107-b-local-authentication`) | [tasks/E1.07-B.md](tasks/E1.07-B.md) |
+| E1.07-B — Credenciais, autenticação local e provisionamento inicial | Concluída e integrada (PR #4) | `f443057`; merge `8e77091` | [tasks/E1.07-B.md](tasks/E1.07-B.md) |
+| E1.07-B-M — Revisão de segurança e integração da autenticação local | Concluída; testes de regressão em PR por integrar | `docs: record local authentication security review`; testes `0b6587e` (branch `test/e107-b-m-race-coverage`) | [tasks/E1.07-B-M.md](tasks/E1.07-B-M.md) |
 | E1.07-C a E1.07-F | Planeadas, não autorizadas | — | [tasks/E1.07.md](tasks/E1.07.md) |
 | E1.08 a E1.10 | Planeadas, não autorizadas | — | [implementation-plan.md](implementation-plan.md) |
 
-Tarefa activa: E1.07-B, implementada na branch `feat/e107-b-local-authentication`. A integração em `main` é feita por pull request, sem merge automático. E1.07-C a E1.07-F estão especificadas mas não autorizadas.
+Tarefa activa: nenhuma. E1.07-B está integrada em `main` (PR #4) e foi revista em E1.07-B-M, sem defeitos bloqueantes no código de produção. Dois testes de regressão aguardam integração por PR (branch `test/e107-b-m-race-coverage`, `0b6587e`). E1.07-C a E1.07-F estão especificadas mas não autorizadas.
 
 **O sistema tem autenticação local offline, mas não tem sessões nem autorização funcional.**
 
 - Existem identidades locais, associações a empresas e estabelecimentos, e avaliação interna de elegibilidade.
 - Existem credenciais Argon2id, `authenticate(username, password)`, limitação de tentativas e inicialização explícita da instalação.
 - Tudo isto existe só na composição interna do serviço local, sem HTTP nem IPC.
-- O resultado da autenticação não é uma sessão nem uma autorização empresarial.
+- O resultado da autenticação não é uma sessão nem uma autorização empresarial. `isAuthenticatedIdentity` não basta para autorizar operações empresariais, e a identidade emitida não expira nem é revogada (D-106, PD-40).
 - O `TenantContext` continua a ser construído pelo chamador (PD-27).
 
 ## Repositório remoto
@@ -57,6 +58,11 @@ Tarefa activa: E1.07-B, implementada na branch `feat/e107-b-local-authentication
 - E1.07-B: após `git fetch`, `main` local = `origin/main` = `a44c4943355facfd8f43bb837ef72104dded9639`, com a árvore limpa e o PR #3 integrado.
   - Trabalho na branch `feat/e107-b-local-authentication`, publicada conforme a autorização da tarefa.
   - PR para `main` preparado, sem merge automático. A descrição está em [tasks/E1.07-B.md](tasks/E1.07-B.md#pull-request).
+- E1.07-B-M: após `git fetch`, `origin/main` = `8e77091a977c98371e20fa37a9bd1a910bef8b1b`.
+  - O PR [#4](https://github.com/SilveiraGomes/kilsystem-business/pull/4) foi integrado pelo responsável em 2026-11-16T06:40:53Z, antes da conclusão da revisão (registado como divergência de processo).
+  - Cabeça `f443057`, igual ao checkpoint revisto; a árvore do merge é idêntica à cabeça.
+  - A `main` local avançou por fast-forward de `a44c494` para `8e77091`. Repositório público, sem alterações administrativas.
+  - Branch `test/e107-b-m-race-coverage` publicada em `0b6587e` (hash local igual ao remoto), autorizada pelo responsável. O PR não foi aberto pelo agente (`gh` indisponível); a descrição está em [tasks/E1.07-B-M.md](tasks/E1.07-B-M.md#descrição-proposta-para-o-pr).
 
 ## Ambiente de referência
 
@@ -79,6 +85,24 @@ node -v   # v24.22.3
 Noutra máquina, instale o Node 24.22.3 (instalador oficial ou um gestor de versões que leia `.node-version`, como o fnm) e o pnpm 9.15.9. Com o Node 24 em Windows x64 não são necessárias ferramentas de compilação C++: o `better-sqlite3` descarrega um binário pré-compilado.
 
 ## Validação verificada
+
+### E1.07-B-M (revisão de segurança), 2026-11-16
+
+Node.js 24.22.3, pnpm 9.15.9, Electron 45.3.2, Vitest 5.1.0 e `better-sqlite3` 12.11.1, sobre `main` = `8e77091` (árvore igual a `f443057`):
+
+- `pnpm.cmd lint`, `typecheck`, `test`, `build` (12/12) e `check`: aprovados, com **514/514**, também sem os 13 directórios de build.
+- Testes do desktop: 6/6. Smoke Electron: `KIL_ELECTRON_SMOKE_OK`. `git diff --check`: sem erros. Sem `.only`, `.skip` nem `.todo`.
+- Argon2id: o vector de teste do RFC 9106 §5.3 foi confirmado no runtime. A API é estável na v24.22.3 (era *release candidate* na v24.7.0).
+- **Mutações:** retirar a revalidação do estado (M1) ou do *hash* da credencial (M2) na confirmação deixava os 514 testes verdes (RV-01, PD-37).
+  - Corrigido em `0b6587e` com dois testes de regressão: 516/516 e cada mutação detectada.
+- **Negação de serviço reproduzida:** 100 falhas com usernames arbitrários suspendem as autenticações de toda a instalação até 5 min, de forma renovável (PD-35).
+- **Migração real independente** de uma base criada pelo código compilado de `a44c494`:
+  - recusa estrita sem alterar a base;
+  - aplicação só da migração 3;
+  - 20/20 verificações (dados, checksums, esquema, FK, autenticação, inicialização sem promoção, registos sem segredos).
+- Nenhuma dependência alterada. `pnpm audit`: 1 moderado (PD-19); `--prod`: 0.
+
+Detalhe completo em [tasks/E1.07-B-M.md](tasks/E1.07-B-M.md).
 
 ### E1.07-B (autenticação local), 2026-11-16
 
@@ -282,16 +306,21 @@ Notas sobre o arranque do Electron:
 | PD-23 | Outras dependências com versões principais novas, sem alertas de segurança: React 19, Vite 8, TypeScript 7, jsdom 31, `@vitejs/plugin-react` 6, `lucide-react` 1.x, entre outras. Não foram actualizadas, por instrução. | Dívida técnica. | Informativo; lista em [tasks/E1.06.md](tasks/E1.06.md). O Vitest foi actualizado em E1.06-S2 (D-077). |
 | PD-24 | O intervalo declarado do Vite (`^6.0.3` na raiz e no catálogo) admite versões abaixo do mínimo exigido pelo Vitest 5 (`>=6.4.0`). O lockfile fixa a 6.4.6, que cumpre o requisito. | Uma resolução nova fora do lockfile poderia escolher um Vite incompatível. | Aberta, de baixo impacto. Por decisão do responsável (E1.06-S2-M), a correcção do intervalo mínimo é feita numa tarefa controlada própria, e não nesta revisão. |
 | PD-25 | O pnpm reporta as subdependências descontinuadas `prebuild-install` 7.1.3 (via `better-sqlite3`) e `whatwg-encoding` 3.1.1 (via jsdom 25). Já existiam no lockfile da `main` antes de E1.06-S2. | Nenhum alerta de segurança associado. | Informativo; reavaliar com futuras versões de `better-sqlite3` e jsdom (PD-23). |
-| PD-26 | O provisionamento de identidades e as alterações de associações não registam o actor nem o histórico de alterações; só existem os registos com `updatedAt`. O `UserDirectory` não recebe contexto de actor. Desde E1.07-B, também não são auditados as autenticações, os bloqueios, a criação e substituição de credenciais e a inicialização da instalação, que de propósito não são escritos nos registos. | Rastreabilidade administrativa e de segurança incompleta. | Aberta; prevista em E1.07-E (auditoria). |
+| PD-26 | O provisionamento de identidades e as alterações de associações não registam o actor nem o histórico de alterações; só existem os registos com `updatedAt`. O `UserDirectory` não recebe contexto de actor. Desde E1.07-B, também não são auditados as autenticações, os bloqueios, a criação e substituição de credenciais e a inicialização da instalação, que de propósito não são escritos nos registos. | Rastreabilidade administrativa e de segurança incompleta. | Aberta. Por D-098, a auditoria de autenticação, credenciais e provisionamento entra em E1.07-E. |
 | PD-27 | O `TenantContext` continua a ser construído pelo chamador e não deriva de identidade autenticada (`AGENTS.md`). Os repositórios isolam correctamente, mas a origem do contexto não é verificada. | Nenhuma operação deve ser exposta antes da correcção. | Aberta; resolução prevista em E1.07-B e E1.07-C, obrigatória antes de E1.08. |
 | PD-28 | Criar uma associação com um `userId` inexistente devolve `RecordNotFoundError('User')`, o que permite a um chamador interno com contexto empresarial saber se uma identidade existe na instalação. | Aceitável enquanto o provisionamento for interno. | Aberta; rever antes de qualquer exposição (E1.08, E1.07-F). |
-| PD-29 | A eliminação física de um estabelecimento ou de uma empresa com associações é recusada pela base (`PersistenceError('constraint')`), não por um erro de domínio específico. Os dados ficam preservados. | Mensagem menos explícita para o chamador. | Informativo; rever se a eliminação física vier a ser usada (D-027). |
+| PD-29 | A eliminação física de um estabelecimento ou de uma empresa com associações é recusada pela base (`PersistenceError('constraint')`), não por um erro de domínio específico. Os dados ficam preservados. | Mensagem menos explícita para o chamador. | Aberta. Por D-099, é resolvida antes da exposição da API empresarial. |
 | PD-30 | A identidade só admite alteração de estado; nome de apresentação, email e telefone não podem ser alterados nesta etapa, por decisão de âmbito (sem alteração arbitrária de identidades partilhadas). | Correcções de dados pessoais exigem tarefa própria. | Aberta; definir o processo autorizado e auditado (E1.07-E). |
-| PD-31 | Não existe ferramenta operacional para a inicialização da instalação (D-096). A operação só existe na composição interna do serviço. Quando existir, a ferramenta tem de usar entrada interactiva protegida, sem palavras-passe em argumentos nem em ficheiros de configuração. | Instalações reais não podem ser inicializadas por um operador. | Aberta; antes de E1.10. |
-| PD-32 | Sem *pepper*: a NIST SP 800-63B recomenda uma derivação com chave secreta guardada separadamente da base, que não foi implementada por falta de armazenamento de segredos protegido pelo sistema operativo (por exemplo, DPAPI). | Quem obtiver a base pode tentar ataques offline, abrandados apenas pelo Argon2id. | Aberta; decidir com E1.07-E/E1.10. |
-| PD-33 | A lista local de palavras-passe comuns ou comprometidas está vazia por omissão (`EMPTY_COMMON_PASSWORD_LIST`). O mecanismo existe e é configurável (`commonPasswords`). | Palavras-passe comuns de 15 ou mais caracteres não são recusadas. | Aberta; definir a fonte, a licença e a actualização de uma lista local. |
-| PD-34 | Canais temporais: as recusas `throttled` e as entradas com formato inválido respondem sem derivação; credenciais com parâmetros antigos têm custo diferente até serem recalculadas; o percurso não é de tempo constante de ponta a ponta. Não revela directamente a existência de utilizadores, mas não está demonstrado por medição. | Risco residual de enumeração por tempo. | Aberta; rever em E1.07-F. |
-| PD-35 | Desvio da NIST na limitação: não há desactivação após 100 falhas consecutivas, porque bloqueios permanentes estão proibidos. Depois da escalada, uma conta admite até 4 tentativas por hora (bloqueio máximo de 15 min). O limite da instância (100 falhas em 5 min) pode ser usado para negação de serviço local durante até 5 min. | Equilíbrio entre força bruta e disponibilidade por decidir. | Aberta; decidir em E1.07-E. |
+| PD-31 | Não existe ferramenta operacional para a inicialização da instalação (D-096). A operação só existe na composição interna do serviço. Quando existir, a ferramenta tem de usar entrada interactiva protegida, sem palavras-passe em argumentos nem em ficheiros de configuração. | Instalações reais não podem ser inicializadas por um operador. Hoje a única fronteira de confiança é o acesso ao processo do serviço e as permissões do ficheiro SQLite; até à inicialização, a primeira chamada vence. | Aberta. Por D-100, implementada em E1.07-E, antes de disponibilizar login operacional. |
+| PD-32 | Sem *pepper*: a NIST SP 800-63B recomenda uma derivação com chave secreta guardada separadamente da base, que não foi implementada por falta de armazenamento de segredos protegido pelo sistema operativo (por exemplo, DPAPI). | Quem obtiver a base pode tentar ataques offline, abrandados apenas pelo Argon2id. | Aberta. Por D-101, *pepper*, armazenamento externo protegido, rotação e recuperação são avaliados em E1.07-E e E1.10. |
+| PD-33 | A lista local de palavras-passe comuns ou comprometidas está vazia por omissão (`EMPTY_COMMON_PASSWORD_LIST`). O mecanismo existe e é configurável (`commonPasswords`). | Palavras-passe comuns de 15 ou mais caracteres não são recusadas. | Aberta. Por D-102, uma lista local efectiva é implementada em E1.07-E (fonte, licença e actualização a definir). |
+| PD-34 | Canais temporais: as recusas `throttled` e as entradas com formato inválido respondem sem derivação; credenciais com parâmetros antigos têm custo diferente até serem recalculadas; o percurso não é de tempo constante de ponta a ponta. Não revela directamente a existência de utilizadores, mas não está demonstrado por medição. | Risco residual de enumeração por tempo. | Aberta. Por D-103, avaliada no Gate E1.07-F. |
+| PD-35 | Desvio da NIST na limitação: não há desactivação após 100 falhas consecutivas, porque bloqueios permanentes estão proibidos. Depois da escalada, uma conta admite até 4 tentativas por hora (bloqueio máximo de 15 min). O limite da instância (100 falhas em 5 min) pode ser usado para negação de serviço local durante até 5 min. | Equilíbrio entre força bruta e disponibilidade por decidir. Reproduzido em E1.07-B-M: 100 falhas com usernames arbitrários suspendem toda a instalação até 5 min, de forma renovável; 1 tentativa a cada 15 min mantém uma conta bloqueada. | Aberta. Por D-104, em E1.07-E: limite de falhas consecutivas e recuperação controlada da credencial. Distinguir bloqueio temporário, desactivação da credencial e da identidade, sem bloqueio irreversível. Medidas propostas em [E1.07-B-M](tasks/E1.07-B-M.md#protecção-contra-abuso-e-negação-de-serviço). Nenhum controlo é retirado. |
+| PD-36 | As chaves de limitação são `user:` + SHA-256 sem chave. Como os usernames são ASCII de baixa entropia, quem tiver a base pode recuperá-los por dicionário. | Exposição de usernames (incluindo tentados e inexistentes) a quem obtiver a base. | Aberta. Por D-105, avaliar HMAC com chave externa protegida; planeado para E1.07-E. |
+| PD-37 | As revalidações do estado e do *hash* da credencial na confirmação da autenticação não estavam cobertas por testes. Retirar qualquer delas deixava os 514 testes verdes (RV-01). | Uma regressão permitiria autenticar uma identidade suspensa ou uma palavra-passe antiga durante uma corrida. | Corrigida na branch `test/e107-b-m-race-coverage` (`0b6587e`): dois testes, 516/516, cada mutação detectada. Fecha quando o PR for integrado em `main`. |
+| PD-38 | Os limites superiores dos parâmetros Argon2id são largos (m ≤ 1 GiB, t ≤ 16, p ≤ 16), em código e em `CHECK` (RV-04). | Uma credencial adulterada pode custar ~1 GiB por verificação (2 GiB em paralelo). Exige acesso de escrita à base. | Aberta; proposta: limitar, por exemplo, a 4× os parâmetros de produção, com nova migração. Etapa por decidir (proposta: E1.07-E). |
+| PD-39 | Uma recusa `busy` (fila de derivações cheia) lança `PasswordHashingError` depois de a falha já ter sido contada (RV-03). | Sob carga ou ataque, um utilizador legítimo acumula falhas e recebe uma excepção em vez de um resultado. | Aberta; proposta: devolver a falha antecipada e um resultado tipado. Antes de E1.08 (proposta: E1.07-E). |
+| PD-40 | Uma `AuthenticatedIdentity` continua reconhecida por `isAuthenticatedIdentity` durante toda a vida do processo, após suspensão, substituição da credencial ou reinício do serviço (RV-05). | Sem consumidores hoje. Uma sessão que a aceite sem revalidar sobreviveria à perda de elegibilidade. | Aberta; requisito de E1.07-C: `authenticatedAt` recente, ligação à geração do serviço e revalidação da elegibilidade. |
 
 As decisões arquitecturais ainda em aberto estão em [architecture.md](architecture.md#decisões-pendentes).
 
@@ -311,7 +340,8 @@ As decisões arquitecturais ainda em aberto estão em [architecture.md](architec
 5. Identificar a tarefa activa em `docs/tasks/`.
    - E1.06-S2 está integrada em `main` através do PR #2 (`d29a629`).
    - E1.07-A está integrada em `main` através do PR #3 (`4d0302b`).
-   - E1.07-B está implementada na branch `feat/e107-b-local-authentication`. A integração é feita por PR, que o responsável revê e integra.
+   - E1.07-B está integrada em `main` através do PR #4 (`8e77091`) e revista em E1.07-B-M.
+   - Os testes de regressão de E1.07-B-M estão na branch `test/e107-b-m-race-coverage` (`0b6587e`), com PR a abrir e integrar pelo responsável.
    - E1.07-C a E1.07-F e E1.08 a E1.10 estão **planeadas mas não autorizadas**.
    - E1.06-S1 está integrada em `main` através do PR #1.
 6. Trabalhar apenas no âmbito da tarefa. Regras a manter:
