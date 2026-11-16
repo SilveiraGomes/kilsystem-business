@@ -1,6 +1,6 @@
 # Estado do projecto
 
-Última verificação: 2026-11-16, em `main` = `8e77091` (E1.07-B-M, revisão de segurança da autenticação local).
+Última verificação: 2026-11-16, em `main` = `581699a` (E1.07-B-M, testes de regressão integrados pelo PR #5).
 
 Este documento é o ponto de retoma para qualquer agente ou pessoa. Contém apenas factos verificados no repositório ou por execução; o que não foi executado está marcado como tal.
 
@@ -23,11 +23,11 @@ Este documento é o ponto de retoma para qualquer agente ou pessoa. Contém apen
 | Política Git/GitHub | Adoptada | `docs: adopt git and github publication policy` | `AGENTS.md` (“Git e GitHub”), D-074 |
 | E1.07-A — Identidade, utilizadores e associações multiempresa | Concluída e integrada (PR #3) | `cc4adc0`; merge `4d0302b` | [tasks/E1.07-A.md](tasks/E1.07-A.md) |
 | E1.07-B — Credenciais, autenticação local e provisionamento inicial | Concluída e integrada (PR #4) | `f443057`; merge `8e77091` | [tasks/E1.07-B.md](tasks/E1.07-B.md) |
-| E1.07-B-M — Revisão de segurança e integração da autenticação local | Concluída; testes de regressão em PR por integrar | `docs: record local authentication security review`; testes `0b6587e` (branch `test/e107-b-m-race-coverage`) | [tasks/E1.07-B-M.md](tasks/E1.07-B-M.md) |
+| E1.07-B-M — Revisão de segurança e integração da autenticação local | Concluída e integrada (PR #5) | revisão `8ac21b0`; testes `0b6587e`; merge `581699a` | [tasks/E1.07-B-M.md](tasks/E1.07-B-M.md) |
 | E1.07-C a E1.07-F | Planeadas, não autorizadas | — | [tasks/E1.07.md](tasks/E1.07.md) |
 | E1.08 a E1.10 | Planeadas, não autorizadas | — | [implementation-plan.md](implementation-plan.md) |
 
-Tarefa activa: nenhuma. E1.07-B está integrada em `main` (PR #4) e foi revista em E1.07-B-M, sem defeitos bloqueantes no código de produção. Dois testes de regressão aguardam integração por PR (branch `test/e107-b-m-race-coverage`, `0b6587e`). E1.07-C a E1.07-F estão especificadas mas não autorizadas.
+Tarefa activa: nenhuma. E1.07-B está integrada em `main` (PR #4) e foi revista em E1.07-B-M, sem defeitos bloqueantes no código de produção. Os dois testes de regressão foram integrados pelo PR #5 (`0b6587e`, merge `581699a`) e a PD-37 está encerrada. E1.07-C a E1.07-F estão especificadas mas não autorizadas.
 
 **O sistema tem autenticação local offline, mas não tem sessões nem autorização funcional.**
 
@@ -62,7 +62,9 @@ Tarefa activa: nenhuma. E1.07-B está integrada em `main` (PR #4) e foi revista 
   - O PR [#4](https://github.com/SilveiraGomes/kilsystem-business/pull/4) foi integrado pelo responsável em 2026-11-16T06:40:53Z, antes da conclusão da revisão (registado como divergência de processo).
   - Cabeça `f443057`, igual ao checkpoint revisto; a árvore do merge é idêntica à cabeça.
   - A `main` local avançou por fast-forward de `a44c494` para `8e77091`. Repositório público, sem alterações administrativas.
-  - Branch `test/e107-b-m-race-coverage` publicada em `0b6587e` (hash local igual ao remoto), autorizada pelo responsável. O PR não foi aberto pelo agente (`gh` indisponível); a descrição está em [tasks/E1.07-B-M.md](tasks/E1.07-B-M.md#descrição-proposta-para-o-pr).
+  - Branch `test/e107-b-m-race-coverage` publicada em `0b6587e` (hash local igual ao remoto), autorizada pelo responsável.
+  - O PR [#5](https://github.com/SilveiraGomes/kilsystem-business/pull/5) integrou os dois testes em `main`, no merge `581699a7590a992f9c53a359867165ecff60d750`. A API confirmou um único ficheiro alterado (+65/−0), estado `clean` e nenhuma verificação remota configurada.
+  - Após `git fetch`, a `main` local avançou por fast-forward de `8ac21b0` para `581699a`; `0b6587e` foi confirmado como ancestral. `pnpm check` passou com 516/516 e 12/12 builds; desktop 6/6; smoke Electron aprovado; auditoria com o PD-19 inalterado e produção com 0 vulnerabilidades.
 
 ## Ambiente de referência
 
@@ -88,13 +90,13 @@ Noutra máquina, instale o Node 24.22.3 (instalador oficial ou um gestor de vers
 
 ### E1.07-B-M (revisão de segurança), 2026-11-16
 
-Node.js 24.22.3, pnpm 9.15.9, Electron 45.3.2, Vitest 5.1.0 e `better-sqlite3` 12.11.1, sobre `main` = `8e77091` (árvore igual a `f443057`):
+Node.js 24.22.3, pnpm 9.15.9, Electron 45.3.2, Vitest 5.1.0 e `better-sqlite3` 12.11.1. A revisão de produção foi feita sobre `main` = `8e77091` (árvore igual a `f443057`); a integração dos testes foi revalidada sobre `main` = `581699a`:
 
 - `pnpm.cmd lint`, `typecheck`, `test`, `build` (12/12) e `check`: aprovados, com **514/514**, também sem os 13 directórios de build.
 - Testes do desktop: 6/6. Smoke Electron: `KIL_ELECTRON_SMOKE_OK`. `git diff --check`: sem erros. Sem `.only`, `.skip` nem `.todo`.
 - Argon2id: o vector de teste do RFC 9106 §5.3 foi confirmado no runtime. A API é estável na v24.22.3 (era *release candidate* na v24.7.0).
 - **Mutações:** retirar a revalidação do estado (M1) ou do *hash* da credencial (M2) na confirmação deixava os 514 testes verdes (RV-01, PD-37).
-  - Corrigido em `0b6587e` com dois testes de regressão: 516/516 e cada mutação detectada.
+  - Corrigido em `0b6587e` com dois testes de regressão: 516/516 e cada mutação detectada; integrado pelo PR #5 no merge `581699a`. PD-37 encerrada.
 - **Negação de serviço reproduzida:** 100 falhas com usernames arbitrários suspendem as autenticações de toda a instalação até 5 min, de forma renovável (PD-35).
 - **Migração real independente** de uma base criada pelo código compilado de `a44c494`:
   - recusa estrita sem alterar a base;
@@ -317,7 +319,7 @@ Notas sobre o arranque do Electron:
 | PD-34 | Canais temporais: as recusas `throttled` e as entradas com formato inválido respondem sem derivação; credenciais com parâmetros antigos têm custo diferente até serem recalculadas; o percurso não é de tempo constante de ponta a ponta. Não revela directamente a existência de utilizadores, mas não está demonstrado por medição. | Risco residual de enumeração por tempo. | Aberta. Por D-103, avaliada no Gate E1.07-F. |
 | PD-35 | Desvio da NIST na limitação: não há desactivação após 100 falhas consecutivas, porque bloqueios permanentes estão proibidos. Depois da escalada, uma conta admite até 4 tentativas por hora (bloqueio máximo de 15 min). O limite da instância (100 falhas em 5 min) pode ser usado para negação de serviço local durante até 5 min. | Equilíbrio entre força bruta e disponibilidade por decidir. Reproduzido em E1.07-B-M: 100 falhas com usernames arbitrários suspendem toda a instalação até 5 min, de forma renovável; 1 tentativa a cada 15 min mantém uma conta bloqueada. | Aberta. Por D-104, em E1.07-E: limite de falhas consecutivas e recuperação controlada da credencial. Distinguir bloqueio temporário, desactivação da credencial e da identidade, sem bloqueio irreversível. Medidas propostas em [E1.07-B-M](tasks/E1.07-B-M.md#protecção-contra-abuso-e-negação-de-serviço). Nenhum controlo é retirado. |
 | PD-36 | As chaves de limitação são `user:` + SHA-256 sem chave. Como os usernames são ASCII de baixa entropia, quem tiver a base pode recuperá-los por dicionário. | Exposição de usernames (incluindo tentados e inexistentes) a quem obtiver a base. | Aberta. Por D-105, avaliar HMAC com chave externa protegida; planeado para E1.07-E. |
-| PD-37 | As revalidações do estado e do *hash* da credencial na confirmação da autenticação não estavam cobertas por testes. Retirar qualquer delas deixava os 514 testes verdes (RV-01). | Uma regressão permitiria autenticar uma identidade suspensa ou uma palavra-passe antiga durante uma corrida. | Corrigida na branch `test/e107-b-m-race-coverage` (`0b6587e`): dois testes, 516/516, cada mutação detectada. Fecha quando o PR for integrado em `main`. |
+| PD-37 | As revalidações do estado e do *hash* da credencial na confirmação da autenticação não estavam cobertas por testes. Retirar qualquer delas deixava os 514 testes verdes (RV-01). | Uma regressão permitiria autenticar uma identidade suspensa ou uma palavra-passe antiga durante uma corrida. | **Encerrada.** Corrigida em `0b6587e`: dois testes, 516/516, cada mutação detectada; integrada em `main` pelo PR #5, merge `581699a`. |
 | PD-38 | Os limites superiores dos parâmetros Argon2id são largos (m ≤ 1 GiB, t ≤ 16, p ≤ 16), em código e em `CHECK` (RV-04). | Uma credencial adulterada pode custar ~1 GiB por verificação (2 GiB em paralelo). Exige acesso de escrita à base. | Aberta; proposta: limitar, por exemplo, a 4× os parâmetros de produção, com nova migração. Etapa por decidir (proposta: E1.07-E). |
 | PD-39 | Uma recusa `busy` (fila de derivações cheia) lança `PasswordHashingError` depois de a falha já ter sido contada (RV-03). | Sob carga ou ataque, um utilizador legítimo acumula falhas e recebe uma excepção em vez de um resultado. | Aberta; proposta: devolver a falha antecipada e um resultado tipado. Antes de E1.08 (proposta: E1.07-E). |
 | PD-40 | Uma `AuthenticatedIdentity` continua reconhecida por `isAuthenticatedIdentity` durante toda a vida do processo, após suspensão, substituição da credencial ou reinício do serviço (RV-05). | Sem consumidores hoje. Uma sessão que a aceite sem revalidar sobreviveria à perda de elegibilidade. | Aberta; requisito de E1.07-C: `authenticatedAt` recente, ligação à geração do serviço e revalidação da elegibilidade. |
