@@ -60,9 +60,15 @@ Copie `.env.example` para `.env` apenas no ambiente local e substitua os marcado
 - `tests`: verificações transversais iniciais.
 - `docs`: decisões de arquitectura.
 
-O sistema ainda **não tem autenticação nem autorização funcional**. Desde E1.07-A
-existem identidades locais e associações multiempresa, mas sem credenciais,
-sessões ou permissões, e apenas na composição interna do serviço local. O plano
-das subtarefas seguintes está em [docs/tasks/E1.07.md](docs/tasks/E1.07.md).
+O sistema **ainda não tem sessões nem autorização funcional**. Desde E1.07-A
+existem identidades locais e associações multiempresa. Desde E1.07-B existe
+autenticação local offline por username e palavra-passe:
+- Argon2id nativo do Node.js;
+- política NIST SP 800-63B;
+- limitação persistente de tentativas;
+- inicialização explícita da instalação, sem contas predefinidas.
+
+Estas funções existem apenas na composição interna do serviço local, sem HTTP nem
+IPC. O plano das subtarefas seguintes está em [docs/tasks/E1.07.md](docs/tasks/E1.07.md).
 
 Consulte [docs/architecture.md](docs/architecture.md) e [AGENTS.md](AGENTS.md) antes de contribuir. Para retomar o trabalho noutra sessão ou com outro agente, comece por [docs/project-status.md](docs/project-status.md).

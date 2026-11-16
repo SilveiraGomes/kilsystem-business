@@ -33,7 +33,13 @@ export class TenantMismatchError extends Error {
   }
 }
 
-export type RecordKind = 'Company' | 'Branch' | 'User' | 'CompanyMembership' | 'BranchMembership';
+export type RecordKind =
+  | 'Company'
+  | 'Branch'
+  | 'User'
+  | 'CompanyMembership'
+  | 'BranchMembership'
+  | 'PasswordCredential';
 
 export class RecordNotFoundError extends Error {
   override readonly name = 'RecordNotFoundError';
@@ -52,7 +58,9 @@ export type RecordConflictReason =
   | 'duplicate-username'
   | 'duplicate-company-membership'
   | 'duplicate-branch-membership'
-  | 'membership-not-branch-restricted';
+  | 'membership-not-branch-restricted'
+  | 'duplicate-credential'
+  | 'credential-changed';
 
 export class RecordConflictError extends Error {
   override readonly name = 'RecordConflictError';

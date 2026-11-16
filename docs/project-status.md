@@ -1,6 +1,6 @@
 # Estado do projecto
 
-Última verificação: 2026-11-16, após a integração de E1.07-A em `main` (`4d0302b`, PR #3).
+Última verificação: 2026-11-16, na branch `feat/e107-b-local-authentication` (E1.07-B), a partir de `main` em `a44c494`.
 
 Este documento é o ponto de retoma para qualquer agente ou pessoa. Contém apenas factos verificados no repositório ou por execução; o que não foi executado está marcado como tal.
 
@@ -22,12 +22,19 @@ Este documento é o ponto de retoma para qualquer agente ou pessoa. Contém apen
 | E1.06-S2-M — Revisão e integração da modernização Vitest | Concluída | `docs: record vitest integration review` | [tasks/E1.06-S2-M.md](tasks/E1.06-S2-M.md) |
 | Política Git/GitHub | Adoptada | `docs: adopt git and github publication policy` | `AGENTS.md` (“Git e GitHub”), D-074 |
 | E1.07-A — Identidade, utilizadores e associações multiempresa | Concluída e integrada (PR #3) | `cc4adc0`; merge `4d0302b` | [tasks/E1.07-A.md](tasks/E1.07-A.md) |
-| E1.07-B a E1.07-F | Planeadas, não autorizadas | — | [tasks/E1.07.md](tasks/E1.07.md) |
+| E1.07-B — Credenciais, autenticação local e provisionamento inicial | Implementada e validada; integração por PR | `feat: implement secure offline authentication` (branch `feat/e107-b-local-authentication`) | [tasks/E1.07-B.md](tasks/E1.07-B.md) |
+| E1.07-C a E1.07-F | Planeadas, não autorizadas | — | [tasks/E1.07.md](tasks/E1.07.md) |
 | E1.08 a E1.10 | Planeadas, não autorizadas | — | [implementation-plan.md](implementation-plan.md) |
 
-Tarefa activa: nenhuma. E1.07-A está integrada em `main` através do PR #3. E1.07-B a E1.07-F estão especificadas mas não autorizadas.
+Tarefa activa: E1.07-B, implementada na branch `feat/e107-b-local-authentication`. A integração em `main` é feita por pull request, sem merge automático. E1.07-C a E1.07-F estão especificadas mas não autorizadas.
 
-**O sistema ainda não tem autenticação nem autorização funcional.** Existem identidades locais, associações a empresas e estabelecimentos e uma avaliação interna de elegibilidade. O `TenantContext` continua a ser construído pelo chamador (PD-27).
+**O sistema tem autenticação local offline, mas não tem sessões nem autorização funcional.**
+
+- Existem identidades locais, associações a empresas e estabelecimentos, e avaliação interna de elegibilidade.
+- Existem credenciais Argon2id, `authenticate(username, password)`, limitação de tentativas e inicialização explícita da instalação.
+- Tudo isto existe só na composição interna do serviço local, sem HTTP nem IPC.
+- O resultado da autenticação não é uma sessão nem uma autorização empresarial.
+- O `TenantContext` continua a ser construído pelo chamador (PD-27).
 
 ## Repositório remoto
 
@@ -47,6 +54,9 @@ Tarefa activa: nenhuma. E1.07-A está integrada em `main` através do PR #3. E1.
   - A árvore do merge é idêntica à cabeça da branch.
   - A `main` local avançou por fast-forward e ficou alinhada com `origin/main`.
   - No código integrado foram repetidos e aprovados `pnpm check` (439/439, 12/12), os testes do desktop (6/6), o smoke Electron e `git diff --check`.
+- E1.07-B: após `git fetch`, `main` local = `origin/main` = `a44c4943355facfd8f43bb837ef72104dded9639`, com a árvore limpa e o PR #3 integrado.
+  - Trabalho na branch `feat/e107-b-local-authentication`, publicada conforme a autorização da tarefa.
+  - PR para `main` preparado, sem merge automático. A descrição está em [tasks/E1.07-B.md](tasks/E1.07-B.md#pull-request).
 
 ## Ambiente de referência
 
@@ -69,6 +79,31 @@ node -v   # v24.22.3
 Noutra máquina, instale o Node 24.22.3 (instalador oficial ou um gestor de versões que leia `.node-version`, como o fnm) e o pnpm 9.15.9. Com o Node 24 em Windows x64 não são necessárias ferramentas de compilação C++: o `better-sqlite3` descarrega um binário pré-compilado.
 
 ## Validação verificada
+
+### E1.07-B (autenticação local), 2026-11-16
+
+Node.js 24.22.3, pnpm 9.15.9, Electron 45.3.2, Vitest 5.1.0 e `better-sqlite3` 12.11.1, na branch `feat/e107-b-local-authentication`:
+
+- `pnpm.cmd lint`, `typecheck`, `build` (12/12) e `check`: aprovados.
+- `pnpm.cmd test`: 13 ficheiros, **514/514**, sem testes ignorados nem `todo`.
+  - Os 439 anteriores mantêm as contagens por ficheiro. Quatro testes de `identity-persistence` passaram a derivar as versões de `MIGRATIONS`.
+  - Novos: `password-policy` 19, `password-hashing` 15 e `local-authentication` 41.
+- Os 514 testes passam também com os 12 `dist/` retirados.
+- Testes do desktop: 6/6. Smoke Electron real: `KIL_ELECTRON_SMOKE_OK`.
+- Cinco mutações detectadas e repostas com SHA-256 idêntico:
+  - palavra-passe errada aceite;
+  - identidade suspensa elegível;
+  - inicialização repetível (duas variantes);
+  - limitação desactivada.
+- **Desempenho** (i7-10510U, Argon2id m = 64 MiB, t = 3, p = 4): ~330 ms por verificação, e 16 verificações em simultâneo em ~3,8 s, com um pico de ~130 MiB graças ao limite de 2 derivações.
+- **Migração real** de uma base E1.07-A criada pelo código compilado de `a44c494`:
+  - recusa com política estrita;
+  - aplicação só da migração 3;
+  - checksums 1 e 2 e todas as linhas preservados;
+  - credencial, autenticação e inicialização com o código compilado desta branch.
+- Nenhuma dependência alterada. `pnpm audit`: 1 moderado (PD-19); `--prod`: 0.
+
+Detalhe completo em [tasks/E1.07-B.md](tasks/E1.07-B.md).
 
 ### E1.07-A (identidade e associações), 2026-11-15
 
@@ -160,6 +195,7 @@ Requisitos: Node.js 24.22.3 (`.node-version`) e pnpm 9.15.9. Em PowerShell, usar
 | Testes multiempresa e SQLite | `pnpm test tenant domain-contracts sqlite` | `package.json` (filtro do Vitest) |
 | Testes do serviço local | `pnpm test local-service` | `package.json` (filtro do Vitest) |
 | Testes de identidades e associações | `pnpm test identity` | `package.json` (filtro do Vitest) |
+| Testes de autenticação e palavras-passe | `pnpm test authentication password` | `package.json` (filtro do Vitest) |
 | Testes em modo observação | `pnpm test:watch` | `package.json` |
 | Auditoria de dependências | `pnpm audit` e `pnpm audit --prod` | pnpm |
 | Build de todos os projectos | `pnpm build` | `package.json` |
@@ -190,7 +226,15 @@ Notas sobre o arranque do Electron:
 - Contratos de domínio multiempresa (`packages/shared-types`).
 - Persistência SQLite local (`packages/database`).
 - Serviço local Node.js (`services/local-api`), independente do Electron, sem HTTP.
-- Identidades locais (`User`), associações a empresas (`CompanyMembership`) e a estabelecimentos (`BranchMembership`), migração 2 e avaliação interna de elegibilidade (E1.07-A). Sem credenciais, autenticação, sessões nem permissões. Disponíveis apenas na composição interna do serviço local.
+- Identidades locais (`User`), associações a empresas (`CompanyMembership`) e a estabelecimentos (`BranchMembership`), migração 2 e avaliação interna de elegibilidade (E1.07-A). Disponíveis apenas na composição interna do serviço local.
+- Autenticação local offline por username e palavra-passe (E1.07-B):
+  - credenciais Argon2id (migração 3);
+  - política NIST SP 800-63B;
+  - limitação persistente de tentativas;
+  - gestão interna de credenciais;
+  - inicialização explícita da instalação.
+
+  Sem sessões, tokens nem permissões. Disponível apenas na composição interna do serviço local.
 
 ### Demonstrativas, sem dados nem regras de negócio
 
@@ -202,7 +246,7 @@ Notas sobre o arranque do Electron:
 ### Ainda não desenvolvidas
 
 - Implementação das decisões de domínio D-055, D-058, D-060 e D-061 (PD-14 a PD-16).
-- Credenciais, autenticação, sessões, autorização RBAC, protecção de contas e auditoria (E1.07-B a E1.07-F); API local e integração Electron (E1.08).
+- Sessões, autorização RBAC, protecção avançada de contas e auditoria (E1.07-C a E1.07-F); ferramenta operacional de inicialização (PD-31); API local e integração Electron (E1.08).
 - Serviços centrais e PostgreSQL (E1.09); instalação, serviço Windows, cópias de segurança e Gate E1 (E1.10).
 - Regra de validação do NIF para qualquer jurisdição real (PD-09).
 - Modos de implantação B e C, sincronização e funcionamento offline entre estabelecimentos.
@@ -238,11 +282,16 @@ Notas sobre o arranque do Electron:
 | PD-23 | Outras dependências com versões principais novas, sem alertas de segurança: React 19, Vite 8, TypeScript 7, jsdom 31, `@vitejs/plugin-react` 6, `lucide-react` 1.x, entre outras. Não foram actualizadas, por instrução. | Dívida técnica. | Informativo; lista em [tasks/E1.06.md](tasks/E1.06.md). O Vitest foi actualizado em E1.06-S2 (D-077). |
 | PD-24 | O intervalo declarado do Vite (`^6.0.3` na raiz e no catálogo) admite versões abaixo do mínimo exigido pelo Vitest 5 (`>=6.4.0`). O lockfile fixa a 6.4.6, que cumpre o requisito. | Uma resolução nova fora do lockfile poderia escolher um Vite incompatível. | Aberta, de baixo impacto. Por decisão do responsável (E1.06-S2-M), a correcção do intervalo mínimo é feita numa tarefa controlada própria, e não nesta revisão. |
 | PD-25 | O pnpm reporta as subdependências descontinuadas `prebuild-install` 7.1.3 (via `better-sqlite3`) e `whatwg-encoding` 3.1.1 (via jsdom 25). Já existiam no lockfile da `main` antes de E1.06-S2. | Nenhum alerta de segurança associado. | Informativo; reavaliar com futuras versões de `better-sqlite3` e jsdom (PD-23). |
-| PD-26 | O provisionamento de identidades e as alterações de associações não registam o actor nem o histórico de alterações; só existem os registos com `updatedAt`. O `UserDirectory` não recebe contexto de actor. | Rastreabilidade administrativa incompleta. | Aberta; prevista em E1.07-E (auditoria). |
+| PD-26 | O provisionamento de identidades e as alterações de associações não registam o actor nem o histórico de alterações; só existem os registos com `updatedAt`. O `UserDirectory` não recebe contexto de actor. Desde E1.07-B, também não são auditados as autenticações, os bloqueios, a criação e substituição de credenciais e a inicialização da instalação, que de propósito não são escritos nos registos. | Rastreabilidade administrativa e de segurança incompleta. | Aberta; prevista em E1.07-E (auditoria). |
 | PD-27 | O `TenantContext` continua a ser construído pelo chamador e não deriva de identidade autenticada (`AGENTS.md`). Os repositórios isolam correctamente, mas a origem do contexto não é verificada. | Nenhuma operação deve ser exposta antes da correcção. | Aberta; resolução prevista em E1.07-B e E1.07-C, obrigatória antes de E1.08. |
 | PD-28 | Criar uma associação com um `userId` inexistente devolve `RecordNotFoundError('User')`, o que permite a um chamador interno com contexto empresarial saber se uma identidade existe na instalação. | Aceitável enquanto o provisionamento for interno. | Aberta; rever antes de qualquer exposição (E1.08, E1.07-F). |
 | PD-29 | A eliminação física de um estabelecimento ou de uma empresa com associações é recusada pela base (`PersistenceError('constraint')`), não por um erro de domínio específico. Os dados ficam preservados. | Mensagem menos explícita para o chamador. | Informativo; rever se a eliminação física vier a ser usada (D-027). |
 | PD-30 | A identidade só admite alteração de estado; nome de apresentação, email e telefone não podem ser alterados nesta etapa, por decisão de âmbito (sem alteração arbitrária de identidades partilhadas). | Correcções de dados pessoais exigem tarefa própria. | Aberta; definir o processo autorizado e auditado (E1.07-E). |
+| PD-31 | Não existe ferramenta operacional para a inicialização da instalação (D-096). A operação só existe na composição interna do serviço. Quando existir, a ferramenta tem de usar entrada interactiva protegida, sem palavras-passe em argumentos nem em ficheiros de configuração. | Instalações reais não podem ser inicializadas por um operador. | Aberta; antes de E1.10. |
+| PD-32 | Sem *pepper*: a NIST SP 800-63B recomenda uma derivação com chave secreta guardada separadamente da base, que não foi implementada por falta de armazenamento de segredos protegido pelo sistema operativo (por exemplo, DPAPI). | Quem obtiver a base pode tentar ataques offline, abrandados apenas pelo Argon2id. | Aberta; decidir com E1.07-E/E1.10. |
+| PD-33 | A lista local de palavras-passe comuns ou comprometidas está vazia por omissão (`EMPTY_COMMON_PASSWORD_LIST`). O mecanismo existe e é configurável (`commonPasswords`). | Palavras-passe comuns de 15 ou mais caracteres não são recusadas. | Aberta; definir a fonte, a licença e a actualização de uma lista local. |
+| PD-34 | Canais temporais: as recusas `throttled` e as entradas com formato inválido respondem sem derivação; credenciais com parâmetros antigos têm custo diferente até serem recalculadas; o percurso não é de tempo constante de ponta a ponta. Não revela directamente a existência de utilizadores, mas não está demonstrado por medição. | Risco residual de enumeração por tempo. | Aberta; rever em E1.07-F. |
+| PD-35 | Desvio da NIST na limitação: não há desactivação após 100 falhas consecutivas, porque bloqueios permanentes estão proibidos. Depois da escalada, uma conta admite até 4 tentativas por hora (bloqueio máximo de 15 min). O limite da instância (100 falhas em 5 min) pode ser usado para negação de serviço local durante até 5 min. | Equilíbrio entre força bruta e disponibilidade por decidir. | Aberta; decidir em E1.07-E. |
 
 As decisões arquitecturais ainda em aberto estão em [architecture.md](architecture.md#decisões-pendentes).
 
@@ -262,12 +311,15 @@ As decisões arquitecturais ainda em aberto estão em [architecture.md](architec
 5. Identificar a tarefa activa em `docs/tasks/`.
    - E1.06-S2 está integrada em `main` através do PR #2 (`d29a629`).
    - E1.07-A está integrada em `main` através do PR #3 (`4d0302b`).
-   - E1.07-B a E1.07-F e E1.08 a E1.10 estão **planeadas mas não autorizadas**.
+   - E1.07-B está implementada na branch `feat/e107-b-local-authentication`. A integração é feita por PR, que o responsável revê e integra.
+   - E1.07-C a E1.07-F e E1.08 a E1.10 estão **planeadas mas não autorizadas**.
    - E1.06-S1 está integrada em `main` através do PR #1.
 6. Trabalhar apenas no âmbito da tarefa. Regras a manter:
    - qualquer implementação nova de repositório tem de passar `tests/support/tenant-repository-contract.ts` (D-021);
    - qualquer implementação de identidades ou associações tem de passar `tests/support/membership-repository-contract.ts` (D-089);
    - o directório de identidades (`UserDirectory`) é provisionamento interno: nunca o expor a um tenant, por HTTP ou por IPC (D-087);
+   - autenticação, credenciais e inicialização são internas (D-093 a D-096). Uma `AuthenticatedIdentity` só é válida se `isAuthenticatedIdentity` a reconhecer, e nunca é uma autorização empresarial;
+   - parâmetros de derivação nunca abaixo do mínimo OWASP (D-090); palavras-passe, *hashes* e sais nunca em registos;
    - o acesso à base passa pelo serviço local em `READY` (D-047).
 
    Registar divergências na tabela de pendências e decisões novas aprovadas em `decisions.md`.

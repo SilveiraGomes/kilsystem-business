@@ -4,6 +4,7 @@ export * from './errors.js';
 export * from './identifiers.js';
 export * from './identity-repositories.js';
 export * from './membership.js';
+export * from './password-policy.js';
 export * from './repositories.js';
 export * from './sectors.js';
 export * from './tax-identification.js';

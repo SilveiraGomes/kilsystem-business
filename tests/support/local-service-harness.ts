@@ -2,7 +2,11 @@ import { fileURLToPath } from 'node:url';
 
 import { openSqliteDatabase, type OpenSqliteOptions, type SqliteDatabase } from '../../packages/database/src/index';
 import { parseLocalServiceConfig, type LocalServiceConfig } from '../../services/local-api/src/config';
-import { createLocalService, type LocalService } from '../../services/local-api/src/local-service';
+import {
+  createLocalService,
+  type LocalService,
+  type LocalServiceDependencies,
+} from '../../services/local-api/src/local-service';
 import { createJsonLogger } from '../../services/local-api/src/logger';
 import type { IdentityRepositoryHarness } from './membership-repository-contract';
 import { createTemporaryDatabase } from './sqlite-harness';
@@ -36,9 +40,15 @@ export interface ServiceUnderTest {
   readonly connections: SqliteDatabase[];
 }
 
+/** Dependências substituíveis em testes (relógio, derivação, lista de palavras-passe). */
+export type ServiceTestDependencies = Partial<
+  Pick<LocalServiceDependencies, 'clock' | 'commonPasswords' | 'passwordHashing'>
+>;
+
 export const createServiceUnderTest = (
   config: LocalServiceConfig,
   open: (options: OpenSqliteOptions) => SqliteDatabase | Promise<SqliteDatabase> = openSqliteDatabase,
+  dependencies: ServiceTestDependencies = {},
 ): ServiceUnderTest => {
   const lines: string[] = [];
   const connections: SqliteDatabase[] = [];
@@ -48,6 +58,7 @@ export const createServiceUnderTest = (
     sink: (line) => lines.push(line),
   });
   const service = createLocalService(config, {
+    ...dependencies,
     logger,
     openDatabase: async (options) => {
       const connection = await open(options);
