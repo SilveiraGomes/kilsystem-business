@@ -11,6 +11,7 @@ import {
   inspectMigrations,
   MIGRATIONS,
   migrationChecksum,
+  openSqliteDatabase,
   PersistenceError,
   runMigrations,
   type SqliteDatabase,
@@ -64,6 +65,7 @@ import { branchInput, contextFor, newCompany, newId } from './support/fixtures';
 import { newCompanyMembership, newUser, uniqueUsername } from './support/identity-fixtures';
 import {
   createServiceUnderTest,
+  inspectDatabase,
   PROTECTED_DIRECTORIES,
   REPOSITORY_ROOT,
   serviceConfig,
@@ -209,14 +211,8 @@ describe('Local sessions (E1.07-C)', () => {
     return other.open();
   };
 
-  const inspect = <T>(read: (database: SqliteDatabase) => T, filename = temporary.filename): T => {
-    const database = createTemporaryDatabaseConnection(filename);
-    try {
-      return read(database);
-    } finally {
-      database.close();
-    }
-  };
+  const inspect = <T>(read: (database: SqliteDatabase) => T, filename = temporary.filename): T =>
+    inspectDatabase(filename, () => createTemporaryDatabaseConnection(filename), read);
 
   const execute = (sql: string): void => {
     inspect((database) => {
@@ -908,17 +904,12 @@ describe('Local sessions (E1.07-C)', () => {
       expect(results).toEqual([expect.objectContaining({ ok: true }), undefined, INVALID, INVALID]);
       expect(sessionRow(session.sessionId).last_activity_at).toBe(iso(START));
 
-      // Revogação por outra ligação: a validação vê o estado confirmado, nunca um estado intermédio.
+      // Revogação por outra ligação (E1.07-X): com a base detida em exclusivo, nenhuma outra ligação
+      // chega a ler nem a escrever; a sessão só muda pela revogação confirmada na ligação do serviço.
       const other = await openSession(harness, user);
-      const writer = temporary.open();
-      writer.prepare('BEGIN IMMEDIATE').run();
-      writer.prepare("UPDATE local_sessions SET revoked_at = ?, revocation_reason = 'administrative' WHERE id = ?").run(
-        iso(START + 61 * SECOND),
-        other.sessionId,
-      );
+      expect(() => openSqliteDatabase({ busyTimeoutMs: 0, filename: temporary.filename })).toThrow(/locked/);
       await expect(sessions.validate(other.token)).resolves.toMatchObject({ ok: true });
-      writer.prepare('COMMIT').run();
-      writer.close();
+      await harness.service.identityProvisioning.sessions.revokeSession(other.sessionId);
       await expect(sessions.validate(other.token)).resolves.toEqual(INVALID);
     });
 
@@ -1075,8 +1066,10 @@ describe('Local sessions (E1.07-C)', () => {
       const second = await startedService();
 
       await expect(second.service.sessions.create(identity)).resolves.toEqual(REQUIRED);
-      await first.service.start();
+      // E1.07-X: enquanto `second` detém a base, `first` não arranca sobre ela.
+      await expect(first.service.start()).rejects.toMatchObject({ reason: 'database-locked' });
       await second.service.stop();
+      await first.service.start();
       await expect(first.service.sessions.create(identity)).resolves.toEqual(REQUIRED);
       expect(sessionCount()).toBe(0);
     });
@@ -1476,14 +1469,16 @@ describe('Local sessions (E1.07-C)', () => {
 
       const harness = await startedService();
       const user = await provision(harness);
-      const store = createSqliteSessionStore(temporary.open());
-      expect(() =>
-        store.transaction(() => {
-          store.revokeUserSessions(user.id, iso(START), 'administrative');
-          store.advanceSecurityVersion(user.id);
-          throw new Error('falha simulada');
-        }),
-      ).toThrow('falha simulada');
+      inspect((database) => {
+        const store = createSqliteSessionStore(database);
+        expect(() =>
+          store.transaction(() => {
+            store.revokeUserSessions(user.id, iso(START), 'administrative');
+            store.advanceSecurityVersion(user.id);
+            throw new Error('falha simulada');
+          }),
+        ).toThrow('falha simulada');
+      });
       expect(versionsOf(user.id).security).toBe(1);
 
       execute(`CREATE TRIGGER test_block_insert BEFORE INSERT ON local_sessions
@@ -1742,6 +1737,8 @@ describe('Local sessions (E1.07-C)', () => {
       const user = await provision(harness);
       const identity = await login(harness, user);
       const versions = versionsOf(user.id);
+      // Composição directa sem o serviço: este liberta a base antes (E1.07-X).
+      await harness.service.stop();
       const database = temporary.open();
       try {
         const store = createSqliteSessionStore(database);
@@ -1860,6 +1857,10 @@ describe('Local sessions (E1.07-C)', () => {
         `INSERT INTO users ${userColumns} VALUES ('${newId()}', '${user.username}', 'Outro', NULL, NULL, 'ACTIVE', '${iso(START)}', '${iso(START)}')`,
         `REPLACE INTO local_sessions SELECT id, user_id, token_digest, security_version, credential_version, service_run_id,
           created_at, last_activity_at, absolute_expires_at, NULL, NULL FROM local_sessions WHERE id = '${revoked.sessionId}'`,
+        // PD-51: identificador novo com o digest da sessão revogada; só a cláusula do digest o recusa.
+        `REPLACE INTO local_sessions SELECT '${newId()}', user_id, token_digest, security_version, credential_version,
+          service_run_id, created_at, last_activity_at, absolute_expires_at, NULL, NULL
+          FROM local_sessions WHERE id = '${revoked.sessionId}'`,
         `UPDATE users SET id = '${newId()}' WHERE id = '${user.id}'`,
         `UPDATE OR REPLACE password_credentials SET user_id = '${user.id}', credential_version = 9 WHERE user_id = '${other.id}'`,
       ];
@@ -1871,6 +1872,7 @@ describe('Local sessions (E1.07-C)', () => {
           expect(versionsOf(other.id)).toEqual({ credential: 1, security: 1 });
           expect(sessionRow(revoked.sessionId).revocation_reason).toBe('logout');
           expect(sessionRow(active.sessionId).revoked_at).toBeNull();
+          expect(inspect((database) => database.prepare('SELECT count(*) FROM local_sessions').pluck().get())).toBe(2);
         }
       }
       await expect(harness.service.sessions.validate(active.token)).resolves.toMatchObject({ ok: true });

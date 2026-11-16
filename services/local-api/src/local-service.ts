@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import path from 'node:path';
 
 import {
@@ -7,11 +7,17 @@ import {
   createSqliteSessionStore,
   createSqliteTenantPersistence,
   createSqliteUserDirectory,
+  DEFAULT_DATABASE_LOCK_TIMEOUT_MS,
   inspectMigrations,
+  isSqliteBusy,
+  MAX_DATABASE_LOCK_TIMEOUT_MS,
   openSqliteDatabase,
   PersistenceError,
+  resolveDatabaseIdentity,
   resolveDatabaseLocation,
   runMigrations,
+  sqliteErrorCode,
+  verifyExclusiveOwnership,
   type OpenSqliteOptions,
   type SqliteAuthenticationStore,
   type SqliteDatabase,
@@ -84,6 +90,10 @@ export class LocalServiceStateError extends Error {
 }
 
 export type StartupFailureReason =
+  | 'database-access-denied'
+  | 'database-corrupt'
+  /** O bloqueio exclusivo da base não foi obtido no tempo limite: outro processo detém-na (E1.07-X). */
+  | 'database-locked'
   | 'database-missing'
   | 'database-open-failed'
   | 'invalid-location'
@@ -129,6 +139,11 @@ export interface LocalServiceDependencies {
   readonly monotonicClock?: MonotonicClock;
   /** Política de sessões; valores omitidos usam `DEFAULT_SESSION_POLICY`, inválidos são recusados. */
   readonly sessionPolicy?: Partial<SessionPolicy>;
+  /**
+   * Espera máxima pelo bloqueio exclusivo da base, em milissegundos (E1.07-X). Por omissão,
+   * `DEFAULT_DATABASE_LOCK_TIMEOUT_MS`; inteiros de 0 a `MAX_DATABASE_LOCK_TIMEOUT_MS`.
+   */
+  readonly databaseLockTimeoutMs?: number;
 }
 
 export interface LocalService {
@@ -197,6 +212,37 @@ const describeCause = (cause: unknown): LogFields => ({
   causeReason: cause instanceof PersistenceError ? cause.reason : null,
 });
 
+const isCorruption = (error: unknown): boolean => {
+  const code = sqliteErrorCode(error);
+  return code === 'SQLITE_NOTADB' || code?.startsWith('SQLITE_CORRUPT') === true;
+};
+
+const isExistingFile = (location: string): boolean => {
+  try {
+    return statSync(location).isFile();
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Classifica uma falha na abertura e aquisição exclusiva. `SQLITE_BUSY` só significa "base ocupada"
+ * neste passo: com o bloqueio adquirido, nenhuma outra ligação o pode provocar. A causa não
+ * identifica o processo que detém a base (outra instância ou uma ferramenta externa).
+ */
+const classifyOpenFailure = (error: unknown, location: string): StartupFailureReason => {
+  if (isSqliteBusy(error)) return 'database-locked';
+  if (isCorruption(error)) return 'database-corrupt';
+  const code = sqliteErrorCode(error) ?? '';
+  if (code.startsWith('SQLITE_READONLY') || code === 'SQLITE_PERM' || code === 'SQLITE_AUTH') {
+    return 'database-access-denied';
+  }
+  // Em Windows, a falta de permissão sobre o ficheiro ou sobre o directório (ficheiro WAL) surge
+  // como SQLITE_CANTOPEN; com o ficheiro presente e regular, não há outra causa plausível.
+  if (code.startsWith('SQLITE_CANTOPEN') && isExistingFile(location)) return 'database-access-denied';
+  return 'database-open-failed';
+};
+
 const settle = <T>(operation: () => Promise<T>): Promise<T> =>
   new Promise<T>((resolve) => {
     resolve(operation());
@@ -211,6 +257,7 @@ export const createLocalService = (
   {
     clock = () => new Date(),
     commonPasswords = EMPTY_COMMON_PASSWORD_LIST,
+    databaseLockTimeoutMs = DEFAULT_DATABASE_LOCK_TIMEOUT_MS,
     logger,
     monotonicClock = systemMonotonicClock,
     openDatabase = openSqliteDatabase,
@@ -220,6 +267,13 @@ export const createLocalService = (
   }: LocalServiceDependencies,
 ): LocalService => {
   // Criados antes do arranque: parâmetros inválidos são recusados de imediato.
+  if (
+    !Number.isInteger(databaseLockTimeoutMs) ||
+    databaseLockTimeoutMs < 0 ||
+    databaseLockTimeoutMs > MAX_DATABASE_LOCK_TIMEOUT_MS
+  ) {
+    throw new RangeError(`databaseLockTimeoutMs deve ser um inteiro entre 0 e ${MAX_DATABASE_LOCK_TIMEOUT_MS}.`);
+  }
   const hasher = createPasswordHasher(passwordHashing);
   const sessionPolicy = parseSessionPolicy(sessionPolicyInput ?? {});
   const sessionClock = createSessionClock(clock, monotonicClock);
@@ -253,25 +307,46 @@ export const createLocalService = (
     try {
       return action();
     } catch (error) {
-      throw new LocalServiceStartupError(reason, { cause: error });
+      throw new LocalServiceStartupError(isCorruption(error) ? 'database-corrupt' : reason, { cause: error });
     }
   };
 
   const initialise = async (): Promise<StartupReport> => {
-    const location = attempt('invalid-location', () =>
-      resolveDatabaseLocation(config.databasePath, { protectedDirectories }),
-    );
+    // Identificação da base operacional efectiva (caminho final, sem hard links nem rede).
+    let location: string;
+    try {
+      location = resolveDatabaseIdentity(resolveDatabaseLocation(config.databasePath, { protectedDirectories }), {
+        protectedDirectories,
+      });
+    } catch (error) {
+      const denied = error instanceof PersistenceError && error.reason === 'location-access-denied';
+      throw new LocalServiceStartupError(denied ? 'database-access-denied' : 'invalid-location', { cause: error });
+    }
     const existed = existsSync(location);
     const mustExist = config.startupPolicy.onMissingDatabase === 'fail';
     if (!existed && mustExist) throw new LocalServiceStartupError('database-missing');
 
+    // Aquisição exclusiva (E1.07-X): a abertura obtém o bloqueio do ficheiro, com espera limitada,
+    // e a posse é comprovada antes de qualquer leitura do esquema, migração ou escrita. Uma
+    // instância recusada não chega a ler nem a escrever a base.
     try {
-      database = await openDatabase({ fileMustExist: mustExist, filename: location });
+      database = await openDatabase({
+        busyTimeoutMs: databaseLockTimeoutMs,
+        exclusive: true,
+        fileMustExist: mustExist,
+        filename: location,
+      });
     } catch (error) {
-      throw new LocalServiceStartupError('database-open-failed', { cause: error });
+      throw new LocalServiceStartupError(classifyOpenFailure(error, location), { cause: error });
     }
     const connection = database;
+    try {
+      verifyExclusiveOwnership(connection, location);
+    } catch (error) {
+      throw new LocalServiceStartupError(classifyOpenFailure(error, location), { cause: error });
+    }
     logger.log('info', 'service.database_opened', { createdDatabase: !existed, databaseFile });
+    logger.log('info', 'service.database_ownership_acquired', { databaseFile, lockTimeoutMs: databaseLockTimeoutMs });
 
     const status = attempt('migration-integrity', () => inspectMigrations(connection));
     if (status.pendingVersions.length > 0 && config.startupPolicy.onPendingMigrations === 'fail') {
