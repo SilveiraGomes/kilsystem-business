@@ -1,6 +1,6 @@
 # Estado do projecto
 
-Última verificação: 2026-11-15, na branch `feat/e107-a-user-identity` (E1.07-A), a partir de `main` em `e4e6848`.
+Última verificação: 2026-11-16, após a integração de E1.07-A em `main` (`4d0302b`, PR #3).
 
 Este documento é o ponto de retoma para qualquer agente ou pessoa. Contém apenas factos verificados no repositório ou por execução; o que não foi executado está marcado como tal.
 
@@ -21,11 +21,11 @@ Este documento é o ponto de retoma para qualquer agente ou pessoa. Contém apen
 | E1.06-S2 — Modernização do Vitest e segurança dos testes | Concluída e integrada (PR #2) | `c5a23a0`; merge `d29a629` | [tasks/E1.06-S2.md](tasks/E1.06-S2.md) |
 | E1.06-S2-M — Revisão e integração da modernização Vitest | Concluída | `docs: record vitest integration review` | [tasks/E1.06-S2-M.md](tasks/E1.06-S2-M.md) |
 | Política Git/GitHub | Adoptada | `docs: adopt git and github publication policy` | `AGENTS.md` (“Git e GitHub”), D-074 |
-| E1.07-A — Identidade, utilizadores e associações multiempresa | Implementada e validada; integração por PR | `feat: establish user identity and tenant memberships` (branch `feat/e107-a-user-identity`) | [tasks/E1.07-A.md](tasks/E1.07-A.md) |
+| E1.07-A — Identidade, utilizadores e associações multiempresa | Concluída e integrada (PR #3) | `cc4adc0`; merge `4d0302b` | [tasks/E1.07-A.md](tasks/E1.07-A.md) |
 | E1.07-B a E1.07-F | Planeadas, não autorizadas | — | [tasks/E1.07.md](tasks/E1.07.md) |
 | E1.08 a E1.10 | Planeadas, não autorizadas | — | [implementation-plan.md](implementation-plan.md) |
 
-Tarefa activa: E1.07-A, implementada na branch `feat/e107-a-user-identity`. A integração em `main` é feita por pull request, sem merge automático. E1.07-B a E1.07-F estão especificadas mas não autorizadas.
+Tarefa activa: nenhuma. E1.07-A está integrada em `main` através do PR #3. E1.07-B a E1.07-F estão especificadas mas não autorizadas.
 
 **O sistema ainda não tem autenticação nem autorização funcional.** Existem identidades locais, associações a empresas e estabelecimentos e uma avaliação interna de elegibilidade. O `TenantContext` continua a ser construído pelo chamador (PD-27).
 
@@ -42,7 +42,11 @@ Tarefa activa: E1.07-A, implementada na branch `feat/e107-a-user-identity`. A in
   - Revisão do diff: dois commits autorizados; nenhum ficheiro de testes ou de código de aplicação alterado.
   - Validações: `lint`, `typecheck`, `test`, `build`, `check`, desktop, smoke e `git diff --check`, todas repetidas e aprovadas.
   - Detalhe em [tasks/E1.06-S2-M.md](tasks/E1.06-S2-M.md).
-- E1.07-A: após `git fetch`, `main` local = `origin/main` = `e4e6848532c00acdefdda90db1ce1533b3a8353c`, com a árvore limpa. Trabalho na branch `feat/e107-a-user-identity`, publicada conforme a autorização da tarefa. Pull request para `main` preparado, sem merge automático.
+- E1.07-A: após `git fetch`, `main` local = `origin/main` = `e4e6848532c00acdefdda90db1ce1533b3a8353c`, com a árvore limpa. Trabalho na branch `feat/e107-a-user-identity`, publicada conforme a autorização da tarefa em `cc4adc0`, com o hash local igual ao remoto.
+- O PR [#3](https://github.com/SilveiraGomes/kilsystem-business/pull/3) foi integrado pelo responsável em 2026-11-16, no merge commit `4d0302ba753381ef481e090e1a73783567a17f66`.
+  - A árvore do merge é idêntica à cabeça da branch.
+  - A `main` local avançou por fast-forward e ficou alinhada com `origin/main`.
+  - No código integrado foram repetidos e aprovados `pnpm check` (439/439, 12/12), os testes do desktop (6/6), o smoke Electron e `git diff --check`.
 
 ## Ambiente de referência
 
@@ -257,7 +261,7 @@ As decisões arquitecturais ainda em aberto estão em [architecture.md](architec
 4. Executar `pnpm.cmd install --frozen-lockfile` (se `node_modules` não existir ou se a versão do Node mudou) e `pnpm.cmd check` para obter a linha de base. Registar qualquer falha antes de alterar código.
 5. Identificar a tarefa activa em `docs/tasks/`.
    - E1.06-S2 está integrada em `main` através do PR #2 (`d29a629`).
-   - E1.07-A está implementada na branch `feat/e107-a-user-identity`. A integração é feita por PR, que o responsável revê e integra.
+   - E1.07-A está integrada em `main` através do PR #3 (`4d0302b`).
    - E1.07-B a E1.07-F e E1.08 a E1.10 estão **planeadas mas não autorizadas**.
    - E1.06-S1 está integrada em `main` através do PR #1.
 6. Trabalhar apenas no âmbito da tarefa. Regras a manter:

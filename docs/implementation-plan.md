@@ -27,7 +27,7 @@ Este plano regista as etapas concluídas e o planeamento inicial da fase E1 até
 | [E1.06-S2](tasks/E1.06-S2.md) | Modernização do Vitest e segurança da infraestrutura de testes (PD-18) | Concluída e integrada (PR #2) | `c5a23a0`; merge `d29a629` |
 | [E1.06-S2-M](tasks/E1.06-S2-M.md) | Revisão e integração da modernização Vitest | Concluída | `docs: record vitest integration review` |
 | [E1.07](tasks/E1.07.md) | Identidade, autenticação e autorização local (subdividida em A–F) | Em curso por subtarefas | — |
-| [E1.07-A](tasks/E1.07-A.md) | Identidade local, utilizadores e associações multiempresa (migração 2) | Implementada e validada na branch `feat/e107-a-user-identity`; integração por PR | `feat: establish user identity and tenant memberships` |
+| [E1.07-A](tasks/E1.07-A.md) | Identidade local, utilizadores e associações multiempresa (migração 2) | Concluída e integrada (PR #3) | `cc4adc0`; merge `4d0302b` |
 | [E1.07-B](tasks/E1.07-B.md) | Credenciais, primeiro administrador e autenticação offline | Planeada, **não autorizada** | — |
 | [E1.07-C](tasks/E1.07-C.md) | Sessões, validade e revogação | Planeada, **não autorizada** | — |
 | [E1.07-D](tasks/E1.07-D.md) | Perfis, permissões e autorização RBAC | Planeada, **não autorizada** | — |
