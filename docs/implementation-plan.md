@@ -30,9 +30,10 @@ Este plano regista as etapas concluídas e o planeamento inicial da fase E1 até
 | [E1.07-A](tasks/E1.07-A.md) | Identidade local, utilizadores e associações multiempresa (migração 2) | Concluída e integrada (PR #3) | `cc4adc0`; merge `4d0302b` |
 | [E1.07-B](tasks/E1.07-B.md) | Credenciais, autenticação local offline, limitação de tentativas e inicialização da instalação (migração 3) | Concluída e integrada (PR #4) | `f443057`; merge `8e77091` |
 | [E1.07-B-M](tasks/E1.07-B-M.md) | Revisão de segurança e integração da autenticação local | Concluída e integrada (PR #5) | revisão `8ac21b0`; testes `0b6587e`; merge `581699a` |
-| [E1.07-C](tasks/E1.07-C.md) | Sessões, validade, revogação e continuidade da identidade (migração 4) | Implementada na branch `feat/e107-c-secure-sessions`; revista e corrigida (E1.07-C-R1); **merge suspenso** até nova revisão | `feat: implement secure revocable local sessions` |
+| [E1.07-C](tasks/E1.07-C.md) | Sessões, validade, revogação e continuidade da identidade (migração 4) | Concluída e integrada (PR #6, merge `136a442`); revista (E1.07-C-M, E1.07-C-R2) e corrigida (E1.07-C-R1) | `feat: implement secure revocable local sessions` |
 | [E1.07-C-M](tasks/E1.07-C-M.md) | Revisão independente de segurança das sessões | Concluída | `e19ef76` (`docs: record independent session security review`) |
-| [E1.07-C-R1](tasks/E1.07-C-R1.md) | Correcções de segurança das sessões (RV-01, RV-03, RV-04, RV-05; migração 5) | Implementada na branch `feat/e107-c-secure-sessions`; aguarda revisão independente curta; sem merge | `fix: harden session clocks and revocation integrity` |
+| [E1.07-C-R1](tasks/E1.07-C-R1.md) | Correcções de segurança das sessões (RV-01, RV-03, RV-04, RV-05; migração 5) | Concluída e integrada (PR #6) | `d5f077e` (`fix: harden session clocks and revocation integrity`) |
+| [E1.07-C-R2](tasks/E1.07-C-R2.md) | Revisão independente final das correcções das sessões | Concluída; GO com ressalvas (o merge do PR #6 antecedeu a conclusão) | `docs: record final session security review` |
 | [E1.07-X](tasks/E1.07-X.md) | Exclusividade do serviço local por base (PD-43) | Especificação preliminar; **não autorizada**; bloqueia E1.08 | — |
 | [E1.07-D](tasks/E1.07-D.md) | Perfis, permissões e autorização RBAC | Planeada, **não autorizada** | — |
 | [E1.07-E](tasks/E1.07-E.md) | Protecção de contas e auditoria | Planeada, **não autorizada** | — |
@@ -67,7 +68,7 @@ Decisões do responsável D-098 a D-106. A implementação continua sujeita à a
 | Limite de falhas consecutivas e recuperação controlada, sem bloqueio irreversível; medidas contra a negação de serviço da instância | PD-35 | E1.07-E |
 | HMAC com chave externa protegida nas chaves de limitação | PD-36 | E1.07-E |
 | Limites superiores mais estreitos para os parâmetros guardados; recusas `busy` sem contar falha | PD-38, PD-39 | Proposta: E1.07-E (por decidir) |
-| Sessões com `authenticatedAt` recente, ligação à geração do serviço e revalidação | PD-40 | Resolvida em E1.07-C (por integrar); encerramento após revisão e merge (D-118) |
+| Sessões com `authenticatedAt` recente, ligação à geração do serviço e revalidação | PD-40 | Resolvida em E1.07-C, confirmada em E1.07-C-R2 e integrada (PR #6) |
 | Resolução antes da exposição da API empresarial | PD-29 | Antes de E1.08 |
 
 ### Trabalho atribuído em E1.07-C-R1
@@ -76,7 +77,8 @@ Decisões do responsável D-098 a D-106. A implementação continua sujeita à a
 | --- | --- | --- |
 | Exclusividade do serviço local por base | PD-43 (D-121, D-127) | E1.07-X, antes de E1.08 |
 | Retenção definitiva e referência temporal confiável para eliminar registos de sessões; crescimento dos registos | PD-47, PD-49 (D-125) | E1.07-E |
-| Ensaio de suspensão e retoma real do computador | PD-50 | Gate E1.07-F |
+| Ensaio de suspensão e retoma real do computador, incluindo a suspensão depois de um avanço corrigido do relógio de parede (E1.07-C-R2, RV-02) | PD-50 | Gate E1.07-F |
+| Teste para a reinserção de uma sessão com `id` novo e digest existente (lacuna da migração 5; E1.07-C-R2, RV-03) | PD-51 | Próxima tarefa autorizada que altere as sessões (proposta: E1.07-X) |
 
 ## Dependências entre funcionalidades e decisões pendentes
 
