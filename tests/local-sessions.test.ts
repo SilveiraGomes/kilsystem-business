@@ -1860,6 +1860,10 @@ describe('Local sessions (E1.07-C)', () => {
         `INSERT INTO users ${userColumns} VALUES ('${newId()}', '${user.username}', 'Outro', NULL, NULL, 'ACTIVE', '${iso(START)}', '${iso(START)}')`,
         `REPLACE INTO local_sessions SELECT id, user_id, token_digest, security_version, credential_version, service_run_id,
           created_at, last_activity_at, absolute_expires_at, NULL, NULL FROM local_sessions WHERE id = '${revoked.sessionId}'`,
+        // PD-51: identificador novo com o digest da sessão revogada; só a cláusula do digest o recusa.
+        `REPLACE INTO local_sessions SELECT '${newId()}', user_id, token_digest, security_version, credential_version,
+          service_run_id, created_at, last_activity_at, absolute_expires_at, NULL, NULL
+          FROM local_sessions WHERE id = '${revoked.sessionId}'`,
         `UPDATE users SET id = '${newId()}' WHERE id = '${user.id}'`,
         `UPDATE OR REPLACE password_credentials SET user_id = '${user.id}', credential_version = 9 WHERE user_id = '${other.id}'`,
       ];
@@ -1871,6 +1875,7 @@ describe('Local sessions (E1.07-C)', () => {
           expect(versionsOf(other.id)).toEqual({ credential: 1, security: 1 });
           expect(sessionRow(revoked.sessionId).revocation_reason).toBe('logout');
           expect(sessionRow(active.sessionId).revoked_at).toBeNull();
+          expect(inspect((database) => database.prepare('SELECT count(*) FROM local_sessions').pluck().get())).toBe(2);
         }
       }
       await expect(harness.service.sessions.validate(active.token)).resolves.toMatchObject({ ok: true });
