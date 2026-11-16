@@ -275,13 +275,13 @@ sessions.validate / registerActivity / logout          identityProvisioning.sess
   - configuração tipada e limitada (`sessionPolicy`).
 - **Validação:** existência, digest em tempo constante, revogação, arranque, estado da identidade, versões, inactividade e expiração absoluta, numa única consulta. Versões ou arranque incompatíveis recusam mesmo sem marcador de revogação. A actividade só é registada após uma validação bem-sucedida, nunca além da expiração absoluta.
 - **Revogação:** logout, revogação individual e de todas as sessões da identidade (que avança também a versão), suspensão, desactivação, substituição de credencial, alteração da versão e reinício. As sessões revogadas mantêm-se até à retenção.
-- **Relógio (D-112):** instante efectivo = máximo entre o relógio de parede, a âncora mais o tempo monotónico e o último instante. Um retrocesso não prolonga validades; um avanço antecipa-as.
+- **Relógio (D-112):** instante efectivo = máximo entre o relógio de parede, a âncora mais o tempo monotónico e o último instante. Um retrocesso não prolonga validades; um avanço antecipa-as. **Defeito conhecido (RV-01, PD-45):** depois de um avanço seguido de retrocesso, o instante efectivo congela até o tempo real o alcançar; correcção proposta em [tasks/E1.07-C-M.md](tasks/E1.07-C-M.md).
 - **Ciclo de vida (D-114):**
   - cada arranque tem um `serviceRunId` de 128 bits, distinto do identificador da instalação;
   - as operações exigem `READY` e ficam ligadas ao arranque em que foram obtidas;
   - as sessões anteriores são revogadas antes de `READY`.
 - **Fronteira (D-116):** a validação devolve só `sessionId`, `userId` e expirações. Sem tenant, âmbito ou permissões. E1.07-D derivará o `TenantContext` a partir de uma sessão validada, da associação, do âmbito e da permissão.
-- **Limites conhecidos:** reinício termina todas as sessões (PD-41); transporte do token por definir em E1.08 (PD-42); um único serviço por base (PD-43); auditoria das sessões em E1.07-E (PD-26).
+- **Limites conhecidos:** reinício termina todas as sessões (PD-41); transporte do token por definir em E1.08 (PD-42); um único serviço por base, ainda não imposto (PD-43, bloqueante para E1.08, D-121); auditoria das sessões em E1.07-E (PD-26).
 
 ## Decisões definidas
 
