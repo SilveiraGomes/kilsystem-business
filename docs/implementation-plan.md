@@ -34,7 +34,8 @@ Este plano regista as etapas concluídas e o planeamento inicial da fase E1 até
 | [E1.07-C-M](tasks/E1.07-C-M.md) | Revisão independente de segurança das sessões | Concluída | `e19ef76` (`docs: record independent session security review`) |
 | [E1.07-C-R1](tasks/E1.07-C-R1.md) | Correcções de segurança das sessões (RV-01, RV-03, RV-04, RV-05; migração 5) | Concluída e integrada (PR #6) | `d5f077e` (`fix: harden session clocks and revocation integrity`) |
 | [E1.07-C-R2](tasks/E1.07-C-R2.md) | Revisão independente final das correcções das sessões | Concluída; GO com ressalvas (o merge do PR #6 antecedeu a conclusão) | `docs: record final session security review` |
-| [E1.07-X](tasks/E1.07-X.md) | Exclusividade do serviço local por base (PD-43, PD-51) | Autorizada e implementada na branch `feat/e107-x-database-exclusivity`; aguarda revisão independente e aprovação do merge; continua a bloquear E1.08 até à integração | `test: cover session replacement with a new identifier`; `feat: enforce exclusive local service ownership per database` |
+| [E1.07-X](tasks/E1.07-X.md) | Exclusividade do serviço local por base (PD-43, PD-51) | Autorizada e implementada na branch `feat/e107-x-database-exclusivity`; revista em E1.07-X-M (GO com ressalvas); aguarda aprovação do merge; continua a bloquear E1.08 até à integração | `76c7709` (`test: cover session replacement with a new identifier`); `cfd11fe` (`feat: enforce exclusive local service ownership per database`) |
+| [E1.07-X-M](tasks/E1.07-X-M.md) | Revisão independente da exclusividade operacional SQLite | Concluída; GO com ressalvas; sem merge | `docs: record independent database exclusivity review` |
 | [E1.07-D](tasks/E1.07-D.md) | Perfis, permissões e autorização RBAC | Planeada, **não autorizada** | — |
 | [E1.07-E](tasks/E1.07-E.md) | Protecção de contas e auditoria | Planeada, **não autorizada** | — |
 | [E1.07-F](tasks/E1.07-F.md) | Validação integrada da segurança | Planeada, **não autorizada** | — |
@@ -84,9 +85,16 @@ Decisões do responsável D-098 a D-106. A implementação continua sujeita à a
 
 | Trabalho | Pendência | Etapa |
 | --- | --- | --- |
-| Unidades de rede mapeadas e sistemas de ficheiros locais além de NTFS: comportamento não verificado | PD-52 | Proposta: E1.10 (instalação) |
-| Cópias de segurança e restauro pela instância proprietária; tratamento de `database-locked` (nova tentativa limitada) pelo gestor de serviços Windows | PD-53 (D-133) | Proposta: E1.10 |
-| Ctrl+C real numa consola interactiva sobre o serviço com a base detida (o ensaio automático entrega o sinal por `process.emit`) | PD-54 | Proposta: Gate E1.07-F |
+| Unidades de rede mapeadas e sistemas de ficheiros locais além de NTFS: comportamento não verificado | PD-52 (D-136) | E1.10: validação da política de armazenamento (NTFS local homologado) |
+| Cópias de segurança e restauro pela instância proprietária, com confidencialidade, integridade e controlo de acesso das cópias; tratamento de `database-locked` (nova tentativa limitada) pelo gestor de serviços Windows | PD-53 (D-133, D-138) | Proposta: E1.10 |
+| Ctrl+C real numa consola interactiva sobre o serviço com a base detida (o ensaio automático entrega o sinal por `process.emit`); paragem pelo gestor de serviços | PD-54 (D-139) | Gate E1.07-F (consola); E1.10 (gestor de serviços) |
+
+### Trabalho atribuído em E1.07-X-M
+
+| Trabalho | Pendência | Etapa |
+| --- | --- | --- |
+| Diagnóstico de um ficheiro em uso por outro programa sem partilha (hoje `database-access-denied`) | PD-55 | Por decidir (proposta: E1.10, instruções operacionais) |
+| `inspectDatabase` sem anular transacções que não abriu; `TEMP` isolado nos executores de mutações | PD-56 | Por decidir (tarefa de testes autorizada) |
 
 ## Dependências entre funcionalidades e decisões pendentes
 
@@ -94,7 +102,7 @@ Relação entre as funcionalidades ainda não desenvolvidas e as decisões pende
 
 | Funcionalidade | Decisões necessárias antes de implementar |
 | --- | --- |
-| Instalação do serviço local (E1.10) | Tecnologia do serviço Windows; localização da base por instalação; cópias de segurança pela instância proprietária (D-133); tratamento de `database-locked` pelo gestor de serviços (PD-53) |
+| Instalação do serviço local (E1.10) | Tecnologia do serviço Windows; localização da base por instalação (NTFS local, D-136); permissões NTFS e conta do serviço (D-137); cópias de segurança pela instância proprietária, protegidas (D-133, D-138); tratamento de `database-locked` pelo gestor de serviços (PD-53) |
 | Empresas `ACTIVE` em produção | Regra de validação do NIF para `AO`, com fonte normativa (D-024, PD-09) |
 | Persistência central (E1.09) | Driver PostgreSQL, modelo de tenancy e row-level security |
 | Ferramenta operacional de inicialização | Entrada interactiva protegida, sem palavras-passe em argumentos ou ficheiros (PD-31) |
