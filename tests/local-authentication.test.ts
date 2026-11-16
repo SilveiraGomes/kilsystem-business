@@ -45,6 +45,7 @@ import { branchInput, contextFor, newCompany, newId } from './support/fixtures';
 import { newCompanyMembership, newUser, uniqueUsername } from './support/identity-fixtures';
 import {
   createServiceUnderTest,
+  inspectDatabase,
   REPOSITORY_ROOT,
   serviceConfig,
   type ServiceTestDependencies,
@@ -159,14 +160,8 @@ describe('Local authentication (E1.07-B)', () => {
     return user;
   };
 
-  const inspect = <T>(read: (database: SqliteDatabase) => T): T => {
-    const database = temporary.open();
-    try {
-      return read(database);
-    } finally {
-      database.close();
-    }
-  };
+  const inspect = <T>(read: (database: SqliteDatabase) => T): T =>
+    inspectDatabase(temporary.filename, () => temporary.open(), read);
 
   beforeEach(() => {
     temporary = createTemporaryDatabase();

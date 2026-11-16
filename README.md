@@ -68,13 +68,18 @@ local offline por username e palavra-passe:
 - limitação persistente de tentativas;
 - inicialização explícita da instalação, sem contas predefinidas.
 
-E1.07-C (branch `feat/e107-c-secure-sessions`, em revisão) acrescenta sessões
-locais revogáveis:
+E1.07-C (integrada em `main` pelo PR #6) acrescenta sessões locais revogáveis:
 - tokens opacos, dos quais só se guarda o digest;
 - expiração por inactividade e absoluta;
 - revogação na suspensão, na substituição de credenciais e no reinício do serviço.
 
 Uma sessão comprova apenas a identidade autenticada: não concede acesso a empresas.
+
+E1.07-X (branch `feat/e107-x-database-exclusivity`, em revisão) garante um único
+serviço por base: o serviço detém a base SQLite em exclusivo enquanto está activo,
+e um segundo serviço sobre a mesma base é recusado (`database-locked`) sem a alterar.
+Com o serviço activo, nenhuma ferramenta externa abre a base. As cópias de
+segurança fazem-se pela instância proprietária (E1.10), nunca copiando o ficheiro activo.
 
 Estas funções existem apenas na composição interna do serviço local, sem HTTP nem
 IPC. O plano das subtarefas seguintes está em [docs/tasks/E1.07.md](docs/tasks/E1.07.md).

@@ -107,8 +107,8 @@ Localização: `packages/shared-types/src`. Os contratos e as interfaces de repo
 
 Localização: `packages/database/src`. Driver `better-sqlite3` 12.x (D-029, D-040).
 
-- **Ligação** (`connection.ts`): `openSqliteDatabase` activa `foreign_keys` e confirma que ficou activo; aplica `busy_timeout` e, em ficheiro, `journal_mode = WAL`.
-- **Localização** (`location.ts`): `resolveDatabaseLocation` exige um caminho absoluto com extensão `.sqlite`, `.sqlite3` ou `.db`, fora dos directórios protegidos (repositório e artefactos de build). Não existe localização por omissão (D-038).
+- **Ligação** (`connection.ts`): `openSqliteDatabase` activa `foreign_keys` e confirma que ficou activo; aplica `busy_timeout` e, em ficheiro, `journal_mode = WAL`. Com `exclusive: true` (E1.07-X, D-130), define `locking_mode = EXCLUSIVE` antes do primeiro acesso ao ficheiro e confirma a escrita com uma transacção vazia; `verifyExclusiveOwnership` comprova a posse do bloqueio.
+- **Localização** (`location.ts`): `resolveDatabaseLocation` exige um caminho absoluto com extensão `.sqlite`, `.sqlite3` ou `.db`, fora dos directórios protegidos (repositório e artefactos de build), e recusa caminhos UNC, de rede e de dispositivo (E1.07-X). Não existe localização por omissão (D-038). `resolveDatabaseIdentity` identifica a base efectiva (D-131).
 - **Migrações** (`migrations.ts`): definidas em código, sequenciais e imutáveis depois de publicadas. Cada uma corre na sua transacção e fica registada em `schema_migrations` com soma SHA-256. A reexecução é segura. A base é recusada se uma migração aplicada tiver sido alterada ou se o seu esquema for mais recente do que o código (D-033).
 - **Esquema v1**: tabelas `STRICT`.
   - `companies` tem `tenant_id` único e `UNIQUE (id, tenant_id)`, e verificações para estado, `id <> tenant_id`, NIF obrigatório quando `ACTIVE` e cronologia.
@@ -165,21 +165,31 @@ main.ts ──> cli.ts ──> config.ts (process.env → LocalServiceConfig val
 
   - `start()`: em `READY` não faz nada. Em `STARTING` devolve o arranque em curso. Em `STOPPING` aguarda o encerramento e depois arranca. A partir de `STOPPED` ou `FAILED`, inicia (D-042).
   - `stop()`: em `STOPPED` não faz nada. Em `STARTING` aguarda o arranque e depois encerra. Em `FAILED` passa a `STOPPED`. Em `READY` fecha a ligação.
-  - Sequência de arranque:
-    1. valida a localização;
+  - Sequência de arranque (desde E1.07-X):
+    1. valida a localização e identifica a base efectiva (caminho final, sem *hard links* nem rede; D-131);
     2. aplica `onMissingDatabase` (`fail` usa `fileMustExist` e não cria ficheiros);
-    3. abre o SQLite;
-    4. corre `inspectMigrations` (integridade);
-    5. aplica `onPendingMigrations` (`fail` recusa sem alterar);
-    6. corre `runMigrations`;
-    7. cria os repositórios;
-    8. gera o `serviceRunId` do arranque e revoga as sessões de arranques anteriores (E1.07-C, D-114). Desde E1.07-C-R1, o arranque **não elimina** registos de sessões (D-125, PD-47).
+    3. abre o SQLite em modo exclusivo e adquire o bloqueio do ficheiro, com espera limitada (D-130, D-132);
+    4. comprova a posse (`verifyExclusiveOwnership`), antes de qualquer leitura do esquema;
+    5. corre `inspectMigrations` (integridade);
+    6. aplica `onPendingMigrations` (`fail` recusa sem alterar);
+    7. corre `runMigrations`;
+    8. gera o `serviceRunId` do arranque e revoga as sessões de arranques anteriores (E1.07-C, D-114). Desde E1.07-C-R1, o arranque **não elimina** registos de sessões (D-125, PD-47);
+    9. cria os repositórios e passa a `READY`.
 
-    Qualquer falha fecha a ligação antes de `FAILED`, com motivo `invalid-location`, `database-missing`, `database-open-failed`, `migration-integrity`, `pending-migrations`, `migration-failed`, `session-reset-failed` (E1.07-C) ou `unexpected` (D-048).
+    Qualquer falha fecha a ligação (e liberta o bloqueio) antes de `FAILED`, com motivo `invalid-location`, `database-missing`, `database-locked`, `database-access-denied`, `database-corrupt` (E1.07-X), `database-open-failed`, `migration-integrity`, `pending-migrations`, `migration-failed`, `session-reset-failed` (E1.07-C) ou `unexpected` (D-048).
   - `companies`, `branches` e `transaction` delegam nos repositórios SQLite (isolamento por tenant inalterado) e recusam qualquer operação fora de `READY` com `LocalServiceStateError('not-ready')` (D-047).
-- **Registos** (`logger.ts`, D-046): uma linha JSON por evento, com `time`, `level`, `event`, `instanceId` e campos escalares. Os eventos são `service.state_changed`, `service.starting`, `service.database_opened`, `service.ready`, `service.start_failed`, `service.stopped`, `service.stop_failed`, `service.release_failed`, `service.config_invalid`, `service.arguments_invalid`, `service.waiting_for_shutdown`, `service.shutdown_requested` e `service.sessions_reset` (E1.07-C, só contagens). A base é identificada só pelo nome do ficheiro, as causas por nome e motivo, e as chaves sensíveis são redigidas.
+- **Registos** (`logger.ts`, D-046): uma linha JSON por evento, com `time`, `level`, `event`, `instanceId` e campos escalares. Os eventos são `service.state_changed`, `service.starting`, `service.database_opened`, `service.ready`, `service.start_failed`, `service.stopped`, `service.stop_failed`, `service.release_failed`, `service.config_invalid`, `service.arguments_invalid`, `service.waiting_for_shutdown`, `service.shutdown_requested`, `service.sessions_reset` (E1.07-C, só contagens) e `service.database_ownership_acquired` (E1.07-X, nome do ficheiro e espera configurada). A base é identificada só pelo nome do ficheiro, as causas por nome e motivo, e as chaves sensíveis são redigidas.
 - **Executável** (`main.ts`, `cli.ts`, D-049): `node dist/main.js` fica em `READY` até `SIGINT`/`SIGTERM` (e `SIGBREAK` em Windows); `--check` arranca e encerra. Códigos de saída: 0, 1 (arranque ou encerramento) e 2 (configuração ou argumentos).
 - **Verificação**: `tests/local-service.test.ts` cobre o ciclo de vida, as falhas, a recuperação, a configuração, os registos, a CLI e a independência do Electron. A suite de contrato corre também através do serviço (D-051).
+- **Exclusividade por base (E1.07-X, D-130 a D-134)**: em cada momento, só um serviço opera sobre uma base.
+  - **Mecanismo:** bloqueio do próprio SQLite. A ligação define `locking_mode = EXCLUSIVE` antes do primeiro acesso e entra em WAL sem memória partilhada (sem ficheiro `-shm`). O SQLite obtém então um bloqueio EXCLUSIVE do ficheiro principal, através do sistema operativo (`LockFileEx` em Windows), e só o liberta quando a ligação fecha ou o processo termina. Não há ficheiros de bloqueio, PID, *heartbeats* nem relógio.
+  - **Momento da aquisição:** na abertura, antes de qualquer leitura do esquema, migração, revogação de sessões ou escrita. A posse é comprovada por uma segunda ligação independente, sem espera, que tem de receber `SQLITE_BUSY`; qualquer outro resultado falha fechado (`exclusive-lock-unverified`). Um `openDatabase` injectado que não adquira a exclusividade é recusado da mesma forma.
+  - **Recusa:** outra instância (ou ferramenta) sobre a mesma base termina em `FAILED` com `database-locked`, depois de uma espera limitada (2000 ms por omissão), sem ler o esquema nem escrever. O motivo não identifica quem detém a base. Permissões, corrupção, ausência e caminho inválido têm motivos próprios.
+  - **Identidade da base:** o bloqueio é do ficheiro, não do nome, pelo que aliases concorrentes (maiúsculas, separadores, `..`, *junctions*, ligações simbólicas, *hard links*, `\\?\`, `\\localhost\C$`) são recusados pelo sistema operativo. Para que o WAL tenha sempre o mesmo nome, o serviço abre o caminho final (`realpath`), recusa *hard links* e caminhos UNC/rede/dispositivo e reaplica a extensão e os directórios protegidos ao caminho final.
+  - **Recuperação:** encerramento normal, falha no arranque, Ctrl+C, falha inesperada ou terminação forçada libertam o bloqueio (o sistema operativo fecha os *handles*). A instância seguinte recupera o WAL na abertura.
+  - **Bases independentes:** a exclusividade é por base; serviços sobre bases diferentes funcionam em simultâneo.
+  - **Sistemas de ficheiros suportados:** disco local NTFS em Windows (verificado). Pastas de rede, partilhas SMB, unidades mapeadas e sistemas distribuídos não são suportados para a base operacional; outros sistemas locais (ReFS, FAT/exFAT) não foram ensaiados.
+  - **Consequências:** com o serviço activo, nenhuma ferramenta externa lê nem escreve a base. Cópias de segurança consistentes fazem-se pela instância proprietária (Backup API do SQLite ou `VACUUM INTO`, E1.10); a cópia simples do ficheiro activo não é bloqueada, mas é inconsistente (não inclui o WAL) e não é uma estratégia de cópia.
 - **Identidades e associações (E1.07-A)**: o serviço compõe internamente `identityProvisioning.users`, `companyMemberships`, `branchMemberships` e `membershipScopes` sobre a mesma ligação. Estão sujeitos à mesma guarda de `READY`, verificada em cada chamada, pelo que referências antigas falham depois do encerramento. Não são expostos pela CLI nem por qualquer canal externo (D-087).
 
 ## Identidade e associações (E1.07-A)
@@ -295,8 +305,8 @@ sessions.validate / registerActivity / logout          identityProvisioning.sess
   - as operações exigem `READY` e ficam ligadas ao arranque em que foram obtidas;
   - as sessões anteriores são revogadas antes de `READY`.
 - **Fronteira (D-116):** a validação devolve só `sessionId`, `userId` e expirações. Sem tenant, âmbito ou permissões. E1.07-D derivará o `TenantContext` a partir de uma sessão validada, da associação, do âmbito e da permissão.
-- **Premissa de instância única (D-127):** todas as garantias das sessões (revogação no reinício, limite de sessões, comprovativos por processo, relógio monotónico por processo) pressupõem **um único serviço operacional por base**. A premissa ainda não é imposta (PD-43, RV-02): a arquitectura actual **não** é segura com vários processos sobre a mesma base. A exclusividade é implementada em E1.07-X ([tasks/E1.07-X.md](tasks/E1.07-X.md)), antes de E1.08.
-- **Limites conhecidos:** reinício termina todas as sessões (PD-41); transporte do token por definir em E1.08 (PD-42); um único serviço por base, ainda não imposto (PD-43, bloqueante para E1.08, D-121); auditoria das sessões em E1.07-E (PD-26); retenção definitiva e crescimento dos registos (PD-47, PD-49); suspensão real do computador não ensaiada (PD-50, Gate E1.07-F).
+- **Premissa de instância única (D-127):** todas as garantias das sessões (revogação no reinício, limite de sessões, comprovativos por processo, relógio monotónico por processo) pressupõem **um único serviço operacional por base**. Desde E1.07-X ([tasks/E1.07-X.md](tasks/E1.07-X.md), na branch `feat/e107-x-database-exclusivity`), a premissa é imposta pelo bloqueio exclusivo da base (ver “Serviço local”): uma segunda instância é recusada antes de revogar sessões ou escrever (PD-43, resolvida na branch).
+- **Limites conhecidos:** reinício termina todas as sessões (PD-41); transporte do token por definir em E1.08 (PD-42); auditoria das sessões em E1.07-E (PD-26); retenção definitiva e crescimento dos registos (PD-47, PD-49); suspensão real do computador não ensaiada (PD-50, Gate E1.07-F).
 
 ## Decisões definidas
 
@@ -331,6 +341,7 @@ sessions.validate / registerActivity / logout          identityProvisioning.sess
 - Identidade local com `UserId` próprio; acesso a empresas só por associação explícita; âmbitos `COMPANY_WIDE`/`BRANCH_RESTRICTED` sem permissões; administração KIL como autoridade distinta; identidade, autorização e licenciamento separados (D-080 a D-084). Concretização em E1.07-A (D-085 a D-089).
 - Autenticação local offline com Argon2id nativo (RFC 9106), política NIST SP 800-63B, limitação persistente de tentativas, inicialização explícita da instalação e integração segura no ciclo de vida do serviço (D-090 a D-097).
 - Sessões locais revogáveis com tokens opacos, comprovativo interno de utilização única, versões de segurança monotónicas, relógio efectivo conservador e ligação ao arranque do serviço; uma sessão não é uma autorização empresarial (D-107 a D-116).
+- Exclusividade do serviço local por base SQLite, pelo bloqueio exclusivo do próprio SQLite adquirido e comprovado antes de qualquer leitura ou escrita, com identificação canónica da base e recusa tipada `database-locked` (D-130 a D-134, E1.07-X).
 
 ## Estrutura do monorepositório
 
@@ -362,7 +373,7 @@ sessions.validate / registerActivity / logout          identityProvisioning.sess
 - Âmbito funcional e regras de cada sector (D-018 identifica os sectores, não as respectivas regras).
 - Modelo de integração contabilística: que operações geram lançamentos, em que momento e com que plano de contas.
 - Transporte concreto entre a interface e o serviço local: mecanismo de loopback no modo A e terminação HTTPS e certificados no modo B (os princípios estão em D-062 e D-063). Inclui a tecnologia do serviço Windows (D-065) e o modelo de segurança.
-- Localização definitiva da base local por instalação, cópias de segurança e recuperação.
+- Localização definitiva da base local por instalação, cópias de segurança e recuperação. Desde E1.07-X, as cópias consistentes têm de ser feitas pela instância proprietária (Backup API ou `VACUUM INTO`), a implementar em E1.10.
 - Regras concretas de normalização do NIF por jurisdição, que dependem da política fiscal (D-058, PD-09).
 - Tabela concreta de transições permitidas entre estados empresariais e respectiva auditoria (o princípio está em D-061).
 - Modelo de `BusinessGroup`, autorização de relatórios consolidados e respectiva auditoria (D-017).
@@ -370,4 +381,4 @@ sessions.validate / registerActivity / logout          identityProvisioning.sess
 
 ## Restrições da fundação
 
-E1.01 a E1.07-C não criam bases de produção, endpoints de negócio, POS, facturação, contabilidade ou módulos sectoriais. E1.07-A cria identidades e associações. E1.07-B acrescenta credenciais e autenticação local. E1.07-C acrescenta sessões locais revogáveis, sem permissões, RBAC, JWT nem qualquer exposição externa. A persistência SQLite é gerida pelo serviço local, sem servidor HTTP e sem localização de produção definida. Os indicadores visuais da aplicação desktop são explicitamente demonstrativos. Os pacotes de domínio contêm apenas contratos e validações estruturais, sem regras fiscais, contabilísticas ou sectoriais.
+E1.01 a E1.07-C não criam bases de produção, endpoints de negócio, POS, facturação, contabilidade ou módulos sectoriais. E1.07-A cria identidades e associações. E1.07-B acrescenta credenciais e autenticação local. E1.07-C acrescenta sessões locais revogáveis, sem permissões, RBAC, JWT nem qualquer exposição externa. E1.07-X impõe um único serviço por base, sem HTTP, IPC nem dependências novas. A persistência SQLite é gerida pelo serviço local, sem servidor HTTP e sem localização de produção definida. Os indicadores visuais da aplicação desktop são explicitamente demonstrativos. Os pacotes de domínio contêm apenas contratos e validações estruturais, sem regras fiscais, contabilísticas ou sectoriais.

@@ -1,3 +1,4 @@
+import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import { openSqliteDatabase, type OpenSqliteOptions, type SqliteDatabase } from '../../packages/database/src/index';
@@ -42,8 +43,60 @@ export interface ServiceUnderTest {
 
 /** Dependências substituíveis em testes (relógios, derivação, lista de palavras-passe, sessões). */
 export type ServiceTestDependencies = Partial<
-  Pick<LocalServiceDependencies, 'clock' | 'commonPasswords' | 'monotonicClock' | 'passwordHashing' | 'sessionPolicy'>
+  Pick<
+    LocalServiceDependencies,
+    'clock' | 'commonPasswords' | 'databaseLockTimeoutMs' | 'monotonicClock' | 'passwordHashing' | 'sessionPolicy'
+  >
 >;
+
+// Ligações abertas pelos serviços em teste, para que a inspecção use a ligação proprietária.
+const serviceConnections = new Set<SqliteDatabase>();
+
+const sameFile = (left: string, right: string): boolean => {
+  try {
+    return realpathSync.native(left).toLowerCase() === realpathSync.native(right).toLowerCase();
+  } catch {
+    return false;
+  }
+};
+
+/** Ligação aberta de um serviço em teste que detém `filename`, se existir. */
+export const liveServiceConnection = (filename: string): SqliteDatabase | undefined => {
+  for (const connection of serviceConnections) if (!connection.open) serviceConnections.delete(connection);
+  return [...serviceConnections].find((connection) => sameFile(connection.name, filename));
+};
+
+/**
+ * Inspecção directa de uma base de teste (E1.07-X). Um serviço em `READY` detém a base em
+ * exclusivo e recusa qualquer segunda ligação; nesse caso, `work` corre na ligação do próprio
+ * serviço, e no fim os pragmas por ligação (`foreign_keys`, `recursive_triggers`) são repostos e
+ * uma transacção deixada aberta é anulada, como faria o fecho de uma ligação própria. Sem serviço
+ * a deter a base, usa uma ligação própria e fecha-a.
+ */
+export const inspectDatabase = <T>(
+  filename: string,
+  openOwn: () => SqliteDatabase,
+  work: (database: SqliteDatabase) => T,
+): T => {
+  const live = liveServiceConnection(filename);
+  if (live === undefined) {
+    const own = openOwn();
+    try {
+      return work(own);
+    } finally {
+      own.close();
+    }
+  }
+  const foreignKeys = live.pragma('foreign_keys', { simple: true }) === 1;
+  const recursiveTriggers = live.pragma('recursive_triggers', { simple: true }) === 1;
+  try {
+    return work(live);
+  } finally {
+    if (live.inTransaction) live.exec('ROLLBACK');
+    live.pragma(`foreign_keys = ${foreignKeys ? 'ON' : 'OFF'}`);
+    live.pragma(`recursive_triggers = ${recursiveTriggers ? 'ON' : 'OFF'}`);
+  }
+};
 
 export const createServiceUnderTest = (
   config: LocalServiceConfig,
@@ -63,6 +116,7 @@ export const createServiceUnderTest = (
     openDatabase: async (options) => {
       const connection = await open(options);
       connections.push(connection);
+      serviceConnections.add(connection);
       return connection;
     },
     protectedDirectories: PROTECTED_DIRECTORIES,
