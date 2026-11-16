@@ -92,6 +92,40 @@ const countingDerive = (): { readonly derive: Argon2idDerive; readonly calls: ()
   return { calls: () => calls, derive };
 };
 
+/**
+ * Derivação nativa que retém a próxima chamada depois de `holdNext()` até `release()`, para
+ * alterar a identidade ou a credencial enquanto uma autenticação está a meio (E1.07-B-M).
+ */
+const heldDerive = () => {
+  let armed = false;
+  const gate = deferred();
+  const started = deferred();
+  const derive: Argon2idDerive = async (input) => {
+    if (armed) {
+      armed = false;
+      started.resolve();
+      await gate.promise;
+    }
+    const { argon2Sync } = await import('node:crypto');
+    return argon2Sync('argon2id', {
+      memory: input.parameters.memoryKiB,
+      message: input.message,
+      nonce: input.nonce,
+      parallelism: input.parameters.parallelism,
+      passes: input.parameters.passes,
+      tagLength: input.tagLength,
+    });
+  };
+  return {
+    derive,
+    holdNext: (): void => {
+      armed = true;
+    },
+    release: (): void => gate.resolve(),
+    started: started.promise,
+  };
+};
+
 describe('Local authentication (E1.07-B)', () => {
   let temporary: TemporaryDatabase;
   let clock: TestClock;
@@ -251,6 +285,37 @@ describe('Local authentication (E1.07-B)', () => {
       expect(isAuthenticatedIdentity({ authenticatedAt: clock.now().toISOString(), method: 'password', userId: user.id })).toBe(
         false,
       );
+    });
+
+    it('revalidates the identity status after the derivation and refuses a user suspended meanwhile', async () => {
+      const held = heldDerive();
+      const harness = await startedService({ passwordHashing: { derive: held.derive, parameters: TEST_HASHING_PARAMETERS } });
+      const user = await provision(harness);
+      held.holdNext();
+
+      const pending = harness.service.authentication.authenticate(user.username, TEST_PASSWORD);
+      await held.started;
+      await harness.service.identityProvisioning.users.changeStatus(user.id, 'SUSPENDED', clock.now());
+      held.release();
+
+      await expect(pending).resolves.toEqual(INVALID);
+    });
+
+    it('refuses the old password when the credential is replaced during the derivation', async () => {
+      const held = heldDerive();
+      const harness = await startedService({ passwordHashing: { derive: held.derive, parameters: TEST_HASHING_PARAMETERS } });
+      const user = await provision(harness);
+      held.holdNext();
+
+      const pending = harness.service.authentication.authenticate(user.username, TEST_PASSWORD);
+      await held.started;
+      await harness.service.identityProvisioning.credentials.replace(user.id, OTHER_TEST_PASSWORD);
+      held.release();
+
+      await expect(pending).resolves.toEqual(INVALID);
+      await expect(harness.service.authentication.authenticate(user.username, OTHER_TEST_PASSWORD)).resolves.toMatchObject({
+        ok: true,
+      });
     });
 
     it('authenticates without any network access', async () => {
