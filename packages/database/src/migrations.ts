@@ -117,9 +117,47 @@ CREATE TABLE branch_memberships (
 CREATE INDEX branch_memberships_tenant_membership_idx ON branch_memberships (tenant_id, company_membership_id);
 `;
 
+// E1.07-B (D-092, D-094, D-095): credenciais, controlo de tentativas e estado de inicialização.
+// Só acrescenta tabelas. As credenciais ficam fora de `users`; não existe palavra-passe em texto.
+const V3_CREDENTIALS_AND_AUTHENTICATION = `
+CREATE TABLE password_credentials (
+  user_id TEXT PRIMARY KEY NOT NULL REFERENCES users (id) ON UPDATE RESTRICT ON DELETE RESTRICT,
+  algorithm TEXT NOT NULL CHECK (algorithm = 'argon2id'),
+  algorithm_version INTEGER NOT NULL CHECK (algorithm_version = 19),
+  memory_kib INTEGER NOT NULL CHECK (memory_kib BETWEEN 19456 AND 1048576),
+  passes INTEGER NOT NULL CHECK (passes BETWEEN 1 AND 16),
+  parallelism INTEGER NOT NULL CHECK (parallelism BETWEEN 1 AND 16),
+  salt BLOB NOT NULL CHECK (length(salt) BETWEEN 16 AND 64),
+  hash BLOB NOT NULL CHECK (length(hash) BETWEEN 32 AND 64),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  CONSTRAINT password_credentials_memory_per_lane CHECK (memory_kib >= 8 * parallelism),
+  CONSTRAINT password_credentials_chronology CHECK (updated_at >= created_at)
+) STRICT;
+
+CREATE TABLE authentication_throttle (
+  throttle_key TEXT PRIMARY KEY NOT NULL CHECK (
+    throttle_key = 'instance' OR (throttle_key GLOB 'user:*' AND length(throttle_key) = 69)
+  ),
+  failures INTEGER NOT NULL CHECK (failures >= 0),
+  window_started_at TEXT NOT NULL,
+  locked_until TEXT,
+  last_attempt_at TEXT NOT NULL
+) STRICT;
+
+CREATE INDEX authentication_throttle_last_attempt_idx ON authentication_throttle (last_attempt_at);
+
+CREATE TABLE installation_bootstrap (
+  id INTEGER PRIMARY KEY NOT NULL CHECK (id = 1),
+  initial_administrator_id TEXT NOT NULL REFERENCES users (id) ON UPDATE RESTRICT ON DELETE RESTRICT,
+  completed_at TEXT NOT NULL
+) STRICT;
+`;
+
 export const MIGRATIONS: readonly Migration[] = Object.freeze([
   Object.freeze({ name: 'create_companies_and_branches', sql: V1_COMPANIES_AND_BRANCHES, version: 1 }),
   Object.freeze({ name: 'create_users_and_memberships', sql: V2_USERS_AND_MEMBERSHIPS, version: 2 }),
+  Object.freeze({ name: 'create_credentials_and_authentication', sql: V3_CREDENTIALS_AND_AUTHENTICATION, version: 3 }),
 ]);
 
 export const migrationChecksum = (migration: Migration): string =>

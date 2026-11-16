@@ -29,7 +29,21 @@ export const BRANCH_COLUMNS = `id, tenant_id AS tenantId, company_id AS companyI
 export const USER_COLUMNS = `id, username, display_name AS displayName, email, phone, status,
   created_at AS createdAt, updated_at AS updatedAt`;
 
-export const COMPANY_MEMBERSHIP_COLUMNS = `id, user_id AS userId, tenant_id AS tenantId,
+export const INSERT_USER_SQL = `INSERT INTO users (id, username, display_name, email, phone, status, created_at, updated_at)
+  VALUES (@id, @username, @displayName, @email, @phone, @status, @createdAt, @updatedAt)`;
+
+export const userParameters = (user: User): Record<string, string | null> => ({
+  createdAt: user.createdAt,
+  displayName: user.displayName,
+  email: user.email ?? null,
+  id: user.id,
+  phone: user.phone ?? null,
+  status: user.status,
+  updatedAt: user.updatedAt,
+  username: user.username,
+});
+
+export const COMPANY_MEMBERSHIP_COLUMNS =`id, user_id AS userId, tenant_id AS tenantId,
   company_id AS companyId, scope, status, created_at AS createdAt, updated_at AS updatedAt`;
 
 export const BRANCH_MEMBERSHIP_COLUMNS = `id, company_membership_id AS companyMembershipId,

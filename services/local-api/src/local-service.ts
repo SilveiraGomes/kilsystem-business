@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 
 import {
+  createSqliteAuthenticationStore,
   createSqliteMembershipPersistence,
   createSqliteTenantPersistence,
   createSqliteUserDirectory,
@@ -11,20 +12,28 @@ import {
   resolveDatabaseLocation,
   runMigrations,
   type OpenSqliteOptions,
+  type SqliteAuthenticationStore,
   type SqliteDatabase,
   type SqliteMembershipPersistence,
   type SqliteTenantPersistence,
   type TenantStores,
 } from '@kil-business/database';
-import type {
-  BranchMembershipRepository,
-  BranchRepository,
-  CompanyMembershipRepository,
-  CompanyRepository,
-  MembershipScopeReader,
-  UserDirectory,
+import {
+  EMPTY_COMMON_PASSWORD_LIST,
+  type BranchMembershipRepository,
+  type BranchRepository,
+  type CommonPasswordList,
+  type CompanyMembershipRepository,
+  type CompanyRepository,
+  type MembershipScopeReader,
+  type UserDirectory,
 } from '@kil-business/shared-types';
 
+import type { AuthenticationBackend } from './authentication/authentication-backend.js';
+import { createCredentialManager, type CredentialManager } from './authentication/credential-manager.js';
+import { createInstallationBootstrap, type InstallationBootstrap } from './authentication/installation-bootstrap.js';
+import { createLocalAuthenticator, type LocalAuthenticator } from './authentication/local-authenticator.js';
+import { createPasswordHasher, type PasswordHasherOptions } from './authentication/password-hashing.js';
 import type { LocalServiceConfig } from './config.js';
 import type { LogFields, Logger } from './logger.js';
 
@@ -87,6 +96,15 @@ export interface LocalServiceDependencies {
   readonly protectedDirectories: readonly string[];
   /** Abertura da ligação; substituível em testes. Por omissão, `openSqliteDatabase`. */
   readonly openDatabase?: (options: OpenSqliteOptions) => SqliteDatabase | Promise<SqliteDatabase>;
+  /** Relógio das operações de autenticação; substituível em testes. Por omissão, a hora do sistema. */
+  readonly clock?: () => Date;
+  /**
+   * Derivação de palavras-passe. Por omissão, os parâmetros de produção (D-090); parâmetros
+   * abaixo do mínimo OWASP são recusados.
+   */
+  readonly passwordHashing?: PasswordHasherOptions;
+  /** Lista local de palavras-passe comuns ou comprometidas (PD-33). */
+  readonly commonPasswords?: CommonPasswordList;
 }
 
 export interface LocalService {
@@ -107,12 +125,23 @@ export interface LocalService {
    * composição interna do serviço; nunca exposto por HTTP, IPC Electron nem interface pública.
    * Recusa operações fora de `READY`.
    */
-  readonly identityProvisioning: { readonly users: UserDirectory };
+  readonly identityProvisioning: {
+    readonly users: UserDirectory;
+    /** Gestão interna de credenciais (D-095). */
+    readonly credentials: CredentialManager;
+    /** Inicialização explícita e irrepetível da instalação (D-096). */
+    readonly installation: InstallationBootstrap;
+  };
   /** Associações empresariais e locais; exigem `TenantContext` e recusam operações fora de `READY`. */
   readonly companyMemberships: CompanyMembershipRepository;
   readonly branchMemberships: BranchMembershipRepository;
   /** Avaliação interna de elegibilidade (D-088); não é autenticação nem autorização. */
   readonly membershipScopes: MembershipScopeReader;
+  /**
+   * Autenticação local offline por username e palavra-passe (D-093). O resultado não é uma
+   * sessão nem uma autorização empresarial.
+   */
+  readonly authentication: LocalAuthenticator;
 }
 
 /** Repositórios activos enquanto a ligação está aberta; descartados no encerramento. */
@@ -120,6 +149,7 @@ interface ServiceStores {
   readonly tenant: SqliteTenantPersistence;
   readonly users: UserDirectory;
   readonly memberships: SqliteMembershipPersistence;
+  readonly authentication: SqliteAuthenticationStore;
 }
 
 // Os registos identificam a causa pelo nome e motivo, nunca pela mensagem (pode conter caminhos ou SQL).
@@ -139,8 +169,17 @@ const settle = <T>(operation: () => Promise<T>): Promise<T> =>
  */
 export const createLocalService = (
   config: LocalServiceConfig,
-  { logger, openDatabase = openSqliteDatabase, protectedDirectories }: LocalServiceDependencies,
+  {
+    clock = () => new Date(),
+    commonPasswords = EMPTY_COMMON_PASSWORD_LIST,
+    logger,
+    openDatabase = openSqliteDatabase,
+    passwordHashing,
+    protectedDirectories,
+  }: LocalServiceDependencies,
 ): LocalService => {
+  // Criado antes do arranque: parâmetros inválidos são recusados de imediato.
+  const hasher = createPasswordHasher(passwordHashing);
   let state: LocalServiceState = 'STOPPED';
   let database: SqliteDatabase | undefined;
   let stores: ServiceStores | undefined;
@@ -195,6 +234,7 @@ export const createLocalService = (
     }
     const result = attempt('migration-failed', () => runMigrations(connection));
     stores = {
+      authentication: createSqliteAuthenticationStore(connection),
       memberships: createSqliteMembershipPersistence(connection),
       tenant: createSqliteTenantPersistence(connection),
       users: createSqliteUserDirectory(connection),
@@ -343,6 +383,19 @@ export const createLocalService = (
     evaluate: (context, userId) => guarded((current) => current.memberships.scopes.evaluate(context, userId)),
   };
 
+  // Autenticação (E1.07-B): cada operação obtém o armazenamento em `READY` e, depois de cada
+  // derivação assíncrona, confirma que continua a ser o da ligação activa. Uma derivação que
+  // termine após `stop()` (ou após um novo arranque) é recusada sem escrever (D-097).
+  const authenticationBackend: AuthenticationBackend = Object.freeze({
+    acquire: () => ready().authentication,
+    assertCurrent: (store: SqliteAuthenticationStore) => {
+      if (state !== 'READY' || stores?.authentication !== store) throw new LocalServiceStateError('not-ready', state);
+    },
+    clock,
+    commonPasswords,
+    hasher,
+  });
+
   return {
     get state() {
       return state;
@@ -358,9 +411,14 @@ export const createLocalService = (
     companies,
     branches,
     transaction: (work) => ready().tenant.transaction(work),
-    identityProvisioning: Object.freeze({ users }),
+    identityProvisioning: Object.freeze({
+      credentials: createCredentialManager(authenticationBackend),
+      installation: createInstallationBootstrap(authenticationBackend),
+      users,
+    }),
     companyMemberships,
     branchMemberships,
     membershipScopes,
+    authentication: createLocalAuthenticator(authenticationBackend),
   };
 };

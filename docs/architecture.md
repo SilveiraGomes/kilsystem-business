@@ -2,7 +2,7 @@
 
 ## Estado deste documento
 
-Este documento regista a fundação E1.01, a primeira aplicação desktop E1.02, a arquitectura de negócio consolidada em E1.02-H, os contratos multiempresa de E1.03, a persistência SQLite de E1.04, o ciclo de vida do serviço local de E1.05, o ambiente de execução e as decisões de E1.06, a actualização segura do Electron em E1.06-S1, a modernização do Vitest em E1.06-S2 e a identidade local com associações multiempresa de E1.07-A. “Definido” significa uma decisão já fornecida ou validada pelo projecto; “pendente” requer validação posterior e não deve ser inferido.
+Este documento regista a fundação E1.01, a primeira aplicação desktop E1.02, a arquitectura de negócio consolidada em E1.02-H, os contratos multiempresa de E1.03, a persistência SQLite de E1.04, o ciclo de vida do serviço local de E1.05, o ambiente de execução e as decisões de E1.06, a actualização segura do Electron em E1.06-S1, a modernização do Vitest em E1.06-S2, a identidade local com associações multiempresa de E1.07-A e a autenticação local offline de E1.07-B. “Definido” significa uma decisão já fornecida ou validada pelo projecto; “pendente” requer validação posterior e não deve ser inferido.
 
 ## Visão geral
 
@@ -215,6 +215,43 @@ autoridade da instalação                         contexto empresarial (TenantC
 - **Esquema (migração 2):** tabelas `users`, `company_memberships` e `branch_memberships`, e índice único `branches (id, tenant_id, company_id)`. Detalhe em [tasks/E1.07-A.md](tasks/E1.07-A.md#modelo-de-dados-e-migração-2-packagesdatabase).
 - **Verificação:** suite de contrato `tests/support/membership-repository-contract.ts` (D-089) sobre SQLite e através do serviço, `tests/identity-contracts.test.ts` e `tests/identity-persistence.test.ts`.
 
+## Autenticação local (E1.07-B)
+
+Localização: política em `packages/shared-types/src/password-policy.ts`; persistência em `packages/database/src/sqlite-authentication-store.ts`; serviço em `services/local-api/src/authentication/`. Funciona offline, só dentro do serviço local, sem HTTP, IPC nem interface. **Não há sessões nem autorização funcional.** O `TenantContext` continua a ser construído pelo chamador (PD-27).
+
+```text
+authenticate(username, password)
+  │ 1. READY? ── não ──▶ LocalServiceStateError('not-ready')
+  │ 2. limites + normalização (username D-085; palavra-passe NFC D-091) ── inválido ──▶ recusa genérica
+  │ 3. transacção IMMEDIATE: limitação (conta a tentativa) → identidade → estado ACTIVE → credencial
+  │                                   └── bloqueado ──▶ { ok: false, reason: 'throttled', retryAfterSeconds }
+  │ 4. UMA derivação Argon2id: verify(credencial) ou burn() sem credencial elegível (D-093)
+  │ 5. ainda READY e a mesma ligação? ── não ──▶ not-ready, sem escrever (D-097)
+  │ 6. transacção: reconfirma a identidade e a credencial, anula a falha, recalcula parâmetros antigos
+  ▼
+{ ok: true, identity: { userId, method: 'password', authenticatedAt } }   (só reconhecida por isAuthenticatedIdentity)
+```
+
+- **Derivação (D-090):** Argon2id nativo do Node.js 24.22.3.
+  - Parâmetros: m = 64 MiB, t = 3, p = 4 (RFC 9106), salt de 16 bytes e *hash* de 32 bytes.
+  - Mínimo de configuração: OWASP (m = 19 MiB, t = 2).
+  - Concorrência: no máximo 2 derivações simultâneas.
+- **Política (D-091):** NIST SP 800-63B, revisão 4.
+  - Normalização NFC, de 15 a 256 *code points*, sem truncamento.
+  - Espaços e Unicode permitidos; sem composição nem expiração.
+  - Lista local de palavras-passe comuns, ainda vazia (PD-33).
+- **Persistência (D-092, migração 3):**
+  - `password_credentials`: separada de `users`, uma por utilizador.
+  - `authentication_throttle`: chaves SHA-256, sem usernames em texto.
+  - `installation_bootstrap`: linha única.
+- **Limitação (D-094):** 5 falhas, depois bloqueios de 30 s a 15 min sem bloqueio permanente; limite da instância de 100 falhas em 5 min; contagem antecipada, segura com concorrência.
+- **Inicialização (D-096):** explícita, atómica e irrepetível.
+  - Cria uma identidade nova sem permissões empresariais.
+  - Não há contas predefinidas.
+  - Ainda não há ferramenta operacional (PD-31).
+- **Gestão de credenciais (D-095):** só interna (`create`/`replace`).
+- **Limites conhecidos:** canais temporais (PD-34), ausência de *pepper* (PD-32) e desvio NIST no limite de falhas consecutivas (PD-35). Detalhe em [tasks/E1.07-B.md](tasks/E1.07-B.md#limites-conhecidos).
+
 ## Decisões definidas
 
 - Monorepositório com pnpm workspaces e Git.
@@ -246,6 +283,7 @@ autoridade da instalação                         contexto empresarial (TenantC
 - Electron 45.3.2 como runtime suportado e política explícita de menor privilégio para renderer, sessão, navegação e recursos locais (D-075 e D-076).
 - Vitest 5.1.0, com condições de resolução `source` declaradas para os ambientes `client` e `ssr` (D-077 e D-078).
 - Identidade local com `UserId` próprio; acesso a empresas só por associação explícita; âmbitos `COMPANY_WIDE`/`BRANCH_RESTRICTED` sem permissões; administração KIL como autoridade distinta; identidade, autorização e licenciamento separados (D-080 a D-084). Concretização em E1.07-A (D-085 a D-089).
+- Autenticação local offline com Argon2id nativo (RFC 9106), política NIST SP 800-63B, limitação persistente de tentativas, inicialização explícita da instalação e integração segura no ciclo de vida do serviço (D-090 a D-097).
 
 ## Estrutura do monorepositório
 
@@ -269,7 +307,7 @@ autoridade da instalação                         contexto empresarial (TenantC
 - Estratégia e protocolo de sincronização, resolução de conflitos, idempotência e operação offline.
 - Modelo de tenancy no PostgreSQL (colunas, schemas ou bases separadas), row-level security e driver PostgreSQL.
 - Framework de empacotamento, actualizações e assinatura de código do Electron.
-- Estratégia de autenticação, autorização, gestão de sessões e recuperação de conta; origem autenticada do `TenantContext` (E1.07-B a E1.07-D; o modelo de identidade e associações está definido desde E1.07-A).
+- Estratégia de autenticação, autorização, gestão de sessões e recuperação de conta; origem autenticada do `TenantContext` (E1.07-C e E1.07-D; o modelo de identidade e associações está definido desde E1.07-A e a autenticação local desde E1.07-B).
 - Hosting, observabilidade, backups, recuperação de desastre e topologia de implantação.
 - Biblioteca de componentes e sistema visual definitivo.
 - Versões e arquitectura concretas do React Native quando começar o monitor móvel.
@@ -285,4 +323,4 @@ autoridade da instalação                         contexto empresarial (TenantC
 
 ## Restrições da fundação
 
-E1.01 a E1.07-A não criam bases de produção, endpoints de negócio, POS, facturação, contabilidade ou módulos sectoriais. E1.07-A cria identidades e associações sem credenciais, autenticação, sessões ou permissões. A persistência SQLite é gerida pelo serviço local, sem servidor HTTP e sem localização de produção definida. Os indicadores visuais da aplicação desktop são explicitamente demonstrativos. Os pacotes de domínio contêm apenas contratos e validações estruturais, sem regras fiscais, contabilísticas ou sectoriais.
+E1.01 a E1.07-B não criam bases de produção, endpoints de negócio, POS, facturação, contabilidade ou módulos sectoriais. E1.07-A cria identidades e associações. E1.07-B acrescenta credenciais e autenticação local, mas sem sessões, tokens, permissões nem qualquer exposição externa. A persistência SQLite é gerida pelo serviço local, sem servidor HTTP e sem localização de produção definida. Os indicadores visuais da aplicação desktop são explicitamente demonstrativos. Os pacotes de domínio contêm apenas contratos e validações estruturais, sem regras fiscais, contabilísticas ou sectoriais.

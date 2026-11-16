@@ -31,6 +31,10 @@ import { createServiceUnderTest, REPOSITORY_ROOT, serviceConfig } from './suppor
 import { createTemporaryDatabase, type TemporaryDatabase } from './support/sqlite-harness';
 
 const E1_04_MIGRATIONS = MIGRATIONS.slice(0, 1);
+// Derivados da lista de migrações (E1.07-B acrescentou a versão 3): verificam sempre o esquema completo.
+const ALL_VERSIONS = MIGRATIONS.map((candidate) => candidate.version);
+const LATEST_VERSION = MIGRATIONS.length;
+const AFTER_E1_04 = ALL_VERSIONS.filter((version) => version > 1);
 
 const migration = (version: number): Migration => {
   const found = MIGRATIONS.find((candidate) => candidate.version === version);
@@ -120,7 +124,7 @@ describe('Identity persistence (E1.07-A)', () => {
     it('creates the identity tables, isolation indexes and audit record', () => {
       const database = temporary.open();
 
-      expect(runMigrations(database)).toEqual({ applied: [1, 2], currentVersion: 2 });
+      expect(runMigrations(database)).toEqual({ applied: ALL_VERSIONS, currentVersion: LATEST_VERSION });
 
       const objects = database
         .prepare("SELECT name FROM sqlite_master WHERE type IN ('table', 'index') ORDER BY name")
@@ -159,8 +163,8 @@ describe('Identity persistence (E1.07-A)', () => {
       const original = migrationChecksum(migration(1));
 
       const upgraded = temporary.open();
-      expect(inspectMigrations(upgraded)).toMatchObject({ appliedVersions: [1], pendingVersions: [2] });
-      expect(runMigrations(upgraded)).toEqual({ applied: [2], currentVersion: 2 });
+      expect(inspectMigrations(upgraded)).toMatchObject({ appliedVersions: [1], pendingVersions: AFTER_E1_04 });
+      expect(runMigrations(upgraded)).toEqual({ applied: AFTER_E1_04, currentVersion: LATEST_VERSION });
 
       expect(rows(upgraded, 'companies')).toEqual(legacy.snapshot.companies);
       expect(rows(upgraded, 'branches')).toEqual(legacy.snapshot.branches);
@@ -206,12 +210,12 @@ describe('Identity persistence (E1.07-A)', () => {
       const { membership, memberships, north, context } = await seeded(database);
       await memberships.branchMemberships.create(context, newBranchMembership(membership, north));
 
-      expect(runMigrations(database)).toEqual({ applied: [], currentVersion: 2 });
+      expect(runMigrations(database)).toEqual({ applied: [], currentVersion: LATEST_VERSION });
       database.close();
-      expect(runMigrations(temporary.open())).toEqual({ applied: [], currentVersion: 2 });
+      expect(runMigrations(temporary.open())).toEqual({ applied: [], currentVersion: LATEST_VERSION });
 
       const reopened = temporary.open();
-      expect(count(reopened, 'schema_migrations')).toBe(2);
+      expect(count(reopened, 'schema_migrations')).toBe(MIGRATIONS.length);
       expect([count(reopened, 'users'), count(reopened, 'company_memberships'), count(reopened, 'branch_memberships')]).toEqual([
         1, 1, 1,
       ]);
@@ -574,7 +578,11 @@ describe('Identity persistence (E1.07-A)', () => {
 
       const harness = createServiceUnderTest(serviceConfig(temporary.filename));
       await harness.service.start();
-      expect(harness.service.startupReport).toEqual({ appliedMigrations: [2], createdDatabase: false, schemaVersion: 2 });
+      expect(harness.service.startupReport).toEqual({
+        appliedMigrations: AFTER_E1_04,
+        createdDatabase: false,
+        schemaVersion: LATEST_VERSION,
+      });
       await expect(
         harness.service.branches.listByCompany(contextFor(legacy.companyA.tenantId), legacy.companyA.id),
       ).resolves.toEqual([legacy.branchA1, legacy.branchA2]);

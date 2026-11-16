@@ -28,7 +28,7 @@ Este plano regista as etapas concluídas e o planeamento inicial da fase E1 até
 | [E1.06-S2-M](tasks/E1.06-S2-M.md) | Revisão e integração da modernização Vitest | Concluída | `docs: record vitest integration review` |
 | [E1.07](tasks/E1.07.md) | Identidade, autenticação e autorização local (subdividida em A–F) | Em curso por subtarefas | — |
 | [E1.07-A](tasks/E1.07-A.md) | Identidade local, utilizadores e associações multiempresa (migração 2) | Concluída e integrada (PR #3) | `cc4adc0`; merge `4d0302b` |
-| [E1.07-B](tasks/E1.07-B.md) | Credenciais, primeiro administrador e autenticação offline | Planeada, **não autorizada** | — |
+| [E1.07-B](tasks/E1.07-B.md) | Credenciais, autenticação local offline, limitação de tentativas e inicialização da instalação (migração 3) | Implementada e validada na branch `feat/e107-b-local-authentication`; integração por PR | `feat: implement secure offline authentication` |
 | [E1.07-C](tasks/E1.07-C.md) | Sessões, validade e revogação | Planeada, **não autorizada** | — |
 | [E1.07-D](tasks/E1.07-D.md) | Perfis, permissões e autorização RBAC | Planeada, **não autorizada** | — |
 | [E1.07-E](tasks/E1.07-E.md) | Protecção de contas e auditoria | Planeada, **não autorizada** | — |
@@ -48,6 +48,8 @@ Precisa de autorização e de uma posição no plano, a decidir pelo responsáve
 | Plano de migração para o Node 26 LTS | PD-21 | Antes de 2028-04-30 |
 | Correcção do `minimatch` quando o typescript-eslint a publicar | PD-19 | Quando existir versão a montante |
 | Alinhar o intervalo declarado do Vite com o mínimo do Vitest 5 | PD-24 | Tarefa controlada própria (decisão em E1.06-S2-M) |
+| Ferramenta de inicialização da instalação; *pepper* protegido pelo sistema operativo; lista local de palavras-passe comprometidas | PD-31, PD-32, PD-33 | Antes de instalações reais (E1.10); PD-32 com E1.07-E/E1.10 |
+| Revisão dos limites temporais e da política de limitação face à NIST | PD-34, PD-35 | E1.07-E/E1.07-F |
 
 ## Dependências entre funcionalidades e decisões pendentes
 
@@ -58,8 +60,8 @@ Relação entre as funcionalidades ainda não desenvolvidas e as decisões pende
 | Instalação do serviço local (E1.10) | Tecnologia do serviço Windows; localização da base por instalação; cópias de segurança |
 | Empresas `ACTIVE` em produção | Regra de validação do NIF para `AO`, com fonte normativa (D-024, PD-09) |
 | Persistência central (E1.09) | Driver PostgreSQL, modelo de tenancy e row-level security |
-| Credenciais e autenticação (E1.07-B) | Derivação de palavras-passe (Argon2id/scrypt), *bootstrap* do primeiro administrador, autenticação offline e recuperação |
-| Sessões (E1.07-C) | E1.07-B; duração, concorrência e transporte das sessões |
+| Ferramenta operacional de inicialização | Entrada interactiva protegida, sem palavras-passe em argumentos ou ficheiros (PD-31) |
+| Sessões (E1.07-C) | E1.07-B integrada; duração, concorrência e transporte das sessões; uso obrigatório de `isAuthenticatedIdentity` |
 | Autorização RBAC (E1.07-D) | E1.07-C; catálogo de perfis e permissões por sector; segregação de funções com fonte normativa |
 | Protecção de contas e auditoria (E1.07-E) | Limiares de bloqueio; retenção e consulta da auditoria (PD-26) |
 | API local e integração Electron (E1.08) | E1.07-B a E1.07-F; transporte em loopback; E1.06-S1 concluída; revisão de PD-27 e PD-28 |
