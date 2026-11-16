@@ -40,9 +40,9 @@ export interface ServiceUnderTest {
   readonly connections: SqliteDatabase[];
 }
 
-/** Dependências substituíveis em testes (relógio, derivação, lista de palavras-passe). */
+/** Dependências substituíveis em testes (relógios, derivação, lista de palavras-passe, sessões). */
 export type ServiceTestDependencies = Partial<
-  Pick<LocalServiceDependencies, 'clock' | 'commonPasswords' | 'passwordHashing'>
+  Pick<LocalServiceDependencies, 'clock' | 'commonPasswords' | 'monotonicClock' | 'passwordHashing' | 'sessionPolicy'>
 >;
 
 export const createServiceUnderTest = (

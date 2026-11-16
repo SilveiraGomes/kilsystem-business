@@ -154,10 +154,192 @@ CREATE TABLE installation_bootstrap (
 ) STRICT;
 `;
 
+// E1.07-C: versões de segurança e sessões locais. Não destrutiva: só acrescenta colunas com valor
+// inicial 1 (identidades e credenciais existentes ficam na versão 1, sem tocar em hashes), uma
+// tabela, índices e triggers. Os triggers tornam as versões monotónicas e garantem, na mesma
+// instrução SQL, que qualquer alteração de estado da identidade ou da credencial avança a versão
+// e revoga as sessões afectadas, seja qual for o caminho de escrita (D-110, D-111).
+const V4_SESSIONS_AND_SECURITY_VERSIONS = `
+ALTER TABLE users ADD COLUMN security_version INTEGER NOT NULL DEFAULT 1 CHECK (security_version >= 1);
+
+ALTER TABLE password_credentials ADD COLUMN credential_version INTEGER NOT NULL DEFAULT 1 CHECK (credential_version >= 1);
+
+CREATE TABLE local_sessions (
+  id TEXT PRIMARY KEY NOT NULL,
+  user_id TEXT NOT NULL REFERENCES users (id) ON UPDATE RESTRICT ON DELETE RESTRICT,
+  token_digest BLOB NOT NULL CHECK (length(token_digest) = 32),
+  security_version INTEGER NOT NULL CHECK (security_version >= 1),
+  credential_version INTEGER NOT NULL CHECK (credential_version >= 1),
+  service_run_id TEXT NOT NULL CHECK (length(service_run_id) = 32 AND service_run_id NOT GLOB '*[^0-9a-f]*'),
+  created_at TEXT NOT NULL,
+  last_activity_at TEXT NOT NULL,
+  absolute_expires_at TEXT NOT NULL,
+  revoked_at TEXT,
+  revocation_reason TEXT CHECK (revocation_reason IS NULL OR revocation_reason IN (
+    'logout', 'administrative', 'user-sessions-revoked', 'identity-status-changed', 'credential-replaced',
+    'security-version-changed', 'service-restarted', 'idle-timeout', 'absolute-timeout'
+  )),
+  CONSTRAINT local_sessions_token_digest_unique UNIQUE (token_digest),
+  CONSTRAINT local_sessions_revocation_complete CHECK ((revoked_at IS NULL) = (revocation_reason IS NULL)),
+  CONSTRAINT local_sessions_lifetime CHECK (absolute_expires_at > created_at),
+  CONSTRAINT local_sessions_activity_window CHECK (last_activity_at >= created_at AND last_activity_at <= absolute_expires_at)
+) STRICT;
+
+CREATE INDEX local_sessions_active_user_idx ON local_sessions (user_id) WHERE revoked_at IS NULL;
+CREATE INDEX local_sessions_active_run_idx ON local_sessions (service_run_id) WHERE revoked_at IS NULL;
+CREATE INDEX local_sessions_ended_idx ON local_sessions (revoked_at) WHERE revoked_at IS NOT NULL;
+
+CREATE TRIGGER local_sessions_binding_immutable
+BEFORE UPDATE OF id, user_id, token_digest, security_version, credential_version, service_run_id, created_at,
+  absolute_expires_at ON local_sessions
+BEGIN
+  SELECT RAISE(ABORT, 'local_sessions binding is immutable');
+END;
+
+CREATE TRIGGER local_sessions_revocation_final
+BEFORE UPDATE OF revoked_at, revocation_reason ON local_sessions
+WHEN OLD.revoked_at IS NOT NULL
+BEGIN
+  SELECT RAISE(ABORT, 'local_sessions revocation is final');
+END;
+
+CREATE TRIGGER local_sessions_activity_monotonic
+BEFORE UPDATE OF last_activity_at ON local_sessions
+WHEN OLD.revoked_at IS NOT NULL OR NEW.last_activity_at < OLD.last_activity_at
+BEGIN
+  SELECT RAISE(ABORT, 'local_sessions activity cannot move backwards or follow revocation');
+END;
+
+CREATE TRIGGER users_security_version_monotonic
+BEFORE UPDATE OF security_version ON users
+WHEN NEW.security_version < OLD.security_version
+BEGIN
+  SELECT RAISE(ABORT, 'users security_version cannot decrease');
+END;
+
+CREATE TRIGGER users_status_change_revokes_sessions
+AFTER UPDATE OF status ON users
+WHEN NEW.status IS NOT OLD.status
+BEGIN
+  UPDATE local_sessions SET revoked_at = NEW.updated_at, revocation_reason = 'identity-status-changed'
+    WHERE user_id = NEW.id AND revoked_at IS NULL;
+  UPDATE users SET security_version = max(NEW.security_version, OLD.security_version + 1) WHERE id = NEW.id;
+END;
+
+CREATE TRIGGER users_security_version_revokes_sessions
+AFTER UPDATE OF security_version ON users
+WHEN NEW.security_version > OLD.security_version
+BEGIN
+  UPDATE local_sessions SET revoked_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+    revocation_reason = 'security-version-changed'
+    WHERE user_id = NEW.id AND revoked_at IS NULL;
+END;
+
+CREATE TRIGGER password_credentials_version_monotonic
+BEFORE UPDATE OF credential_version ON password_credentials
+WHEN NEW.credential_version < OLD.credential_version
+BEGIN
+  SELECT RAISE(ABORT, 'password_credentials credential_version cannot decrease');
+END;
+
+CREATE TRIGGER password_credentials_change_requires_new_version
+BEFORE UPDATE ON password_credentials
+WHEN NEW.credential_version <= OLD.credential_version AND (
+  NEW.user_id IS NOT OLD.user_id OR NEW.hash IS NOT OLD.hash OR NEW.salt IS NOT OLD.salt
+  OR NEW.algorithm IS NOT OLD.algorithm OR NEW.algorithm_version IS NOT OLD.algorithm_version
+  OR NEW.memory_kib IS NOT OLD.memory_kib OR NEW.passes IS NOT OLD.passes OR NEW.parallelism IS NOT OLD.parallelism
+)
+BEGIN
+  SELECT RAISE(ABORT, 'password_credentials change requires a new credential_version');
+END;
+
+CREATE TRIGGER password_credentials_version_revokes_sessions
+AFTER UPDATE OF credential_version ON password_credentials
+WHEN NEW.credential_version > OLD.credential_version
+BEGIN
+  UPDATE local_sessions SET revoked_at = NEW.updated_at, revocation_reason = 'credential-replaced'
+    WHERE user_id = NEW.user_id AND revoked_at IS NULL;
+END;
+
+CREATE TRIGGER password_credentials_never_deleted
+BEFORE DELETE ON password_credentials
+BEGIN
+  SELECT RAISE(ABORT, 'password_credentials are replaced, never deleted');
+END;
+`;
+
+// E1.07-C-R1 (PD-46, D-126): integridade das versões de segurança contra reinserções. A eliminação
+// implícita de `INSERT OR REPLACE`/`REPLACE` só activa triggers DELETE com `recursive_triggers`
+// ligado, e a de `users` só é travada pelas chaves estrangeiras quando `foreign_keys` está ligado.
+// Os triggers BEFORE INSERT correm antes da resolução de conflitos, em qualquer configuração:
+// - uma identidade, credencial ou sessão existente nunca é reinserida (REPLACE, UPSERT ou INSERT
+//   repetido), pelo que nenhuma versão é reposta e nenhuma revogação é anulada;
+// - uma linha reinserida depois de uma eliminação nunca reutiliza uma versão já ligada a sessões
+//   da identidade, e qualquer sessão ainda activa dessa identidade é revogada;
+// - as chaves das identidades e das credenciais são imutáveis.
+// As recusas de reinserção antecipam as falhas UNIQUE/PRIMARY KEY e, como elas, indicam uma falha de
+// restrição (`SQLITE_CONSTRAINT_TRIGGER`, `PersistenceError('constraint')`).
+// Só acrescenta triggers: não altera tabelas, dados nem as migrações 1 a 4. Não protege contra quem
+// controle o esquema (eliminar triggers, `writable_schema`) ou escreva sessões directamente.
+const V5_SECURITY_VERSION_REINSERTION = `
+CREATE TRIGGER users_insert_requires_new_identity
+BEFORE INSERT ON users
+WHEN EXISTS (SELECT 1 FROM users WHERE id = NEW.id OR username = NEW.username)
+  OR NEW.security_version <= (SELECT max(security_version) FROM local_sessions WHERE user_id = NEW.id)
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: users are never re-inserted and never reuse a security_version');
+END;
+
+CREATE TRIGGER users_insert_revokes_sessions
+AFTER INSERT ON users
+BEGIN
+  UPDATE local_sessions SET revoked_at = NEW.updated_at, revocation_reason = 'security-version-changed'
+    WHERE user_id = NEW.id AND revoked_at IS NULL;
+END;
+
+CREATE TRIGGER users_id_immutable
+BEFORE UPDATE OF id ON users
+WHEN NEW.id IS NOT OLD.id
+BEGIN
+  SELECT RAISE(ABORT, 'users id is immutable');
+END;
+
+CREATE TRIGGER password_credentials_insert_requires_new_credential
+BEFORE INSERT ON password_credentials
+WHEN EXISTS (SELECT 1 FROM password_credentials WHERE user_id = NEW.user_id)
+  OR NEW.credential_version <= (SELECT max(credential_version) FROM local_sessions WHERE user_id = NEW.user_id)
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: password_credentials are never re-inserted and never reuse a credential_version');
+END;
+
+CREATE TRIGGER password_credentials_insert_revokes_sessions
+AFTER INSERT ON password_credentials
+BEGIN
+  UPDATE local_sessions SET revoked_at = NEW.updated_at, revocation_reason = 'credential-replaced'
+    WHERE user_id = NEW.user_id AND revoked_at IS NULL;
+END;
+
+CREATE TRIGGER password_credentials_user_immutable
+BEFORE UPDATE OF user_id ON password_credentials
+WHEN NEW.user_id IS NOT OLD.user_id
+BEGIN
+  SELECT RAISE(ABORT, 'password_credentials user_id is immutable');
+END;
+
+CREATE TRIGGER local_sessions_insert_requires_new_session
+BEFORE INSERT ON local_sessions
+WHEN EXISTS (SELECT 1 FROM local_sessions WHERE id = NEW.id OR token_digest = NEW.token_digest)
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: local_sessions are never re-inserted');
+END;
+`;
+
 export const MIGRATIONS: readonly Migration[] = Object.freeze([
   Object.freeze({ name: 'create_companies_and_branches', sql: V1_COMPANIES_AND_BRANCHES, version: 1 }),
   Object.freeze({ name: 'create_users_and_memberships', sql: V2_USERS_AND_MEMBERSHIPS, version: 2 }),
   Object.freeze({ name: 'create_credentials_and_authentication', sql: V3_CREDENTIALS_AND_AUTHENTICATION, version: 3 }),
+  Object.freeze({ name: 'create_sessions_and_security_versions', sql: V4_SESSIONS_AND_SECURITY_VERSIONS, version: 4 }),
+  Object.freeze({ name: 'protect_security_versions_against_reinsertion', sql: V5_SECURITY_VERSION_REINSERTION, version: 5 }),
 ]);
 
 export const migrationChecksum = (migration: Migration): string =>
