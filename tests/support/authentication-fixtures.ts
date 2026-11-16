@@ -15,19 +15,28 @@ export const TEST_HASHING_PARAMETERS: Argon2idParameters = Object.freeze({
   passes: 2,
 });
 
-/** Relógio controlável: começa num instante fixo e só avança quando o teste o manda. */
+/**
+ * Relógio controlável: começa num instante fixo e só avança quando o teste o manda.
+ * `advanceSeconds` avança o relógio de parede e o monotónico; `set` muda só o relógio de parede
+ * (simula um acerto ou um salto do relógio do sistema).
+ */
 export interface TestClock {
   readonly now: () => Date;
+  /** Milissegundos monotónicos (E1.07-C); nunca recuam. */
+  readonly monotonic: () => number;
   readonly advanceSeconds: (seconds: number) => void;
   readonly set: (iso: string) => void;
 }
 
 export const createTestClock = (start = '2026-11-16T08:00:00.000Z'): TestClock => {
   let current = Date.parse(start);
+  let monotonic = 0;
   return {
     advanceSeconds: (seconds) => {
       current += seconds * 1000;
+      monotonic += seconds * 1000;
     },
+    monotonic: () => monotonic,
     now: () => new Date(current),
     set: (iso) => {
       current = Date.parse(iso);

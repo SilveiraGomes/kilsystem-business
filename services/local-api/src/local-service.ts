@@ -4,6 +4,7 @@ import path from 'node:path';
 import {
   createSqliteAuthenticationStore,
   createSqliteMembershipPersistence,
+  createSqliteSessionStore,
   createSqliteTenantPersistence,
   createSqliteUserDirectory,
   inspectMigrations,
@@ -15,17 +16,20 @@ import {
   type SqliteAuthenticationStore,
   type SqliteDatabase,
   type SqliteMembershipPersistence,
+  type SqliteSessionStore,
   type SqliteTenantPersistence,
   type TenantStores,
 } from '@kil-business/database';
 import {
   EMPTY_COMMON_PASSWORD_LIST,
+  parseSessionPolicy,
   type BranchMembershipRepository,
   type BranchRepository,
   type CommonPasswordList,
   type CompanyMembershipRepository,
   type CompanyRepository,
   type MembershipScopeReader,
+  type SessionPolicy,
   type UserDirectory,
 } from '@kil-business/shared-types';
 
@@ -36,6 +40,21 @@ import { createLocalAuthenticator, type LocalAuthenticator } from './authenticat
 import { createPasswordHasher, type PasswordHasherOptions } from './authentication/password-hashing.js';
 import type { LocalServiceConfig } from './config.js';
 import type { LogFields, Logger } from './logger.js';
+import { createAuthenticationProofRegistry } from './sessions/authentication-proof.js';
+import {
+  createLocalSessions,
+  createSessionAdministration,
+  resetSessionsForRun,
+  type LocalSessions,
+  type SessionAdministration,
+  type SessionBackend,
+} from './sessions/local-sessions.js';
+import {
+  createServiceRunId,
+  createSessionClock,
+  systemMonotonicClock,
+  type MonotonicClock,
+} from './sessions/session-clock.js';
 
 export const LOCAL_SERVICE_STATES = ['STOPPED', 'STARTING', 'READY', 'STOPPING', 'FAILED'] as const;
 
@@ -71,6 +90,7 @@ export type StartupFailureReason =
   | 'migration-failed'
   | 'migration-integrity'
   | 'pending-migrations'
+  | 'session-reset-failed'
   | 'unexpected';
 
 export class LocalServiceStartupError extends Error {
@@ -105,6 +125,10 @@ export interface LocalServiceDependencies {
   readonly passwordHashing?: PasswordHasherOptions;
   /** Lista local de palavras-passe comuns ou comprometidas (PD-33). */
   readonly commonPasswords?: CommonPasswordList;
+  /** Relógio monotónico das sessões, em milissegundos; substituível em testes (D-112). */
+  readonly monotonicClock?: MonotonicClock;
+  /** Política de sessões; valores omitidos usam `DEFAULT_SESSION_POLICY`, inválidos são recusados. */
+  readonly sessionPolicy?: Partial<SessionPolicy>;
 }
 
 export interface LocalService {
@@ -131,6 +155,11 @@ export interface LocalService {
     readonly credentials: CredentialManager;
     /** Inicialização explícita e irrepetível da instalação (D-096). */
     readonly installation: InstallationBootstrap;
+    /**
+     * Administração e manutenção INTERNAS de sessões (E1.07-C). Cada leitura devolve as operações
+     * do arranque corrente; referências de um arranque anterior são recusadas.
+     */
+    readonly sessions: SessionAdministration;
   };
   /** Associações empresariais e locais; exigem `TenantContext` e recusam operações fora de `READY`. */
   readonly companyMemberships: CompanyMembershipRepository;
@@ -142,6 +171,13 @@ export interface LocalService {
    * sessão nem uma autorização empresarial.
    */
   readonly authentication: LocalAuthenticator;
+  /**
+   * Sessões locais (E1.07-C): criação a partir de uma autenticação recente, validação, actividade
+   * e logout. Uma sessão comprova apenas a identidade autenticada; não é uma autorização
+   * empresarial. Cada leitura devolve as operações do arranque corrente; referências de um
+   * arranque anterior são recusadas (`LocalServiceStateError('not-ready')`).
+   */
+  readonly sessions: LocalSessions;
 }
 
 /** Repositórios activos enquanto a ligação está aberta; descartados no encerramento. */
@@ -150,6 +186,9 @@ interface ServiceStores {
   readonly users: UserDirectory;
   readonly memberships: SqliteMembershipPersistence;
   readonly authentication: SqliteAuthenticationStore;
+  readonly sessions: SqliteSessionStore;
+  /** Identificador aleatório deste arranque efectivo; não é o identificador da instalação. */
+  readonly serviceRunId: string;
 }
 
 // Os registos identificam a causa pelo nome e motivo, nunca pela mensagem (pode conter caminhos ou SQL).
@@ -173,13 +212,19 @@ export const createLocalService = (
     clock = () => new Date(),
     commonPasswords = EMPTY_COMMON_PASSWORD_LIST,
     logger,
+    monotonicClock = systemMonotonicClock,
     openDatabase = openSqliteDatabase,
     passwordHashing,
     protectedDirectories,
+    sessionPolicy: sessionPolicyInput,
   }: LocalServiceDependencies,
 ): LocalService => {
-  // Criado antes do arranque: parâmetros inválidos são recusados de imediato.
+  // Criados antes do arranque: parâmetros inválidos são recusados de imediato.
   const hasher = createPasswordHasher(passwordHashing);
+  const sessionPolicy = parseSessionPolicy(sessionPolicyInput ?? {});
+  const sessionClock = createSessionClock(clock, monotonicClock);
+  // Comprovativos de autenticação deste serviço; nunca expostos (D-108).
+  const proofs = createAuthenticationProofRegistry();
   let state: LocalServiceState = 'STOPPED';
   let database: SqliteDatabase | undefined;
   let stores: ServiceStores | undefined;
@@ -233,9 +278,19 @@ export const createLocalService = (
       throw new LocalServiceStartupError('pending-migrations');
     }
     const result = attempt('migration-failed', () => runMigrations(connection));
+    // Cada arranque efectivo tem um identificador novo; as sessões anteriores deixam de ser
+    // válidas e ficam revogadas antes de o serviço aceitar operações (D-114).
+    const serviceRunId = createServiceRunId();
+    const sessionStore = attempt('session-reset-failed', () => createSqliteSessionStore(connection));
+    const reset = attempt('session-reset-failed', () =>
+      resetSessionsForRun(sessionStore, serviceRunId, sessionClock(), sessionPolicy),
+    );
+    logger.log('info', 'service.sessions_reset', { ...reset });
     stores = {
       authentication: createSqliteAuthenticationStore(connection),
       memberships: createSqliteMembershipPersistence(connection),
+      serviceRunId,
+      sessions: sessionStore,
       tenant: createSqliteTenantPersistence(connection),
       users: createSqliteUserDirectory(connection),
     };
@@ -386,15 +441,67 @@ export const createLocalService = (
   // Autenticação (E1.07-B): cada operação obtém o armazenamento em `READY` e, depois de cada
   // derivação assíncrona, confirma que continua a ser o da ligação activa. Uma derivação que
   // termine após `stop()` (ou após um novo arranque) é recusada sem escrever (D-097).
-  const authenticationBackend: AuthenticationBackend = Object.freeze({
+  const assertCurrent = (store: SqliteAuthenticationStore): ServiceStores => {
+    if (state !== 'READY' || stores?.authentication !== store) throw new LocalServiceStateError('not-ready', state);
+    return stores;
+  };
+
+  const authenticationBackend: AuthenticationBackend = Object.freeze<AuthenticationBackend>({
     acquire: () => ready().authentication,
     assertCurrent: (store: SqliteAuthenticationStore) => {
-      if (state !== 'READY' || stores?.authentication !== store) throw new LocalServiceStateError('not-ready', state);
+      assertCurrent(store);
     },
     clock,
     commonPasswords,
     hasher,
+    registerProof: (store, identity, versions) => {
+      const current = assertCurrent(store);
+      proofs.register(identity, {
+        credentialVersion: versions.credentialVersion,
+        issuedAt: sessionClock(),
+        securityVersion: versions.securityVersion,
+        serviceRunId: current.serviceRunId,
+        userId: identity.userId,
+      });
+    },
   });
+
+  // Sessões (E1.07-C): as operações ficam ligadas ao arranque em que foram obtidas. Fora de
+  // `READY`, ou depois de um novo arranque, são recusadas com `not-ready` (D-114).
+  const sessionBackendFor = (serviceRunId: string | undefined): SessionBackend =>
+    Object.freeze({
+      acquire: () => {
+        const current = ready();
+        if (current.serviceRunId !== serviceRunId) throw new LocalServiceStateError('not-ready', state);
+        return { serviceRunId: current.serviceRunId, store: current.sessions };
+      },
+      now: sessionClock,
+      policy: sessionPolicy,
+      proofs,
+    });
+
+  interface RunSessions {
+    readonly serviceRunId: string | undefined;
+    readonly sessions: LocalSessions;
+    readonly administration: SessionAdministration;
+  }
+  const sessionsFor = (serviceRunId: string | undefined): RunSessions => {
+    const backend = sessionBackendFor(serviceRunId);
+    return Object.freeze({
+      administration: createSessionAdministration(backend),
+      serviceRunId,
+      sessions: createLocalSessions(backend),
+    });
+  };
+  // Sem arranque activo: operações que recusam sempre.
+  const detachedSessions = sessionsFor(undefined);
+  let runSessions = detachedSessions;
+  const currentSessions = (): RunSessions => {
+    const serviceRunId = state === 'READY' ? stores?.serviceRunId : undefined;
+    if (serviceRunId === undefined) return detachedSessions;
+    if (runSessions.serviceRunId !== serviceRunId) runSessions = sessionsFor(serviceRunId);
+    return runSessions;
+  };
 
   return {
     get state() {
@@ -414,11 +521,17 @@ export const createLocalService = (
     identityProvisioning: Object.freeze({
       credentials: createCredentialManager(authenticationBackend),
       installation: createInstallationBootstrap(authenticationBackend),
+      get sessions() {
+        return currentSessions().administration;
+      },
       users,
     }),
     companyMemberships,
     branchMemberships,
     membershipScopes,
     authentication: createLocalAuthenticator(authenticationBackend),
+    get sessions() {
+      return currentSessions().sessions;
+    },
   };
 };

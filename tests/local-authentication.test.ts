@@ -732,8 +732,10 @@ describe('Local authentication (E1.07-B)', () => {
       const checksums = legacy.prepare('SELECT version, checksum FROM schema_migrations ORDER BY version').all();
       legacy.close();
 
+      // Alvo explícito: o esquema de E1.07-B (migrações 1 a 3). A migração 4 tem teste próprio (E1.07-C).
+      const e107b = MIGRATIONS.slice(0, 3);
       const upgraded = temporary.open();
-      expect(runMigrations(upgraded)).toEqual({ applied: [3], currentVersion: 3 });
+      expect(runMigrations(upgraded, e107b)).toEqual({ applied: [3], currentVersion: 3 });
 
       expect(snapshot(upgraded)).toEqual(before);
       expect(upgraded.prepare('SELECT version, checksum FROM schema_migrations WHERE version < 3 ORDER BY version').all()).toEqual(
@@ -741,7 +743,7 @@ describe('Local authentication (E1.07-B)', () => {
       );
       expect(checksums).toEqual(MIGRATIONS.slice(0, 2).map((migration) => ({ checksum: migrationChecksum(migration), version: migration.version })));
       expect(count(upgraded, 'password_credentials')).toBe(0);
-      expect(runMigrations(upgraded)).toEqual({ applied: [], currentVersion: 3 });
+      expect(runMigrations(upgraded, e107b)).toEqual({ applied: [], currentVersion: 3 });
     });
 
     it('keeps credentials and the installation state after restarting the service', async () => {

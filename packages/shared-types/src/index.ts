@@ -7,6 +7,7 @@ export * from './membership.js';
 export * from './password-policy.js';
 export * from './repositories.js';
 export * from './sectors.js';
+export * from './session.js';
 export * from './tax-identification.js';
 export * from './tenant-context.js';
 export * from './user.js';

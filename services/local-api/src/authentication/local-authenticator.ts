@@ -24,7 +24,10 @@ import {
 /**
  * Resultado mínimo de uma autenticação local por palavra-passe (D-093). Não é uma sessão, um
  * token nem uma autorização: não contém empresa, tenant, âmbito ou permissões. Só os objectos
- * emitidos por este módulo são reconhecidos por `isAuthenticatedIdentity`.
+ * emitidos por este módulo são reconhecidos por `isAuthenticatedIdentity`, o que NÃO basta para
+ * criar sessões: a criação exige o comprovativo interno associado a este objecto pelo serviço,
+ * válido durante 60 s, de utilização única e ligado ao arranque e às versões de segurança
+ * (E1.07-C, D-108; resolve a PD-40).
  */
 export interface AuthenticatedIdentity {
   readonly userId: UserId;
@@ -150,21 +153,27 @@ export const createLocalAuthenticator = (
         // A identidade ou a credencial podem ter mudado durante a derivação.
         const user = store.findUserById(candidate.user.id);
         const credential = store.findCredential(candidate.user.id);
-        if (user === undefined || !isUserEligible(user) || credential === undefined) return false;
-        if (!credential.hash.equals(candidate.credential.hash)) return false;
+        if (user === undefined || !isUserEligible(user) || credential === undefined) return undefined;
+        if (!credential.hash.equals(candidate.credential.hash)) return undefined;
         store.deleteThrottle(key);
         const instance = instanceAfterSuccess(store.readThrottle(INSTANCE_THROTTLE_KEY));
         if (instance !== undefined) store.writeThrottle(instance);
         if (upgraded !== undefined) {
+          // Avança a versão da credencial e, pelos triggers, revoga as sessões da identidade (D-111).
+          // Na prática não há nenhuma: as de arranques anteriores foram revogadas no arranque e,
+          // com parâmetros fixos por serviço, recalcula a primeira autenticação neste arranque.
           store.replaceCredential(
             { ...upgraded, createdAt: credential.createdAt, updatedAt: at.toISOString() as Timestamp, userId: user.id },
             credential.hash,
           );
         }
-        return true;
+        // Versões confirmadas na mesma transacção, depois de qualquer recálculo.
+        return store.readSecurityVersions(user.id);
       });
-      if (!confirmed) return INVALID;
-      return Object.freeze({ identity: issueIdentity(candidate.user.id, at), ok: true });
+      if (confirmed === undefined) return INVALID;
+      const identity = issueIdentity(candidate.user.id, at);
+      backend.registerProof(store, identity, confirmed);
+      return Object.freeze({ identity, ok: true });
     },
   });
 };

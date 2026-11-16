@@ -38,6 +38,15 @@ export interface ThrottleRecord {
   readonly lastAttemptAt: string;
 }
 
+/**
+ * Versões de segurança correntes de uma identidade com credencial (E1.07-C, D-110): avançam
+ * sempre que o estado da identidade ou a credencial mudam, e nunca diminuem.
+ */
+export interface SecurityVersions {
+  readonly securityVersion: number;
+  readonly credentialVersion: number;
+}
+
 export interface InstallationBootstrapRecord {
   readonly initialAdministratorId: UserId;
   readonly completedAt: string;
@@ -59,9 +68,12 @@ export interface SqliteAuthenticationStore {
   insertCredential(credential: StoredPasswordCredential): void;
   /**
    * Substitui a credencial só se o hash actual for `expectedHash` (concorrência optimista);
-   * caso contrário, `RecordConflictError('credential-changed')`.
+   * caso contrário, `RecordConflictError('credential-changed')`. Avança sempre a versão da
+   * credencial; os triggers da migração 4 revogam as sessões da identidade na mesma instrução.
    */
   replaceCredential(credential: StoredPasswordCredential, expectedHash: Buffer): void;
+  /** Versões correntes da identidade e da sua credencial; `undefined` sem identidade ou sem credencial. */
+  readSecurityVersions(userId: UserId): SecurityVersions | undefined;
   readThrottle(key: string): ThrottleRecord | undefined;
   writeThrottle(record: ThrottleRecord): void;
   deleteThrottle(key: string): void;
@@ -88,8 +100,10 @@ const SQL = {
     VALUES (@userId, @algorithm, @algorithmVersion, @memoryKiB, @passes, @parallelism, @salt, @hash, @createdAt, @updatedAt)`,
   replaceCredential: `UPDATE password_credentials SET algorithm = @algorithm, algorithm_version = @algorithmVersion,
     memory_kib = @memoryKiB, passes = @passes, parallelism = @parallelism, salt = @salt, hash = @hash,
-    updated_at = @updatedAt
+    updated_at = @updatedAt, credential_version = credential_version + 1
     WHERE user_id = @userId AND hash = @expectedHash`,
+  securityVersions: `SELECT u.security_version AS securityVersion, c.credential_version AS credentialVersion
+    FROM users u JOIN password_credentials c ON c.user_id = u.id WHERE u.id = ?`,
   throttleByKey: `SELECT throttle_key AS key, failures, window_started_at AS windowStartedAt,
     locked_until AS lockedUntil, last_attempt_at AS lastAttemptAt FROM authentication_throttle WHERE throttle_key = ?`,
   upsertThrottle: `INSERT INTO authentication_throttle
@@ -114,6 +128,12 @@ const SQL = {
 const integer = (row: Record<string, unknown>, key: string): number => {
   const value = row[key];
   if (typeof value !== 'number' || !Number.isSafeInteger(value)) throw new PersistenceError('invalid-stored-record');
+  return value;
+};
+
+const positiveInteger = (row: Record<string, unknown>, key: string): number => {
+  const value = integer(row, key);
+  if (value < 1) throw new PersistenceError('invalid-stored-record');
   return value;
 };
 
@@ -209,6 +229,17 @@ export const createSqliteAuthenticationStore = (database: SqliteDatabase): Sqlit
     replaceCredential: (credential, expectedHash) => {
       const result = statements.replaceCredential.run({ ...credentialParameters(credential), expectedHash });
       if (result.changes !== 1) throw new RecordConflictError('credential-changed');
+    },
+    readSecurityVersions: (userId) => {
+      const row: unknown = statements.securityVersions.get(userId);
+      if (row === undefined) return undefined;
+      const record = readRow(row);
+      return restoreStored(() =>
+        Object.freeze({
+          credentialVersion: positiveInteger(record, 'credentialVersion'),
+          securityVersion: positiveInteger(record, 'securityVersion'),
+        }),
+      );
     },
     readThrottle: (key) => {
       const row: unknown = statements.throttleByKey.get(key);

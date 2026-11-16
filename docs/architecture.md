@@ -2,7 +2,7 @@
 
 ## Estado deste documento
 
-Este documento regista a fundação E1.01, a primeira aplicação desktop E1.02, a arquitectura de negócio consolidada em E1.02-H, os contratos multiempresa de E1.03, a persistência SQLite de E1.04, o ciclo de vida do serviço local de E1.05, o ambiente de execução e as decisões de E1.06, a actualização segura do Electron em E1.06-S1, a modernização do Vitest em E1.06-S2, a identidade local com associações multiempresa de E1.07-A e a autenticação local offline de E1.07-B. “Definido” significa uma decisão já fornecida ou validada pelo projecto; “pendente” requer validação posterior e não deve ser inferido.
+Este documento regista a fundação E1.01, a primeira aplicação desktop E1.02, a arquitectura de negócio consolidada em E1.02-H, os contratos multiempresa de E1.03, a persistência SQLite de E1.04, o ciclo de vida do serviço local de E1.05, o ambiente de execução e as decisões de E1.06, a actualização segura do Electron em E1.06-S1, a modernização do Vitest em E1.06-S2, a identidade local com associações multiempresa de E1.07-A, a autenticação local offline de E1.07-B e as sessões locais revogáveis de E1.07-C. “Definido” significa uma decisão já fornecida ou validada pelo projecto; “pendente” requer validação posterior e não deve ser inferido.
 
 ## Visão geral
 
@@ -172,11 +172,12 @@ main.ts ──> cli.ts ──> config.ts (process.env → LocalServiceConfig val
     4. corre `inspectMigrations` (integridade);
     5. aplica `onPendingMigrations` (`fail` recusa sem alterar);
     6. corre `runMigrations`;
-    7. cria os repositórios.
+    7. cria os repositórios;
+    8. gera o `serviceRunId` do arranque, revoga as sessões de arranques anteriores e limpa as terminadas fora da retenção (E1.07-C, D-114).
 
-    Qualquer falha fecha a ligação antes de `FAILED`, com motivo `invalid-location`, `database-missing`, `database-open-failed`, `migration-integrity`, `pending-migrations`, `migration-failed` ou `unexpected` (D-048).
+    Qualquer falha fecha a ligação antes de `FAILED`, com motivo `invalid-location`, `database-missing`, `database-open-failed`, `migration-integrity`, `pending-migrations`, `migration-failed`, `session-reset-failed` (E1.07-C) ou `unexpected` (D-048).
   - `companies`, `branches` e `transaction` delegam nos repositórios SQLite (isolamento por tenant inalterado) e recusam qualquer operação fora de `READY` com `LocalServiceStateError('not-ready')` (D-047).
-- **Registos** (`logger.ts`, D-046): uma linha JSON por evento, com `time`, `level`, `event`, `instanceId` e campos escalares. Os eventos são `service.state_changed`, `service.starting`, `service.database_opened`, `service.ready`, `service.start_failed`, `service.stopped`, `service.stop_failed`, `service.release_failed`, `service.config_invalid`, `service.arguments_invalid`, `service.waiting_for_shutdown` e `service.shutdown_requested`. A base é identificada só pelo nome do ficheiro, as causas por nome e motivo, e as chaves sensíveis são redigidas.
+- **Registos** (`logger.ts`, D-046): uma linha JSON por evento, com `time`, `level`, `event`, `instanceId` e campos escalares. Os eventos são `service.state_changed`, `service.starting`, `service.database_opened`, `service.ready`, `service.start_failed`, `service.stopped`, `service.stop_failed`, `service.release_failed`, `service.config_invalid`, `service.arguments_invalid`, `service.waiting_for_shutdown`, `service.shutdown_requested` e `service.sessions_reset` (E1.07-C, só contagens). A base é identificada só pelo nome do ficheiro, as causas por nome e motivo, e as chaves sensíveis são redigidas.
 - **Executável** (`main.ts`, `cli.ts`, D-049): `node dist/main.js` fica em `READY` até `SIGINT`/`SIGTERM` (e `SIGBREAK` em Windows); `--check` arranca e encerra. Códigos de saída: 0, 1 (arranque ou encerramento) e 2 (configuração ou argumentos).
 - **Verificação**: `tests/local-service.test.ts` cobre o ciclo de vida, as falhas, a recuperação, a configuração, os registos, a CLI e a independência do Electron. A suite de contrato corre também através do serviço (D-051).
 - **Identidades e associações (E1.07-A)**: o serviço compõe internamente `identityProvisioning.users`, `companyMemberships`, `branchMemberships` e `membershipScopes` sobre a mesma ligação. Estão sujeitos à mesma guarda de `READY`, verificada em cada chamada, pelo que referências antigas falham depois do encerramento. Não são expostos pela CLI nem por qualquer canal externo (D-087).
@@ -217,7 +218,7 @@ autoridade da instalação                         contexto empresarial (TenantC
 
 ## Autenticação local (E1.07-B)
 
-Localização: política em `packages/shared-types/src/password-policy.ts`; persistência em `packages/database/src/sqlite-authentication-store.ts`; serviço em `services/local-api/src/authentication/`. Funciona offline, só dentro do serviço local, sem HTTP, IPC nem interface. **Não há sessões nem autorização funcional.** O `TenantContext` continua a ser construído pelo chamador (PD-27).
+Localização: política em `packages/shared-types/src/password-policy.ts`; persistência em `packages/database/src/sqlite-authentication-store.ts`; serviço em `services/local-api/src/authentication/`. Funciona offline, só dentro do serviço local, sem HTTP, IPC nem interface. O resultado não é uma sessão: as sessões são criadas a partir do comprovativo interno descrito em “Sessões locais (E1.07-C)”. Não há autorização funcional, e o `TenantContext` continua a ser construído pelo chamador (PD-27).
 
 ```text
 authenticate(username, password)
@@ -252,6 +253,36 @@ authenticate(username, password)
 - **Gestão de credenciais (D-095):** só interna (`create`/`replace`).
 - **Limites conhecidos:** canais temporais (PD-34), ausência de *pepper* (PD-32) e desvio NIST no limite de falhas consecutivas (PD-35). Detalhe em [tasks/E1.07-B.md](tasks/E1.07-B.md#limites-conhecidos).
 
+## Sessões locais (E1.07-C)
+
+Localização: contratos em `packages/shared-types/src/session.ts`; persistência em `packages/database/src/sqlite-session-store.ts` (migração 4); serviço em `services/local-api/src/sessions/`. Só dentro do serviço local, sem HTTP, IPC nem interface. Uma sessão comprova apenas a identidade autenticada; não é uma autorização empresarial (D-107, D-116). Detalhe em [tasks/E1.07-C.md](tasks/E1.07-C.md).
+
+```text
+authenticate ──▶ AuthenticatedIdentity ◀── comprovativo privado (WeakMap do serviço):
+                                           userId, versões, serviceRunId, emissão; 60 s; uso único
+sessions.create(identity) ── READY e mesmo arranque ── consome o comprovativo ── idade ≤ 60 s
+   └─ transacção IMMEDIATE: identidade ACTIVE, versões iguais, sessões válidas < 5
+        └─ token 32 bytes (Base64URL) ──▶ SHA-256 ──▶ local_sessions          (token devolvido só aqui)
+sessions.validate / registerActivity / logout          identityProvisioning.sessions.* (interno)
+```
+
+- **Comprovativo (D-108):** associado pelo serviço ao objecto devolvido por `authenticate`, não persistido e não construível. Ligado às versões lidas na transacção de confirmação e ao arranque. Retirado antes de qualquer verificação, pelo que só serve uma vez, mesmo com utilizações concorrentes. `isAuthenticatedIdentity` não basta (PD-40 resolvida).
+- **Versões de segurança (D-110, D-111):** `users.security_version` e `password_credentials.credential_version`, monotónicas, inicializadas a 1. Triggers da migração 4 avançam a versão e revogam as sessões, na mesma instrução, em qualquer alteração de estado ou do verificador da credencial. As credenciais nunca são eliminadas.
+- **Modelo (D-109):** `local_sessions` guarda `SessionId`, `user_id`, digest SHA-256 (`UNIQUE`), versões, `service_run_id`, criação, última actividade, expiração absoluta e revogação com motivo. A ligação é imutável, a revogação é definitiva e a actividade nunca recua (triggers).
+- **Tokens (D-113):** 32 bytes de `crypto.randomBytes`, Base64URL de 43 caracteres, formato canónico obrigatório. Só o digest é persistido. O token nunca é registado nem guardado.
+- **Política (D-107, D-115):**
+  - valores iniciais: 30 min de inactividade, 12 h absolutas, 5 sessões válidas por identidade (recusa controlada, sem revogar outras), comprovativo de 60 s e retenção de 30 dias;
+  - configuração tipada e limitada (`sessionPolicy`).
+- **Validação:** existência, digest em tempo constante, revogação, arranque, estado da identidade, versões, inactividade e expiração absoluta, numa única consulta. Versões ou arranque incompatíveis recusam mesmo sem marcador de revogação. A actividade só é registada após uma validação bem-sucedida, nunca além da expiração absoluta.
+- **Revogação:** logout, revogação individual e de todas as sessões da identidade (que avança também a versão), suspensão, desactivação, substituição de credencial, alteração da versão e reinício. As sessões revogadas mantêm-se até à retenção.
+- **Relógio (D-112):** instante efectivo = máximo entre o relógio de parede, a âncora mais o tempo monotónico e o último instante. Um retrocesso não prolonga validades; um avanço antecipa-as.
+- **Ciclo de vida (D-114):**
+  - cada arranque tem um `serviceRunId` de 128 bits, distinto do identificador da instalação;
+  - as operações exigem `READY` e ficam ligadas ao arranque em que foram obtidas;
+  - as sessões anteriores são revogadas antes de `READY`.
+- **Fronteira (D-116):** a validação devolve só `sessionId`, `userId` e expirações. Sem tenant, âmbito ou permissões. E1.07-D derivará o `TenantContext` a partir de uma sessão validada, da associação, do âmbito e da permissão.
+- **Limites conhecidos:** reinício termina todas as sessões (PD-41); transporte do token por definir em E1.08 (PD-42); um único serviço por base (PD-43); auditoria das sessões em E1.07-E (PD-26).
+
 ## Decisões definidas
 
 - Monorepositório com pnpm workspaces e Git.
@@ -284,6 +315,7 @@ authenticate(username, password)
 - Vitest 5.1.0, com condições de resolução `source` declaradas para os ambientes `client` e `ssr` (D-077 e D-078).
 - Identidade local com `UserId` próprio; acesso a empresas só por associação explícita; âmbitos `COMPANY_WIDE`/`BRANCH_RESTRICTED` sem permissões; administração KIL como autoridade distinta; identidade, autorização e licenciamento separados (D-080 a D-084). Concretização em E1.07-A (D-085 a D-089).
 - Autenticação local offline com Argon2id nativo (RFC 9106), política NIST SP 800-63B, limitação persistente de tentativas, inicialização explícita da instalação e integração segura no ciclo de vida do serviço (D-090 a D-097).
+- Sessões locais revogáveis com tokens opacos, comprovativo interno de utilização única, versões de segurança monotónicas, relógio efectivo conservador e ligação ao arranque do serviço; uma sessão não é uma autorização empresarial (D-107 a D-116).
 
 ## Estrutura do monorepositório
 
@@ -307,7 +339,7 @@ authenticate(username, password)
 - Estratégia e protocolo de sincronização, resolução de conflitos, idempotência e operação offline.
 - Modelo de tenancy no PostgreSQL (colunas, schemas ou bases separadas), row-level security e driver PostgreSQL.
 - Framework de empacotamento, actualizações e assinatura de código do Electron.
-- Estratégia de autenticação, autorização, gestão de sessões e recuperação de conta; origem autenticada do `TenantContext` (E1.07-C e E1.07-D; o modelo de identidade e associações está definido desde E1.07-A e a autenticação local desde E1.07-B).
+- Estratégia de autorização e recuperação de conta; origem autenticada do `TenantContext` (E1.07-D e E1.07-E). O modelo de identidade e associações está definido desde E1.07-A, a autenticação local desde E1.07-B e as sessões locais desde E1.07-C; o transporte da sessão até à interface fica para E1.08 (PD-42).
 - Hosting, observabilidade, backups, recuperação de desastre e topologia de implantação.
 - Biblioteca de componentes e sistema visual definitivo.
 - Versões e arquitectura concretas do React Native quando começar o monitor móvel.
@@ -323,4 +355,4 @@ authenticate(username, password)
 
 ## Restrições da fundação
 
-E1.01 a E1.07-B não criam bases de produção, endpoints de negócio, POS, facturação, contabilidade ou módulos sectoriais. E1.07-A cria identidades e associações. E1.07-B acrescenta credenciais e autenticação local, mas sem sessões, tokens, permissões nem qualquer exposição externa. A persistência SQLite é gerida pelo serviço local, sem servidor HTTP e sem localização de produção definida. Os indicadores visuais da aplicação desktop são explicitamente demonstrativos. Os pacotes de domínio contêm apenas contratos e validações estruturais, sem regras fiscais, contabilísticas ou sectoriais.
+E1.01 a E1.07-C não criam bases de produção, endpoints de negócio, POS, facturação, contabilidade ou módulos sectoriais. E1.07-A cria identidades e associações. E1.07-B acrescenta credenciais e autenticação local. E1.07-C acrescenta sessões locais revogáveis, sem permissões, RBAC, JWT nem qualquer exposição externa. A persistência SQLite é gerida pelo serviço local, sem servidor HTTP e sem localização de produção definida. Os indicadores visuais da aplicação desktop são explicitamente demonstrativos. Os pacotes de domínio contêm apenas contratos e validações estruturais, sem regras fiscais, contabilísticas ou sectoriais.

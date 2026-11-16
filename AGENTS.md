@@ -76,8 +76,14 @@ Após concluir cada tarefa:
 - Executar todas as validações obrigatórias.
 - Actualizar a documentação e o estado do projecto.
 - Criar um commit descritivo.
-- Publicar as alterações na branch autorizada do GitHub (`main`, salvo indicação diferente do responsável).
+- Publicar as alterações na branch autorizada do GitHub: a branch da tarefa para trabalho de implementação (ver “Revisão antes do merge”); `main` só para registos que o responsável autorize publicar directamente.
 - Confirmar que o checkpoint local corresponde ao remoto (`git rev-parse HEAD` igual a `git ls-remote origin refs/heads/<branch>`).
+
+Revisão antes do merge:
+
+- O trabalho de implementação é publicado numa branch própria da tarefa, nunca directamente na `main`, salvo indicação diferente do responsável.
+- A sequência é: implementação, validação, publicação, revisão independente, aprovação explícita do responsável e merge autorizado.
+- Nenhum agente faz merge automático nem integra a sua própria branch sem essa aprovação. O pedido de integração (PR) é preparado e a sua descrição fica no ficheiro da tarefa.
 
 Proibições:
 

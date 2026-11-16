@@ -55,18 +55,26 @@ Copie `.env.example` para `.env` apenas no ambiente local e substitua os marcado
 - `services/central-api`: API Fastify para serviços centrais.
 - `services/sync-service`: futuro serviço de sincronização.
 - `packages/shared-types`: contratos de domínio multiempresa, identidades locais e associações a empresas e estabelecimentos.
-- `packages/database`: persistência SQLite local isolada por empresa, incluindo identidades e associações (migração 2).
+- `packages/database`: persistência SQLite local isolada por empresa, incluindo identidades e associações (migração 2), credenciais (migração 3) e sessões locais (migração 4).
 - Restantes `packages/*`: fronteiras partilhadas, ainda sem regras de negócio.
 - `tests`: verificações transversais iniciais.
 - `docs`: decisões de arquitectura.
 
-O sistema **ainda não tem sessões nem autorização funcional**. Desde E1.07-A
-existem identidades locais e associações multiempresa. Desde E1.07-B existe
-autenticação local offline por username e palavra-passe:
+O sistema **ainda não tem autorização funcional**. Desde E1.07-A existem
+identidades locais e associações multiempresa. Desde E1.07-B existe autenticação
+local offline por username e palavra-passe:
 - Argon2id nativo do Node.js;
 - política NIST SP 800-63B;
 - limitação persistente de tentativas;
 - inicialização explícita da instalação, sem contas predefinidas.
+
+E1.07-C (branch `feat/e107-c-secure-sessions`, em revisão) acrescenta sessões
+locais revogáveis:
+- tokens opacos, dos quais só se guarda o digest;
+- expiração por inactividade e absoluta;
+- revogação na suspensão, na substituição de credenciais e no reinício do serviço.
+
+Uma sessão comprova apenas a identidade autenticada: não concede acesso a empresas.
 
 Estas funções existem apenas na composição interna do serviço local, sem HTTP nem
 IPC. O plano das subtarefas seguintes está em [docs/tasks/E1.07.md](docs/tasks/E1.07.md).

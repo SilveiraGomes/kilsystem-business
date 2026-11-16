@@ -154,10 +154,125 @@ CREATE TABLE installation_bootstrap (
 ) STRICT;
 `;
 
+// E1.07-C: versões de segurança e sessões locais. Não destrutiva: só acrescenta colunas com valor
+// inicial 1 (identidades e credenciais existentes ficam na versão 1, sem tocar em hashes), uma
+// tabela, índices e triggers. Os triggers tornam as versões monotónicas e garantem, na mesma
+// instrução SQL, que qualquer alteração de estado da identidade ou da credencial avança a versão
+// e revoga as sessões afectadas, seja qual for o caminho de escrita (D-110, D-111).
+const V4_SESSIONS_AND_SECURITY_VERSIONS = `
+ALTER TABLE users ADD COLUMN security_version INTEGER NOT NULL DEFAULT 1 CHECK (security_version >= 1);
+
+ALTER TABLE password_credentials ADD COLUMN credential_version INTEGER NOT NULL DEFAULT 1 CHECK (credential_version >= 1);
+
+CREATE TABLE local_sessions (
+  id TEXT PRIMARY KEY NOT NULL,
+  user_id TEXT NOT NULL REFERENCES users (id) ON UPDATE RESTRICT ON DELETE RESTRICT,
+  token_digest BLOB NOT NULL CHECK (length(token_digest) = 32),
+  security_version INTEGER NOT NULL CHECK (security_version >= 1),
+  credential_version INTEGER NOT NULL CHECK (credential_version >= 1),
+  service_run_id TEXT NOT NULL CHECK (length(service_run_id) = 32 AND service_run_id NOT GLOB '*[^0-9a-f]*'),
+  created_at TEXT NOT NULL,
+  last_activity_at TEXT NOT NULL,
+  absolute_expires_at TEXT NOT NULL,
+  revoked_at TEXT,
+  revocation_reason TEXT CHECK (revocation_reason IS NULL OR revocation_reason IN (
+    'logout', 'administrative', 'user-sessions-revoked', 'identity-status-changed', 'credential-replaced',
+    'security-version-changed', 'service-restarted', 'idle-timeout', 'absolute-timeout'
+  )),
+  CONSTRAINT local_sessions_token_digest_unique UNIQUE (token_digest),
+  CONSTRAINT local_sessions_revocation_complete CHECK ((revoked_at IS NULL) = (revocation_reason IS NULL)),
+  CONSTRAINT local_sessions_lifetime CHECK (absolute_expires_at > created_at),
+  CONSTRAINT local_sessions_activity_window CHECK (last_activity_at >= created_at AND last_activity_at <= absolute_expires_at)
+) STRICT;
+
+CREATE INDEX local_sessions_active_user_idx ON local_sessions (user_id) WHERE revoked_at IS NULL;
+CREATE INDEX local_sessions_active_run_idx ON local_sessions (service_run_id) WHERE revoked_at IS NULL;
+CREATE INDEX local_sessions_ended_idx ON local_sessions (revoked_at) WHERE revoked_at IS NOT NULL;
+
+CREATE TRIGGER local_sessions_binding_immutable
+BEFORE UPDATE OF id, user_id, token_digest, security_version, credential_version, service_run_id, created_at,
+  absolute_expires_at ON local_sessions
+BEGIN
+  SELECT RAISE(ABORT, 'local_sessions binding is immutable');
+END;
+
+CREATE TRIGGER local_sessions_revocation_final
+BEFORE UPDATE OF revoked_at, revocation_reason ON local_sessions
+WHEN OLD.revoked_at IS NOT NULL
+BEGIN
+  SELECT RAISE(ABORT, 'local_sessions revocation is final');
+END;
+
+CREATE TRIGGER local_sessions_activity_monotonic
+BEFORE UPDATE OF last_activity_at ON local_sessions
+WHEN OLD.revoked_at IS NOT NULL OR NEW.last_activity_at < OLD.last_activity_at
+BEGIN
+  SELECT RAISE(ABORT, 'local_sessions activity cannot move backwards or follow revocation');
+END;
+
+CREATE TRIGGER users_security_version_monotonic
+BEFORE UPDATE OF security_version ON users
+WHEN NEW.security_version < OLD.security_version
+BEGIN
+  SELECT RAISE(ABORT, 'users security_version cannot decrease');
+END;
+
+CREATE TRIGGER users_status_change_revokes_sessions
+AFTER UPDATE OF status ON users
+WHEN NEW.status IS NOT OLD.status
+BEGIN
+  UPDATE local_sessions SET revoked_at = NEW.updated_at, revocation_reason = 'identity-status-changed'
+    WHERE user_id = NEW.id AND revoked_at IS NULL;
+  UPDATE users SET security_version = max(NEW.security_version, OLD.security_version + 1) WHERE id = NEW.id;
+END;
+
+CREATE TRIGGER users_security_version_revokes_sessions
+AFTER UPDATE OF security_version ON users
+WHEN NEW.security_version > OLD.security_version
+BEGIN
+  UPDATE local_sessions SET revoked_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+    revocation_reason = 'security-version-changed'
+    WHERE user_id = NEW.id AND revoked_at IS NULL;
+END;
+
+CREATE TRIGGER password_credentials_version_monotonic
+BEFORE UPDATE OF credential_version ON password_credentials
+WHEN NEW.credential_version < OLD.credential_version
+BEGIN
+  SELECT RAISE(ABORT, 'password_credentials credential_version cannot decrease');
+END;
+
+CREATE TRIGGER password_credentials_change_requires_new_version
+BEFORE UPDATE ON password_credentials
+WHEN NEW.credential_version <= OLD.credential_version AND (
+  NEW.user_id IS NOT OLD.user_id OR NEW.hash IS NOT OLD.hash OR NEW.salt IS NOT OLD.salt
+  OR NEW.algorithm IS NOT OLD.algorithm OR NEW.algorithm_version IS NOT OLD.algorithm_version
+  OR NEW.memory_kib IS NOT OLD.memory_kib OR NEW.passes IS NOT OLD.passes OR NEW.parallelism IS NOT OLD.parallelism
+)
+BEGIN
+  SELECT RAISE(ABORT, 'password_credentials change requires a new credential_version');
+END;
+
+CREATE TRIGGER password_credentials_version_revokes_sessions
+AFTER UPDATE OF credential_version ON password_credentials
+WHEN NEW.credential_version > OLD.credential_version
+BEGIN
+  UPDATE local_sessions SET revoked_at = NEW.updated_at, revocation_reason = 'credential-replaced'
+    WHERE user_id = NEW.user_id AND revoked_at IS NULL;
+END;
+
+CREATE TRIGGER password_credentials_never_deleted
+BEFORE DELETE ON password_credentials
+BEGIN
+  SELECT RAISE(ABORT, 'password_credentials are replaced, never deleted');
+END;
+`;
+
 export const MIGRATIONS: readonly Migration[] = Object.freeze([
   Object.freeze({ name: 'create_companies_and_branches', sql: V1_COMPANIES_AND_BRANCHES, version: 1 }),
   Object.freeze({ name: 'create_users_and_memberships', sql: V2_USERS_AND_MEMBERSHIPS, version: 2 }),
   Object.freeze({ name: 'create_credentials_and_authentication', sql: V3_CREDENTIALS_AND_AUTHENTICATION, version: 3 }),
+  Object.freeze({ name: 'create_sessions_and_security_versions', sql: V4_SESSIONS_AND_SECURITY_VERSIONS, version: 4 }),
 ]);
 
 export const migrationChecksum = (migration: Migration): string =>
