@@ -279,13 +279,12 @@ export const createLocalService = (
     }
     const result = attempt('migration-failed', () => runMigrations(connection));
     // Cada arranque efectivo tem um identificador novo; as sessões anteriores deixam de ser
-    // válidas e ficam revogadas antes de o serviço aceitar operações (D-114).
+    // válidas e ficam revogadas antes de o serviço aceitar operações (D-114). A eliminação de
+    // registos terminados no arranque está suspensa (D-125, PD-47).
     const serviceRunId = createServiceRunId();
     const sessionStore = attempt('session-reset-failed', () => createSqliteSessionStore(connection));
-    const reset = attempt('session-reset-failed', () =>
-      resetSessionsForRun(sessionStore, serviceRunId, sessionClock(), sessionPolicy),
-    );
-    logger.log('info', 'service.sessions_reset', { ...reset });
+    const reset = attempt('session-reset-failed', () => resetSessionsForRun(sessionStore, serviceRunId, sessionClock()));
+    logger.log('info', 'service.sessions_reset', { ...reset, startupDeletion: 'suspended' });
     stores = {
       authentication: createSqliteAuthenticationStore(connection),
       memberships: createSqliteMembershipPersistence(connection),

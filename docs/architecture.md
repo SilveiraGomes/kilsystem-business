@@ -173,7 +173,7 @@ main.ts ──> cli.ts ──> config.ts (process.env → LocalServiceConfig val
     5. aplica `onPendingMigrations` (`fail` recusa sem alterar);
     6. corre `runMigrations`;
     7. cria os repositórios;
-    8. gera o `serviceRunId` do arranque, revoga as sessões de arranques anteriores e limpa as terminadas fora da retenção (E1.07-C, D-114).
+    8. gera o `serviceRunId` do arranque e revoga as sessões de arranques anteriores (E1.07-C, D-114). Desde E1.07-C-R1, o arranque **não elimina** registos de sessões (D-125, PD-47).
 
     Qualquer falha fecha a ligação antes de `FAILED`, com motivo `invalid-location`, `database-missing`, `database-open-failed`, `migration-integrity`, `pending-migrations`, `migration-failed`, `session-reset-failed` (E1.07-C) ou `unexpected` (D-048).
   - `companies`, `branches` e `transaction` delegam nos repositórios SQLite (isolamento por tenant inalterado) e recusam qualquer operação fora de `READY` com `LocalServiceStateError('not-ready')` (D-047).
@@ -255,7 +255,7 @@ authenticate(username, password)
 
 ## Sessões locais (E1.07-C)
 
-Localização: contratos em `packages/shared-types/src/session.ts`; persistência em `packages/database/src/sqlite-session-store.ts` (migração 4); serviço em `services/local-api/src/sessions/`. Só dentro do serviço local, sem HTTP, IPC nem interface. Uma sessão comprova apenas a identidade autenticada; não é uma autorização empresarial (D-107, D-116). Detalhe em [tasks/E1.07-C.md](tasks/E1.07-C.md).
+Localização: contratos em `packages/shared-types/src/session.ts`; persistência em `packages/database/src/sqlite-session-store.ts` (migrações 4 e 5); serviço em `services/local-api/src/sessions/`. Só dentro do serviço local, sem HTTP, IPC nem interface. Uma sessão comprova apenas a identidade autenticada; não é uma autorização empresarial (D-107, D-116). Detalhe em [tasks/E1.07-C.md](tasks/E1.07-C.md).
 
 ```text
 authenticate ──▶ AuthenticatedIdentity ◀── comprovativo privado (WeakMap do serviço):
@@ -267,7 +267,17 @@ sessions.validate / registerActivity / logout          identityProvisioning.sess
 ```
 
 - **Comprovativo (D-108):** associado pelo serviço ao objecto devolvido por `authenticate`, não persistido e não construível. Ligado às versões lidas na transacção de confirmação e ao arranque. Retirado antes de qualquer verificação, pelo que só serve uma vez, mesmo com utilizações concorrentes. `isAuthenticatedIdentity` não basta (PD-40 resolvida).
-- **Versões de segurança (D-110, D-111):** `users.security_version` e `password_credentials.credential_version`, monotónicas, inicializadas a 1. Triggers da migração 4 avançam a versão e revogam as sessões, na mesma instrução, em qualquer alteração de estado ou do verificador da credencial. As credenciais nunca são eliminadas.
+- **Versões de segurança (D-110, D-111, D-126):** `users.security_version` e `password_credentials.credential_version`, monotónicas, inicializadas a 1. Triggers da migração 4 avançam a versão e revogam as sessões, na mesma instrução, em qualquer alteração de estado ou do verificador da credencial. As credenciais nunca são eliminadas. A migração 5 (E1.07-C-R1) impede reinserções:
+  - identidades, credenciais e sessões existentes nunca são reinseridas (`INSERT OR REPLACE`, `REPLACE`, UPSERT ou `INSERT` repetido), com `foreign_keys` e `recursive_triggers` em qualquer valor, porque os triggers `BEFORE INSERT` correm antes da resolução de conflitos;
+  - uma linha reinserida após uma eliminação nunca reutiliza uma versão já ligada a sessões da identidade, e as sessões ainda activas dessa identidade são revogadas;
+  - as chaves `users.id` e `password_credentials.user_id` são imutáveis.
+- **Distinções (E1.07-C-R1):**
+  - *recálculo de parâmetros* (D-092): na primeira autenticação bem sucedida com parâmetros antigos, o mesmo segredo é derivado de novo; a versão da credencial avança e as sessões da identidade são revogadas, mas o comprovativo emitido nessa autenticação já tem a versão nova;
+  - *troca de palavra-passe* (`credentials.replace`): novo verificador e nova versão; revoga as sessões e limpa a limitação do username;
+  - *revogação*: marcador definitivo (`revoked_at`, motivo); a validade depende também das versões e do arranque, pelo que versões diferentes recusam mesmo sem marcador;
+  - *versões*: inteiros monotónicos que invalidam sessões e comprovativos ligados a valores anteriores;
+  - *fontes temporais dos triggers* (RV-07): `revoked_at` vem de `updated_at` fornecido pelo chamador (estado e credencial) ou do relógio do SQLite (`security_version`). São informativas: nenhuma decisão de validade as usa, e a eliminação exige também a expiração absoluta antiga, calculada pelo relógio das sessões.
+- **Fronteira de confiança da base:** os triggers protegem contra defeitos da aplicação e contra escritas SQL pela ligação normal, incluindo `REPLACE`/UPSERT e pragmas desligados. Não protegem contra quem controle o esquema ou o ficheiro (eliminar triggers, `writable_schema`, edição directa) nem contra quem insira sessões directamente: com escrita arbitrária na base, um actor pode criar uma sessão com um token que conheça. A protecção do ficheiro da base é do sistema operativo e da instalação (E1.10).
 - **Modelo (D-109):** `local_sessions` guarda `SessionId`, `user_id`, digest SHA-256 (`UNIQUE`), versões, `service_run_id`, criação, última actividade, expiração absoluta e revogação com motivo. A ligação é imutável, a revogação é definitiva e a actividade nunca recua (triggers).
 - **Tokens (D-113):** 32 bytes de `crypto.randomBytes`, Base64URL de 43 caracteres, formato canónico obrigatório. Só o digest é persistido. O token nunca é registado nem guardado.
 - **Política (D-107, D-115):**
@@ -275,13 +285,18 @@ sessions.validate / registerActivity / logout          identityProvisioning.sess
   - configuração tipada e limitada (`sessionPolicy`).
 - **Validação:** existência, digest em tempo constante, revogação, arranque, estado da identidade, versões, inactividade e expiração absoluta, numa única consulta. Versões ou arranque incompatíveis recusam mesmo sem marcador de revogação. A actividade só é registada após uma validação bem-sucedida, nunca além da expiração absoluta.
 - **Revogação:** logout, revogação individual e de todas as sessões da identidade (que avança também a versão), suspensão, desactivação, substituição de credencial, alteração da versão e reinício. As sessões revogadas mantêm-se até à retenção.
-- **Relógio (D-112):** instante efectivo = máximo entre o relógio de parede, a âncora mais o tempo monotónico e o último instante. Um retrocesso não prolonga validades; um avanço antecipa-as. **Defeito conhecido (RV-01, PD-45):** depois de um avanço seguido de retrocesso, o instante efectivo congela até o tempo real o alcançar; correcção proposta em [tasks/E1.07-C-M.md](tasks/E1.07-C-M.md).
+- **Relógio (D-112, corrigido por D-124):** `efectivo = max(parede, efectivo anterior + Δmonotónico)`, ambos em milissegundos, calculado a partir de uma base que só muda quando o relógio de parede passa à frente (sem erro acumulado em leituras frequentes). O instante nunca recua e avança sempre, pelo menos, o tempo monotónico decorrido: um retrocesso não prolonga validades, um avanço antecipa-as, e um avanço seguido de retrocesso já não congela o relógio (RV-01, corrigido em E1.07-C-R1). Uma única autoridade temporal decide todas as validades das sessões: emissão e idade do comprovativo, criação, actividade, inactividade, expiração absoluta, contagem do limite e expiração administrativa.
+- **Eliminação e retenção (D-125):** distinguem-se a expiração do acesso (conservadora, pelo instante efectivo), a revogação (definitiva), a retenção dos registos e a eliminação física. A eliminação física nunca é decidida só pelo relógio de parede:
+  - o arranque **não elimina** registos (suspensão autorizada até E1.07-E); só revoga as sessões de arranques anteriores;
+  - `cleanupSessions()` (interna, explícita, sem invocação automática) corta pelo instante mais antigo plausível do processo, `min(parede, parede inicial + monotónico decorrido)`: um avanço do relógio durante o arranque não elimina nada. Não detecta um relógio que já estava errado quando o processo começou; por isso nenhuma limpeza é automática;
+  - sem eliminação automática, os registos de sessões terminadas crescem até existir a retenção definitiva (PD-49, E1.07-E).
 - **Ciclo de vida (D-114):**
   - cada arranque tem um `serviceRunId` de 128 bits, distinto do identificador da instalação;
   - as operações exigem `READY` e ficam ligadas ao arranque em que foram obtidas;
   - as sessões anteriores são revogadas antes de `READY`.
 - **Fronteira (D-116):** a validação devolve só `sessionId`, `userId` e expirações. Sem tenant, âmbito ou permissões. E1.07-D derivará o `TenantContext` a partir de uma sessão validada, da associação, do âmbito e da permissão.
-- **Limites conhecidos:** reinício termina todas as sessões (PD-41); transporte do token por definir em E1.08 (PD-42); um único serviço por base, ainda não imposto (PD-43, bloqueante para E1.08, D-121); auditoria das sessões em E1.07-E (PD-26).
+- **Premissa de instância única (D-127):** todas as garantias das sessões (revogação no reinício, limite de sessões, comprovativos por processo, relógio monotónico por processo) pressupõem **um único serviço operacional por base**. A premissa ainda não é imposta (PD-43, RV-02): a arquitectura actual **não** é segura com vários processos sobre a mesma base. A exclusividade é implementada em E1.07-X ([tasks/E1.07-X.md](tasks/E1.07-X.md)), antes de E1.08.
+- **Limites conhecidos:** reinício termina todas as sessões (PD-41); transporte do token por definir em E1.08 (PD-42); um único serviço por base, ainda não imposto (PD-43, bloqueante para E1.08, D-121); auditoria das sessões em E1.07-E (PD-26); retenção definitiva e crescimento dos registos (PD-47, PD-49); suspensão real do computador não ensaiada (PD-50, Gate E1.07-F).
 
 ## Decisões definidas
 

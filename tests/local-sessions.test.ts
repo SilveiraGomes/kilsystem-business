@@ -39,7 +39,11 @@ import {
   type LocalService,
 } from '../services/local-api/src/local-service';
 import { createJsonLogger } from '../services/local-api/src/logger';
-import type { IssuedSession } from '../services/local-api/src/sessions/local-sessions';
+import {
+  createLocalSessions,
+  type IssuedSession,
+  type SessionBackend,
+} from '../services/local-api/src/sessions/local-sessions';
 import { createSessionClock } from '../services/local-api/src/sessions/session-clock';
 import {
   digestSessionToken,
@@ -88,6 +92,9 @@ const PUBLISHED_CHECKSUMS: readonly { readonly version: number; readonly checksu
   { checksum: 'b05636332e82baa7250873473b7c91fd0a571ec07e2b90b7ee2d236fd9bfc2d0', version: 2 },
   { checksum: '340d886e73aae09527f46db3e3dbecfa9afc7b9fafa126e0267cea9d1d1a1f53', version: 3 },
 ];
+
+/** Soma da migração 4 publicada em 0eb1e75 (E1.07-C); nunca pode mudar (E1.07-C-R1). */
+const PUBLISHED_V4_CHECKSUM = '95e09724388a7dce7e6c5588a55f3c35ee98f7a7202356885720dd7d1cdedf6e';
 
 interface SessionRow {
   readonly id: string;
@@ -1184,6 +1191,162 @@ describe('Local sessions (E1.07-C)', () => {
       await expect(harness.service.identityProvisioning.sessions.cleanupSessions()).resolves.toBe(0);
       expect(sessionCount()).toBe(3);
     });
+
+    /*
+     * E1.07-C-R1 (RV-01, PD-45): reprodução da revisão E1.07-C-M sobre o serviço. S47b é o teste
+     * proposto pelo revisor, alargado às restantes expirações; S47c repete saltos nos dois
+     * sentidos; S47d cobre o reinício.
+     */
+    it('[S47b] expires sessions and proofs normally after a 30-day forward jump followed by a correction', async () => {
+      const harness = await startedService();
+      const user = await provision(harness);
+      const { sessions } = harness.service;
+      const before = await openSession(harness, user);
+      clock.set(iso(START + 30 * 86400 * SECOND));
+      await expect(sessions.validate(before.token)).resolves.toEqual(INVALID);
+      clock.set(iso(START + 5 * SECOND));
+
+      // Comprovativo e sessão emitidos depois da correcção.
+      const lateProof = await login(harness, user);
+      const exactProof = await login(harness, user);
+      const idle = await openSession(harness, user);
+      const created = sessionRow(idle.sessionId).created_at;
+      clock.advanceSeconds(60);
+      await expect(sessions.create(exactProof)).resolves.toMatchObject({ ok: true });
+      clock.advanceSeconds(1);
+      await expect(sessions.create(lateProof)).resolves.toEqual(REQUIRED);
+
+      // Inactividade: válida até 1 799 s, inválida aos 1 800 s, sem prolongamento por tentativas.
+      clock.advanceSeconds(1799 - 61);
+      await expect(sessions.validate(idle.token)).resolves.toMatchObject({ ok: true });
+      clock.advanceSeconds(1);
+      await expect(sessions.validate(idle.token)).resolves.toEqual(INVALID);
+      await expect(sessions.registerActivity(idle.token)).resolves.toEqual(INVALID);
+      expect(sessionRow(idle.sessionId).last_activity_at).toBe(created);
+      // A sessão anterior ao salto (absoluta) e a inactiva (inactividade) ficam marcadas.
+      await expect(harness.service.identityProvisioning.sessions.expireSessions()).resolves.toBe(2);
+      expect(sessionRow(idle.sessionId).revocation_reason).toBe('idle-timeout');
+
+      // Duração absoluta: 12 h depois da criação, mesmo com actividade contínua.
+      const busy = await openSession(harness, user);
+      for (let elapsed = 0; elapsed + 1500 < 43200; elapsed += 1500) {
+        clock.advanceSeconds(1500);
+        await expect(sessions.registerActivity(busy.token)).resolves.toMatchObject({ ok: true });
+      }
+      clock.advanceSeconds(43200 - 28 * 1500);
+      await expect(sessions.validate(busy.token)).resolves.toEqual(INVALID);
+      await expect(sessions.registerActivity(busy.token)).resolves.toEqual(INVALID);
+      // A sessão `busy` e a criada com o comprovativo aos 60 s terminaram pela duração absoluta.
+      await expect(harness.service.identityProvisioning.sessions.expireSessions()).resolves.toBe(2);
+      expect(sessionRow(busy.sessionId).revocation_reason).toBe('absolute-timeout');
+    });
+
+    it('[S47c] never extends a validity across repeated forward and backward jumps', async () => {
+      const harness = await startedService();
+      const user = await provision(harness);
+      let previousCreation = '';
+      for (const jumpSeconds of [3600, -7200, 86400, -2 * 86400, 30 * 86400, -30 * 86400, -365 * 86400]) {
+        clock.set(iso(clock.now().getTime() + jumpSeconds * SECOND));
+        const proof = await login(harness, user);
+        const session = await openSession(harness, user);
+        const created = sessionRow(session.sessionId).created_at;
+        expect(created >= previousCreation).toBe(true);
+        previousCreation = created;
+
+        clock.advanceSeconds(61);
+        await expect(harness.service.sessions.create(proof)).resolves.toEqual(REQUIRED);
+        clock.advanceSeconds(1799 - 61);
+        await expect(harness.service.sessions.validate(session.token)).resolves.toMatchObject({ ok: true });
+        clock.advanceSeconds(1);
+        await expect(harness.service.sessions.validate(session.token)).resolves.toEqual(INVALID);
+      }
+    });
+
+    it('[S47d] keeps expiring normally after a restart, including a process started with the clock ahead', async () => {
+      const harness = await startedService();
+      const user = await provision(harness);
+      const old = await openSession(harness, user);
+      clock.set(iso(START + 30 * 86400 * SECOND));
+      await expect(harness.service.sessions.validate(old.token)).resolves.toEqual(INVALID);
+      clock.set(iso(START + 10 * SECOND));
+      await harness.service.stop();
+      await harness.service.start();
+      await expect(harness.service.sessions.validate(old.token)).resolves.toEqual(INVALID);
+      expect(sessionRow(old.sessionId).revocation_reason).toBe('service-restarted');
+      const afterRestart = await openSession(harness, user);
+      clock.advanceSeconds(1800);
+      await expect(harness.service.sessions.validate(afterRestart.token)).resolves.toEqual(INVALID);
+      await harness.service.stop();
+
+      // Novo processo criado com o relógio de parede 30 dias adiantado, depois corrigido.
+      clock.set(iso(START + 30 * 86400 * SECOND));
+      const ahead = await startedService();
+      clock.set(iso(START + 2000 * SECOND));
+      const proof = await login(ahead, user);
+      const session = await openSession(ahead, user);
+      clock.advanceSeconds(61);
+      await expect(ahead.service.sessions.create(proof)).resolves.toEqual(REQUIRED);
+      clock.advanceSeconds(1799 - 61);
+      await expect(ahead.service.sessions.validate(session.token)).resolves.toMatchObject({ ok: true });
+      clock.advanceSeconds(1);
+      await expect(ahead.service.sessions.validate(session.token)).resolves.toEqual(INVALID);
+    });
+
+    /*
+     * E1.07-C-R1 (RV-04, PD-47, D-125): o relógio de parede não decide sozinho eliminações
+     * irreversíveis. O arranque já não elimina registos; a limpeza explícita usa o instante mais
+     * antigo plausível. A expiração e o limite de sessões não mudam.
+     */
+    it('[S48b] never deletes ended sessions because of a one-year forward jump, at startup or during the run', async () => {
+      const harness = await startedService({ sessionPolicy: { maxActiveSessionsPerUser: 2 } });
+      const user = await provision(harness);
+      const loggedOut = await openSession(harness, user);
+      await harness.service.sessions.logout(loggedOut.token);
+      const abandoned = await openSession(harness, user);
+      const yearAhead = START + 366 * 86400 * SECOND;
+
+      // Durante o arranque: a expiração é conservadora, a eliminação não acontece.
+      clock.set(iso(yearAhead));
+      await expect(harness.service.identityProvisioning.sessions.cleanupSessions()).resolves.toBe(0);
+      expect(sessionRow(abandoned.sessionId).revocation_reason).toBe('absolute-timeout');
+      expect(sessionCount()).toBe(2);
+
+      // Reinício e novo processo com o relógio um ano adiantado: nada é eliminado no arranque.
+      await harness.service.stop();
+      await harness.service.start();
+      expect(sessionCount()).toBe(2);
+      await harness.service.stop();
+      const ahead = await startedService({ sessionPolicy: { maxActiveSessionsPerUser: 2 } });
+      expect(sessionCount()).toBe(2);
+      const resets = [...harness.records(), ...ahead.records()].filter((record) => record['event'] === 'service.sessions_reset');
+      expect(resets).toHaveLength(3);
+      for (const reset of resets) expect(reset).toMatchObject({ removedSessions: 0, startupDeletion: 'suspended' });
+
+      // O limite e a expiração continuam a funcionar com os registos retidos.
+      const first = await openSession(ahead, user);
+      await openSession(ahead, user);
+      await expect(ahead.service.sessions.create(await login(ahead, user))).resolves.toEqual(LIMIT);
+      clock.advanceSeconds(1800);
+      await expect(ahead.service.sessions.validate(first.token)).resolves.toEqual(INVALID);
+      await expect(openSession(ahead, user)).resolves.toHaveProperty('token');
+    });
+
+    it('[S48c] cleans up normally under controlled time in a new process after the retention period', async () => {
+      const first = await startedService();
+      const user = await provision(first);
+      const loggedOut = await openSession(first, user);
+      await first.service.sessions.logout(loggedOut.token);
+      const kept = await openSession(first, user);
+      await first.service.stop();
+
+      clock.advanceSeconds(31 * 86400);
+      const later = await startedService();
+      expect(sessionCount()).toBe(2);
+      // Só a sessão terminada há mais de 30 dias é eliminada; a revogada neste arranque fica retida.
+      await expect(later.service.identityProvisioning.sessions.cleanupSessions()).resolves.toBe(1);
+      expect(sessionCount(`id = '${loggedOut.sessionId}'`)).toBe(0);
+      expect(sessionRow(kept.sessionId).revocation_reason).toBe('service-restarted');
+    });
   });
 
   describe('migration and security', () => {
@@ -1244,14 +1407,15 @@ describe('Local sessions (E1.07-C)', () => {
       const { before, snapshot } = await createE107bDatabase();
 
       const upgraded = temporary.open();
-      expect(inspectMigrations(upgraded)).toMatchObject({ appliedVersions: [1, 2, 3], pendingVersions: [4] });
-      expect(runMigrations(upgraded)).toEqual({ applied: [4], currentVersion: 4 });
+      // E1.07-C-R1: a migração 5 existe; este teste fixa explicitamente o esquema E1.07-C (1 a 4).
+      expect(inspectMigrations(upgraded, MIGRATIONS.slice(0, 4))).toMatchObject({ appliedVersions: [1, 2, 3], pendingVersions: [4] });
+      expect(runMigrations(upgraded, MIGRATIONS.slice(0, 4))).toEqual({ applied: [4], currentVersion: 4 });
 
       expect(snapshot(upgraded)).toEqual(before);
       expect(upgraded.prepare('SELECT DISTINCT security_version FROM users').pluck().all()).toEqual([1]);
       expect(upgraded.prepare('SELECT DISTINCT credential_version FROM password_credentials').pluck().all()).toEqual([1]);
       expect(upgraded.prepare('SELECT count(*) FROM local_sessions').pluck().get()).toBe(0);
-      expect(runMigrations(upgraded)).toEqual({ applied: [], currentVersion: 4 });
+      expect(runMigrations(upgraded, MIGRATIONS.slice(0, 4))).toEqual({ applied: [], currentVersion: 4 });
     });
 
     it('[S50] keeps migrations 1 to 3 exactly as published', async () => {
@@ -1291,7 +1455,8 @@ describe('Local sessions (E1.07-C)', () => {
       expect(fileHash()).toBe(hashBefore);
 
       const harness = await startedService();
-      expect(harness.service.startupReport).toMatchObject({ appliedMigrations: [4], schemaVersion: 4 });
+      // E1.07-C-R1: uma base E1.07-B recebe as migrações 4 e 5.
+      expect(harness.service.startupReport).toMatchObject({ appliedMigrations: [4, 5], schemaVersion: 5 });
       const session = await openSession(harness, user);
       await expect(harness.service.sessions.validate(session.token)).resolves.toMatchObject({ session: { userId: user.id } });
     });
@@ -1303,7 +1468,8 @@ describe('Local sessions (E1.07-C)', () => {
 
       expect(() => runMigrations(database, [...MIGRATIONS.slice(0, 3), broken])).toThrow(/missing_table/);
 
-      expect(inspectMigrations(database)).toMatchObject({ appliedVersions: [1, 2, 3], pendingVersions: [4] });
+      // E1.07-C-R1: com a migração 5, ficam pendentes a 4 (revertida) e a 5.
+      expect(inspectMigrations(database)).toMatchObject({ appliedVersions: [1, 2, 3], pendingVersions: [4, 5] });
       expect(database.prepare("SELECT count(*) FROM pragma_table_info('users') WHERE name = 'security_version'").pluck().get()).toBe(0);
       expect(database.prepare("SELECT count(*) FROM sqlite_master WHERE name = 'local_sessions'").pluck().get()).toBe(0);
       database.close();
@@ -1490,6 +1656,348 @@ describe('Local sessions (E1.07-C)', () => {
       expect(lookup).not.toHaveBeenCalled();
       expect(fetchSpy).not.toHaveBeenCalled();
     });
+
+    /*
+     * E1.07-C-R1 (RV-05, PD-48): testes que detectam as mutações R4, R5, R6 e R9 da revisão
+     * E1.07-C-M, cada uma isoladamente, pelo comportamento observável.
+     */
+    it('[S59] creates a session right after an automatic parameter recalculation (R4)', async () => {
+      const first = await startedService();
+      const user = await provision(first);
+      await first.service.stop();
+
+      const upgraded = await startedService({ passwordHashing: { parameters: { ...TEST_HASHING_PARAMETERS, passes: 3 } } });
+      const identity = await login(upgraded, user);
+      expect(versionsOf(user.id)).toEqual({ credential: 2, security: 1 });
+      const created = await upgraded.service.sessions.create(identity);
+      if (!created.ok) throw new Error(`Sessão esperada após o recálculo: ${created.reason}.`);
+      expect(sessionRow(created.session.sessionId)).toMatchObject({ credential_version: 2, security_version: 1 });
+      await expect(upgraded.service.sessions.validate(created.session.token)).resolves.toMatchObject({ ok: true });
+      // A autenticação seguinte já não recalcula: a sessão existente mantém-se válida.
+      await expect(openSession(upgraded, user)).resolves.toHaveProperty('token');
+      expect(versionsOf(user.id)).toEqual({ credential: 2, security: 1 });
+      await expect(upgraded.service.sessions.validate(created.session.token)).resolves.toMatchObject({ ok: true });
+    });
+
+    /** Insere directamente uma sessão (registo adulterado) com um token conhecido. */
+    const insertForgedSession = (
+      model: SessionRow,
+      values: { readonly createdAt: string; readonly lastActivityAt: string; readonly absoluteExpiresAt: string },
+    ): string => {
+      const forged = generateSessionToken();
+      inspect((database) =>
+        database
+          .prepare(`INSERT INTO local_sessions (id, user_id, token_digest, security_version, credential_version,
+            service_run_id, created_at, last_activity_at, absolute_expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+          .run(newId(), model.user_id, forged.digest, model.security_version, model.credential_version, model.service_run_id,
+            values.createdAt, values.lastActivityAt, values.absoluteExpiresAt),
+      );
+      return forged.token;
+    };
+
+    it('[S60] never honours a stored absolute expiry beyond the policy ceiling (R5)', async () => {
+      const harness = await startedService();
+      const user = await provision(harness);
+      const genuine = await openSession(harness, user);
+      const token = insertForgedSession(sessionRow(genuine.sessionId), {
+        absoluteExpiresAt: iso(START + 24 * 3600 * SECOND),
+        createdAt: iso(START),
+        lastActivityAt: iso(START),
+      });
+
+      await expect(harness.service.sessions.validate(token)).resolves.toMatchObject({
+        ok: true,
+        session: { absoluteExpiresAt: iso(START + 12 * 3600 * SECOND) },
+      });
+      for (let step = 0; step < 28; step += 1) {
+        clock.advanceSeconds(1500);
+        await expect(harness.service.sessions.registerActivity(token)).resolves.toMatchObject({ ok: true });
+      }
+      clock.advanceSeconds(43200 - 28 * 1500);
+      await expect(harness.service.sessions.validate(token)).resolves.toEqual(INVALID);
+      await expect(harness.service.sessions.registerActivity(token)).resolves.toEqual(INVALID);
+    });
+
+    it('[S61] rejects stored sessions dated after the effective instant (R6)', async () => {
+      const harness = await startedService();
+      const user = await provision(harness);
+      const session = await openSession(harness, user);
+      const model = sessionRow(session.sessionId);
+
+      // Actividade adulterada para o futuro (aceite pelos triggers: avança e fica antes da expiração).
+      execute(`UPDATE local_sessions SET last_activity_at = '${iso(START + 3600 * SECOND)}' WHERE id = '${session.sessionId}'`);
+      await expect(harness.service.sessions.validate(session.token)).resolves.toEqual(INVALID);
+      await expect(harness.service.sessions.registerActivity(session.token)).resolves.toEqual(INVALID);
+      // Sessão adulterada criada no futuro.
+      const future = insertForgedSession(model, {
+        absoluteExpiresAt: iso(START + 3600 * SECOND + 43200 * SECOND),
+        createdAt: iso(START + 3600 * SECOND),
+        lastActivityAt: iso(START + 3600 * SECOND),
+      });
+      await expect(harness.service.sessions.validate(future)).resolves.toEqual(INVALID);
+    });
+
+    it('[S62] refuses a proof issued after the current instant of an injected non-monotonic clock (R9)', async () => {
+      const harness = await startedService();
+      const user = await provision(harness);
+      const identity = await login(harness, user);
+      const versions = versionsOf(user.id);
+      const database = temporary.open();
+      try {
+        const store = createSqliteSessionStore(database);
+        const runId = 'c'.repeat(32);
+        const instant = START + 10 * SECOND;
+        let issuedAt = instant + SECOND;
+        // Composição directa do módulo com um relógio que não respeita a monotonia: o comprovativo
+        // foi emitido 1 s "depois" do instante corrente (idade negativa).
+        const backend: SessionBackend = {
+          acquire: () => ({ serviceRunId: runId, store }),
+          now: Object.assign(() => instant, { earliestPlausible: () => instant }),
+          policy: DEFAULT_SESSION_POLICY,
+          proofs: {
+            consume: (value: unknown) =>
+              value === identity
+                ? { credentialVersion: versions.credential, issuedAt, securityVersion: versions.security, serviceRunId: runId, userId: user.id }
+                : undefined,
+            register: () => undefined,
+          },
+        };
+        const sessions = createLocalSessions(backend);
+
+        await expect(sessions.create(identity)).resolves.toEqual(REQUIRED);
+        expect(sessionCount()).toBe(0);
+        // Controlo: o mesmo comprovativo emitido no instante corrente é aceite.
+        issuedAt = instant;
+        await expect(sessions.create(identity)).resolves.toMatchObject({ ok: true });
+      } finally {
+        database.close();
+      }
+    });
+
+    /*
+     * E1.07-C-R1 (RV-03, PD-46, D-126): a migração 5 impede reinserções que reponham versões de
+     * segurança ou anulem revogações, em qualquer configuração de `foreign_keys` e
+     * `recursive_triggers`. Escrita SQL directa sobre a base temporária do teste.
+     */
+    const PRAGMA_CONFIGURATIONS = [
+      { foreignKeys: true, recursiveTriggers: false },
+      { foreignKeys: true, recursiveTriggers: true },
+      { foreignKeys: false, recursiveTriggers: false },
+      { foreignKeys: false, recursiveTriggers: true },
+    ] as const;
+
+    const executeWith = (configuration: (typeof PRAGMA_CONFIGURATIONS)[number], sql: string): void => {
+      inspect((database) => {
+        database.pragma(`foreign_keys = ${configuration.foreignKeys ? 'ON' : 'OFF'}`);
+        database.pragma(`recursive_triggers = ${configuration.recursiveTriggers ? 'ON' : 'OFF'}`);
+        database.exec(sql);
+      });
+    };
+
+    const credentialValues = (userId: string, version?: number): string =>
+      `('${userId}', 'argon2id', 19, 19456, 2, 1, randomblob(16), randomblob(32), '${iso(START)}', '${iso(START)}'${
+        version === undefined ? '' : `, ${version}`
+      })`;
+    const CREDENTIAL_COLUMNS =
+      '(user_id, algorithm, algorithm_version, memory_kib, passes, parallelism, salt, hash, created_at, updated_at';
+
+    it('[S63] refuses credential re-insertion through REPLACE, UPSERT, duplicate INSERT or DELETE then INSERT', async () => {
+      const harness = await startedService();
+      const user = await provision(harness);
+      await harness.service.identityProvisioning.credentials.replace(user.id, OTHER_TEST_PASSWORD);
+      const session = await openSession(harness, user, OTHER_TEST_PASSWORD);
+      expect(versionsOf(user.id)).toEqual({ credential: 2, security: 1 });
+      const attacks = [
+        `INSERT OR REPLACE INTO password_credentials ${CREDENTIAL_COLUMNS}) VALUES ${credentialValues(user.id)}`,
+        `REPLACE INTO password_credentials ${CREDENTIAL_COLUMNS}) VALUES ${credentialValues(user.id)}`,
+        `INSERT INTO password_credentials ${CREDENTIAL_COLUMNS}) VALUES ${credentialValues(user.id)}`,
+        `INSERT INTO password_credentials ${CREDENTIAL_COLUMNS}) VALUES ${credentialValues(user.id)}
+          ON CONFLICT (user_id) DO UPDATE SET credential_version = 1, hash = excluded.hash`,
+        `INSERT OR REPLACE INTO password_credentials ${CREDENTIAL_COLUMNS}, credential_version) VALUES ${credentialValues(user.id, 9)}`,
+        `DELETE FROM password_credentials WHERE user_id = '${user.id}';
+          INSERT INTO password_credentials ${CREDENTIAL_COLUMNS}) VALUES ${credentialValues(user.id)}`,
+      ];
+
+      for (const configuration of PRAGMA_CONFIGURATIONS) {
+        for (const sql of attacks) {
+          // Transacção explícita: a ligação é fechada depois da recusa, o que anula qualquer passo parcial.
+          expect(() => executeWith(configuration, `BEGIN; ${sql}; COMMIT;`)).toThrow(/re-inserted|never deleted/);
+          expect(versionsOf(user.id)).toEqual({ credential: 2, security: 1 });
+          expect(sessionRow(session.sessionId).revoked_at).toBeNull();
+        }
+      }
+      await expect(harness.service.sessions.validate(session.token)).resolves.toMatchObject({ ok: true });
+      await expect(login(harness, user, OTHER_TEST_PASSWORD)).resolves.toBeDefined();
+
+      // Alterações legítimas continuam a funcionar: substituição avança a versão e revoga.
+      await harness.service.identityProvisioning.credentials.replace(user.id, TEST_PASSWORD);
+      expect(versionsOf(user.id)).toEqual({ credential: 3, security: 1 });
+      expect(sessionRow(session.sessionId).revocation_reason).toBe('credential-replaced');
+      await expect(openSession(harness, user)).resolves.toHaveProperty('token');
+      const other = await provision(harness);
+      expect(versionsOf(other.id)).toEqual({ credential: 1, security: 1 });
+      inspect((database) => {
+        expect(database.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+        expect(database.prepare('PRAGMA integrity_check').pluck().get()).toBe('ok');
+      });
+    });
+
+    it('[S64] refuses identity and session re-insertion, re-keying and revocation reversal', async () => {
+      const harness = await startedService();
+      const user = await provision(harness);
+      const other = await provision(harness);
+      await harness.service.identityProvisioning.users.changeStatus(user.id, 'SUSPENDED', clock.now());
+      await harness.service.identityProvisioning.users.changeStatus(user.id, 'ACTIVE', clock.now());
+      const active = await openSession(harness, user);
+      const revoked = await openSession(harness, user);
+      await harness.service.sessions.logout(revoked.token);
+      expect(versionsOf(user.id)).toEqual({ credential: 1, security: 3 });
+      const userValues = `('${user.id}', '${user.username}', 'Nome Fictício', NULL, NULL, 'ACTIVE', '${iso(START)}', '${iso(START)}')`;
+      const userColumns = '(id, username, display_name, email, phone, status, created_at, updated_at)';
+      const attacks = [
+        `REPLACE INTO users ${userColumns} VALUES ${userValues}`,
+        `INSERT OR REPLACE INTO users ${userColumns} VALUES ${userValues}`,
+        `INSERT INTO users ${userColumns} VALUES ('${newId()}', '${user.username}', 'Outro', NULL, NULL, 'ACTIVE', '${iso(START)}', '${iso(START)}')`,
+        `REPLACE INTO local_sessions SELECT id, user_id, token_digest, security_version, credential_version, service_run_id,
+          created_at, last_activity_at, absolute_expires_at, NULL, NULL FROM local_sessions WHERE id = '${revoked.sessionId}'`,
+        `UPDATE users SET id = '${newId()}' WHERE id = '${user.id}'`,
+        `UPDATE OR REPLACE password_credentials SET user_id = '${user.id}', credential_version = 9 WHERE user_id = '${other.id}'`,
+      ];
+
+      for (const configuration of PRAGMA_CONFIGURATIONS) {
+        for (const sql of attacks) {
+          expect(() => executeWith(configuration, sql)).toThrow(/re-inserted|immutable/);
+          expect(versionsOf(user.id)).toEqual({ credential: 1, security: 3 });
+          expect(versionsOf(other.id)).toEqual({ credential: 1, security: 1 });
+          expect(sessionRow(revoked.sessionId).revocation_reason).toBe('logout');
+          expect(sessionRow(active.sessionId).revoked_at).toBeNull();
+        }
+      }
+      await expect(harness.service.sessions.validate(active.token)).resolves.toMatchObject({ ok: true });
+      await expect(harness.service.sessions.validate(revoked.token)).resolves.toEqual(INVALID);
+    });
+
+    it('[S65] never reuses a version after a deletion outside the normal configuration and revokes what remains', async () => {
+      const harness = await startedService();
+      const user = await provision(harness);
+      const session = await openSession(harness, user);
+      await harness.service.stop();
+      const userColumns = '(id, username, display_name, email, phone, status, created_at, updated_at';
+      const userValues = `'${user.id}', '${user.username}', 'Nome Fictício', NULL, NULL, 'ACTIVE', '${iso(START)}', '${iso(START)}'`;
+      const withoutForeignKeys = PRAGMA_CONFIGURATIONS[2];
+
+      // Com `foreign_keys` desligado, a identidade pode ser eliminada; a reinserção não pode
+      // reutilizar a versão ligada à sessão e revoga a sessão que restar.
+      executeWith(withoutForeignKeys, `DELETE FROM users WHERE id = '${user.id}'`);
+      expect(() => executeWith(withoutForeignKeys, `INSERT INTO users ${userColumns}) VALUES (${userValues})`)).toThrow(
+        /never reuse a security_version/,
+      );
+      executeWith(withoutForeignKeys, `INSERT INTO users ${userColumns}, security_version) VALUES (${userValues}, 2)`);
+      expect(sessionRow(session.sessionId).revocation_reason).toBe('security-version-changed');
+
+      // Fora da fronteira de confiança (trigger de eliminação retirado): a credencial reinserida
+      // também não reutiliza a versão nem deixa sessões activas.
+      const second = await startedService();
+      const later = await openSession(second, user);
+      await second.service.stop();
+      execute('DROP TRIGGER password_credentials_never_deleted');
+      execute(`DELETE FROM password_credentials WHERE user_id = '${user.id}'`);
+      expect(() => execute(`INSERT INTO password_credentials ${CREDENTIAL_COLUMNS}) VALUES ${credentialValues(user.id)}`)).toThrow(
+        /never reuse a credential_version/,
+      );
+      execute(`INSERT INTO password_credentials ${CREDENTIAL_COLUMNS}, credential_version) VALUES ${credentialValues(user.id, 2)}`);
+      expect(sessionRow(later.sessionId).revocation_reason).toBe('credential-replaced');
+    });
+
+    /** Base E1.07-C (migrações 1 a 4) com versões avançadas e sessões, criada sem a migração 5. */
+    const createE107cDatabase = async () => {
+      const { user } = await createE107bDatabase();
+      const legacy = temporary.open();
+      expect(runMigrations(legacy, MIGRATIONS.slice(0, 4))).toEqual({ applied: [4], currentVersion: 4 });
+      legacy.exec(`UPDATE users SET status = 'SUSPENDED', updated_at = '${iso(START)}' WHERE id = '${user.id}';
+        UPDATE users SET status = 'ACTIVE', updated_at = '${iso(START)}' WHERE id = '${user.id}';
+        UPDATE password_credentials SET credential_version = 2, updated_at = '${user.createdAt}' WHERE user_id = '${user.id}';`);
+      const insert = legacy.prepare(`INSERT INTO local_sessions (id, user_id, token_digest, security_version, credential_version,
+        service_run_id, created_at, last_activity_at, absolute_expires_at, revoked_at, revocation_reason)
+        VALUES (?, ?, randomblob(32), 3, 2, ?, ?, ?, ?, ?, ?)`);
+      insert.run(newId(), user.id, 'd'.repeat(32), iso(START), iso(START), iso(START + 43200 * SECOND), null, null);
+      insert.run(newId(), user.id, 'd'.repeat(32), iso(START), iso(START), iso(START + 43200 * SECOND), iso(START), 'logout');
+      const snapshot = (database: SqliteDatabase) => ({
+        credentials: database.prepare('SELECT * FROM password_credentials ORDER BY user_id').all(),
+        migrations: database.prepare('SELECT version, name, checksum, applied_at FROM schema_migrations WHERE version <= 4 ORDER BY version').all(),
+        sessions: database.prepare('SELECT * FROM local_sessions ORDER BY id').all(),
+        users: database.prepare('SELECT * FROM users ORDER BY id').all(),
+        others: ['companies', 'branches', 'company_memberships', 'installation_bootstrap', 'authentication_throttle'].map((table) =>
+          database.prepare(`SELECT * FROM ${table} ORDER BY 1`).all(),
+        ),
+      });
+      const before = snapshot(legacy);
+      legacy.close();
+      return { before, snapshot, user };
+    };
+
+    it('[S66] migrates an E1.07-B database directly to version 5 and keeps migrations 1 to 4 as published', async () => {
+      const { before, snapshot } = await createE107bDatabase();
+      const upgraded = temporary.open();
+
+      expect(runMigrations(upgraded)).toEqual({ applied: [4, 5], currentVersion: 5 });
+      expect(snapshot(upgraded)).toEqual(before);
+      expect(upgraded.prepare('SELECT version, checksum FROM schema_migrations WHERE version <= 4 ORDER BY version').all()).toEqual([
+        ...PUBLISHED_CHECKSUMS,
+        { checksum: PUBLISHED_V4_CHECKSUM, version: 4 },
+      ]);
+      expect(MIGRATIONS[3] && migrationChecksum(MIGRATIONS[3])).toBe(PUBLISHED_V4_CHECKSUM);
+      expect(MIGRATIONS[4]).toMatchObject({ name: 'protect_security_versions_against_reinsertion', version: 5 });
+      expect(runMigrations(upgraded)).toEqual({ applied: [], currentVersion: 5 });
+    });
+
+    it('[S67] migrates an E1.07-C database to version 5 preserving data, versions, sessions and checksums', async () => {
+      const { before, snapshot, user } = await createE107cDatabase();
+      const hashBefore = fileHash();
+      const strict = createServiceUnderTest(
+        serviceConfig(temporary.filename, { startupPolicy: { onMissingDatabase: 'fail', onPendingMigrations: 'fail' } }),
+        undefined,
+        dependencies(),
+      );
+      running.push(strict);
+      await expect(strict.service.start()).rejects.toMatchObject({ reason: 'pending-migrations' });
+      expect(fileHash()).toBe(hashBefore);
+
+      const upgraded = temporary.open();
+      expect(inspectMigrations(upgraded)).toMatchObject({ appliedVersions: [1, 2, 3, 4], pendingVersions: [5] });
+      expect(runMigrations(upgraded)).toEqual({ applied: [5], currentVersion: 5 });
+      expect(snapshot(upgraded)).toEqual(before);
+      const latest = MIGRATIONS[4];
+      if (latest === undefined) throw new Error('Migração 5 esperada.');
+      expect(upgraded.prepare('SELECT checksum FROM schema_migrations WHERE version = 5').pluck().get()).toBe(
+        migrationChecksum(latest),
+      );
+      expect(upgraded.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+      expect(upgraded.prepare('PRAGMA integrity_check').pluck().get()).toBe('ok');
+      expect(upgraded.prepare("SELECT count(*) FROM sqlite_master WHERE type = 'trigger'").pluck().get()).toBe(17);
+      upgraded.close();
+
+      const harness = await startedService();
+      expect(harness.service.startupReport).toMatchObject({ appliedMigrations: [], schemaVersion: 5 });
+      expect(versionsOf(user.id)).toEqual({ credential: 2, security: 3 });
+      expect(sessionCount('revoked_at IS NULL')).toBe(0);
+      const session = await openSession(harness, user);
+      expect(sessionRow(session.sessionId)).toMatchObject({ credential_version: 2, security_version: 3 });
+    });
+
+    it('[S68] applies only migration 5 to an E1.07-C database under the apply policy', async () => {
+      const { before, snapshot } = await createE107cDatabase();
+      const harness = await startedService();
+
+      expect(harness.service.startupReport).toMatchObject({ appliedMigrations: [5], schemaVersion: 5 });
+      const after = inspect(snapshot);
+      expect(after.credentials).toEqual(before.credentials);
+      expect(after.users).toEqual(before.users);
+      expect(after.migrations).toEqual(before.migrations);
+      expect(after.others).toEqual(before.others);
+      // Única alteração: a sessão activa do arranque anterior fica revogada por `service-restarted`.
+      expect(after.sessions.map((row) => (row as SessionRow).revocation_reason).sort()).toEqual(['logout', 'service-restarted']);
+    });
   });
 
   describe('session policy and clock', () => {
@@ -1565,7 +2073,134 @@ describe('Local sessions (E1.07-C)', () => {
       expect(now()).toBe(START + 7_200_000);
       wall = Number.NaN;
       monotonic += 10;
+      // E1.07-C-R1 (RV-01): o instante continua a avançar pelo monotónico; antes ficava congelado.
+      expect(now()).toBe(START + 7_200_010);
+    });
+
+    /*
+     * E1.07-C-R1 (RV-01, PD-45, D-124): o instante efectivo é max(parede, anterior + Δmonotónico).
+     * K02 é o teste proposto pela revisão E1.07-C-M; K03 a K05 cobrem saltos repetidos, entradas
+     * inválidas, leituras de alta frequência e o instante mais antigo plausível.
+     */
+    it('[K02] keeps advancing by monotonic time after a forward jump followed by a correction', () => {
+      let wall = START;
+      let monotonic = 0;
+      const now = createSessionClock(() => new Date(wall), () => monotonic);
+
+      expect(now()).toBe(START);
+      wall = START + 7_200_000;
       expect(now()).toBe(START + 7_200_000);
+      wall = START;
+      expect(now()).toBe(START + 7_200_000);
+      monotonic += 10_000;
+      wall += 10_000;
+      expect(now()).toBe(START + 7_210_000);
+      monotonic += 1_800_000;
+      wall += 1_800_000;
+      expect(now()).toBe(START + 9_010_000);
+    });
+
+    it('[K03] equals max(wall, previous + monotonic delta) under repeated jumps and invalid readings', () => {
+      // Valores inteiros em milissegundos: o modelo do teste é exacto (as fracções estão em K04).
+      let realTime = START;
+      let realMonotonic = 1_000;
+      let wall = realTime;
+      let monotonic = realMonotonic;
+      const now = createSessionClock(() => new Date(wall), () => monotonic);
+      let expected = START;
+      let highest = realMonotonic;
+      let previous = now();
+      expect(previous).toBe(START);
+
+      // Gerador determinístico (LCG): sequência longa e reprodutível de perturbações.
+      let seed = 0x2026_1116;
+      const next = (): number => {
+        seed = (Math.imul(seed, 1_103_515_245) + 12_345) >>> 0;
+        return seed / 0x1_0000_0000;
+      };
+      const counts = { backwards: 0, forwards: 0, invalidMonotonic: 0, invalidWall: 0, regressions: 0 };
+      for (let step = 0; step < 5_000; step += 1) {
+        const elapsed = Math.floor(next() * 5_000);
+        realTime += elapsed;
+        realMonotonic += elapsed;
+        const monotonicChoice = next();
+        if (monotonicChoice < 0.05) {
+          monotonic = Number.NaN;
+          counts.invalidMonotonic += 1;
+        } else if (monotonicChoice < 0.1) {
+          monotonic = highest - Math.floor(next() * 10_000); // leitura que recua
+          counts.regressions += 1;
+        } else {
+          monotonic = realMonotonic;
+        }
+        const wallChoice = next();
+        if (wallChoice < 0.15) {
+          const jump = Math.floor((next() - 0.5) * 2 * 30 * 86_400_000); // até ±30 dias
+          wall = realTime + jump;
+          counts[jump >= 0 ? 'forwards' : 'backwards'] += 1;
+        } else if (wallChoice < 0.2) {
+          wall = Number.NaN;
+          counts.invalidWall += 1;
+        } else {
+          wall = realTime; // relógio de parede corrigido
+        }
+
+        const delta = Number.isFinite(monotonic) && monotonic > highest ? monotonic - highest : 0;
+        if (delta > 0) highest = monotonic;
+        expected = Number.isFinite(wall) ? Math.max(wall, expected + delta) : expected + delta;
+
+        const value = now();
+        expect(value).toBe(expected);
+        expect(value - previous).toBeGreaterThanOrEqual(delta);
+        if (Number.isFinite(wall)) expect(value).toBeGreaterThanOrEqual(wall);
+        previous = value;
+      }
+      // Nada se perde nem se conta duas vezes: o instante final é o tempo real mais o maior avanço
+      // de parede ainda não alcançado, nunca menos do que o tempo monotónico total.
+      expect(previous - START).toBeGreaterThanOrEqual(highest - 1_000);
+      expect(Object.values(counts).every((count) => count > 50)).toBe(true);
+    });
+
+    it('[K04] loses no time fractions under high-frequency readings', () => {
+      const wall = START - 60_000; // relógio de parede atrás: só o monotónico faz avançar o instante
+      let monotonic = 123_456.789;
+      const now = createSessionClock(() => new Date(wall), () => monotonic);
+      const start = now();
+      const anchor = monotonic;
+
+      // 1 000 000 leituras separadas por 100 ns (0,0001 ms), abaixo da resolução de um double perto
+      // de 1,8 × 10^12 ms: somá-las leitura a leitura perderia todo o tempo decorrido.
+      for (let reading = 0; reading < 1_000_000; reading += 1) {
+        monotonic += 0.000_1;
+        now();
+      }
+
+      const value = now();
+      expect(Math.abs(value - start - (monotonic - anchor))).toBeLessThan(0.001);
+      expect(Math.abs(value - start - 100)).toBeLessThan(0.01);
+      // Unidades: 30 minutos monotónicos (1 800 000 ms) são exactamente 30 minutos efectivos.
+      monotonic += 1_800_000;
+      expect(Math.abs(now() - value - 1_800_000)).toBeLessThan(0.001);
+    });
+
+    it('[K05] bounds irreversible deletions by the earliest plausible instant', () => {
+      let wall = START;
+      let monotonic = 0;
+      const now = createSessionClock(() => new Date(wall), () => monotonic);
+
+      expect(now.earliestPlausible()).toBe(START);
+      wall = START + 365 * 86_400_000; // salto de um ano para a frente
+      expect(now()).toBe(wall);
+      expect(now.earliestPlausible()).toBe(START);
+      monotonic += 60_000;
+      wall += 60_000;
+      expect(now.earliestPlausible()).toBe(START + 60_000);
+      wall = START - 3_600_000; // retrocesso: o mínimo segue o relógio de parede
+      expect(now.earliestPlausible()).toBe(START - 3_600_000);
+      wall = Number.NaN;
+      monotonic += 1_000;
+      expect(now.earliestPlausible()).toBe(START + 61_000);
+      expect(now()).toBe(START + 365 * 86_400_000 + 61_000);
     });
   });
 });

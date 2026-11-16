@@ -84,7 +84,12 @@ export interface SessionAdministration {
   revokeUserSessions(userId: UserId): Promise<number>;
   /** Marca como expiradas as sessões cuja validade terminou; devolve quantas. */
   expireSessions(): Promise<number>;
-  /** Expira e elimina sessões terminadas há mais do que a retenção; devolve quantas eliminou. */
+  /**
+   * Expira (instante efectivo) e elimina sessões terminadas há mais do que a retenção; devolve
+   * quantas eliminou. O corte da eliminação usa o instante mais antigo plausível (D-125): um avanço
+   * do relógio de parede durante o arranque não elimina registos. Operação explícita e interna,
+   * sem invocação automática; a retenção definitiva é fixada em E1.07-E (PD-47).
+   */
   cleanupSessions(): Promise<number>;
 }
 
@@ -292,9 +297,12 @@ export const createSessionAdministration = (backend: SessionBackend): SessionAdm
       run(() => {
         const { store } = backend.acquire();
         const now = backend.now();
+        // A expiração do acesso é conservadora (instante efectivo); a eliminação irreversível usa
+        // o instante mais antigo plausível, para que um avanço do relógio não a autorize (D-125).
+        const deletionHorizon = Math.min(now, backend.now.earliestPlausible());
         return store.transaction(() => {
           store.expireSessions(iso(now), idleSince(now));
-          return store.deleteEndedBefore(iso(now - policy.sessionRetentionDays * DAY));
+          return store.deleteEndedBefore(iso(deletionHorizon - policy.sessionRetentionDays * DAY));
         });
       }),
   });
@@ -302,16 +310,13 @@ export const createSessionAdministration = (backend: SessionBackend): SessionAdm
 
 /**
  * Preparação de um novo arranque: revoga as sessões de arranques anteriores (que já não podem
- * ser validadas) e elimina as terminadas há mais do que a retenção. Corre antes de `READY`.
+ * ser validadas). Corre antes de `READY`. NÃO elimina registos (D-125, PD-47): no arranque, o
+ * único relógio disponível é o de parede, que não pode decidir sozinho uma eliminação
+ * irreversível; um relógio adiantado apagaria registos terminados antes do prazo.
  */
 export const resetSessionsForRun = (
   store: SqliteSessionStore,
   serviceRunId: string,
   now: number,
-  policy: SessionPolicy,
-): { readonly revokedSessions: number; readonly removedSessions: number } =>
-  store.transaction(() => {
-    const revokedSessions = store.revokeOtherRuns(serviceRunId, iso(now));
-    const removedSessions = store.deleteEndedBefore(iso(now - policy.sessionRetentionDays * DAY));
-    return Object.freeze({ removedSessions, revokedSessions });
-  });
+): { readonly revokedSessions: number; readonly removedSessions: 0 } =>
+  store.transaction(() => Object.freeze({ removedSessions: 0, revokedSessions: store.revokeOtherRuns(serviceRunId, iso(now)) }));

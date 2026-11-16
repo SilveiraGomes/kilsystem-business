@@ -268,11 +268,78 @@ BEGIN
 END;
 `;
 
+// E1.07-C-R1 (PD-46, D-126): integridade das versões de segurança contra reinserções. A eliminação
+// implícita de `INSERT OR REPLACE`/`REPLACE` só activa triggers DELETE com `recursive_triggers`
+// ligado, e a de `users` só é travada pelas chaves estrangeiras quando `foreign_keys` está ligado.
+// Os triggers BEFORE INSERT correm antes da resolução de conflitos, em qualquer configuração:
+// - uma identidade, credencial ou sessão existente nunca é reinserida (REPLACE, UPSERT ou INSERT
+//   repetido), pelo que nenhuma versão é reposta e nenhuma revogação é anulada;
+// - uma linha reinserida depois de uma eliminação nunca reutiliza uma versão já ligada a sessões
+//   da identidade, e qualquer sessão ainda activa dessa identidade é revogada;
+// - as chaves das identidades e das credenciais são imutáveis.
+// As recusas de reinserção antecipam as falhas UNIQUE/PRIMARY KEY e, como elas, indicam uma falha de
+// restrição (`SQLITE_CONSTRAINT_TRIGGER`, `PersistenceError('constraint')`).
+// Só acrescenta triggers: não altera tabelas, dados nem as migrações 1 a 4. Não protege contra quem
+// controle o esquema (eliminar triggers, `writable_schema`) ou escreva sessões directamente.
+const V5_SECURITY_VERSION_REINSERTION = `
+CREATE TRIGGER users_insert_requires_new_identity
+BEFORE INSERT ON users
+WHEN EXISTS (SELECT 1 FROM users WHERE id = NEW.id OR username = NEW.username)
+  OR NEW.security_version <= (SELECT max(security_version) FROM local_sessions WHERE user_id = NEW.id)
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: users are never re-inserted and never reuse a security_version');
+END;
+
+CREATE TRIGGER users_insert_revokes_sessions
+AFTER INSERT ON users
+BEGIN
+  UPDATE local_sessions SET revoked_at = NEW.updated_at, revocation_reason = 'security-version-changed'
+    WHERE user_id = NEW.id AND revoked_at IS NULL;
+END;
+
+CREATE TRIGGER users_id_immutable
+BEFORE UPDATE OF id ON users
+WHEN NEW.id IS NOT OLD.id
+BEGIN
+  SELECT RAISE(ABORT, 'users id is immutable');
+END;
+
+CREATE TRIGGER password_credentials_insert_requires_new_credential
+BEFORE INSERT ON password_credentials
+WHEN EXISTS (SELECT 1 FROM password_credentials WHERE user_id = NEW.user_id)
+  OR NEW.credential_version <= (SELECT max(credential_version) FROM local_sessions WHERE user_id = NEW.user_id)
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: password_credentials are never re-inserted and never reuse a credential_version');
+END;
+
+CREATE TRIGGER password_credentials_insert_revokes_sessions
+AFTER INSERT ON password_credentials
+BEGIN
+  UPDATE local_sessions SET revoked_at = NEW.updated_at, revocation_reason = 'credential-replaced'
+    WHERE user_id = NEW.user_id AND revoked_at IS NULL;
+END;
+
+CREATE TRIGGER password_credentials_user_immutable
+BEFORE UPDATE OF user_id ON password_credentials
+WHEN NEW.user_id IS NOT OLD.user_id
+BEGIN
+  SELECT RAISE(ABORT, 'password_credentials user_id is immutable');
+END;
+
+CREATE TRIGGER local_sessions_insert_requires_new_session
+BEFORE INSERT ON local_sessions
+WHEN EXISTS (SELECT 1 FROM local_sessions WHERE id = NEW.id OR token_digest = NEW.token_digest)
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: local_sessions are never re-inserted');
+END;
+`;
+
 export const MIGRATIONS: readonly Migration[] = Object.freeze([
   Object.freeze({ name: 'create_companies_and_branches', sql: V1_COMPANIES_AND_BRANCHES, version: 1 }),
   Object.freeze({ name: 'create_users_and_memberships', sql: V2_USERS_AND_MEMBERSHIPS, version: 2 }),
   Object.freeze({ name: 'create_credentials_and_authentication', sql: V3_CREDENTIALS_AND_AUTHENTICATION, version: 3 }),
   Object.freeze({ name: 'create_sessions_and_security_versions', sql: V4_SESSIONS_AND_SECURITY_VERSIONS, version: 4 }),
+  Object.freeze({ name: 'protect_security_versions_against_reinsertion', sql: V5_SECURITY_VERSION_REINSERTION, version: 5 }),
 ]);
 
 export const migrationChecksum = (migration: Migration): string =>

@@ -1,6 +1,6 @@
 # Estado do projecto
 
-Última verificação: 2026-11-16, na branch `feat/e107-c-secure-sessions`, criada a partir de `main` = `origin/main` = `ab22404` (E1.07-C; revisão independente E1.07-C-M concluída com o merge suspenso).
+Última verificação: 2026-11-16, na branch `feat/e107-c-secure-sessions`, criada a partir de `main` = `origin/main` = `ab22404` (E1.07-C; revisão E1.07-C-M em `e19ef76`; correcções E1.07-C-R1 na mesma branch; merge suspenso até nova revisão curta).
 
 Este documento é o ponto de retoma para qualquer agente ou pessoa. Contém apenas factos verificados no repositório ou por execução; o que não foi executado está marcado como tal.
 
@@ -24,14 +24,16 @@ Este documento é o ponto de retoma para qualquer agente ou pessoa. Contém apen
 | E1.07-A — Identidade, utilizadores e associações multiempresa | Concluída e integrada (PR #3) | `cc4adc0`; merge `4d0302b` | [tasks/E1.07-A.md](tasks/E1.07-A.md) |
 | E1.07-B — Credenciais, autenticação local e provisionamento inicial | Concluída e integrada (PR #4) | `f443057`; merge `8e77091` | [tasks/E1.07-B.md](tasks/E1.07-B.md) |
 | E1.07-B-M — Revisão de segurança e integração da autenticação local | Concluída e integrada (PR #5) | revisão `8ac21b0`; testes `0b6587e`; merge `581699a` | [tasks/E1.07-B-M.md](tasks/E1.07-B-M.md) |
-| E1.07-C — Sessões, validade, revogação e continuidade da identidade | Implementada na branch `feat/e107-c-secure-sessions` (`0eb1e75`); revista em E1.07-C-M, **merge suspenso** até à correcção de RV-01 (PD-45) | `feat: implement secure revocable local sessions` | [tasks/E1.07-C.md](tasks/E1.07-C.md) |
-| E1.07-C-M — Revisão independente de segurança das sessões | Concluída; recomenda suspender o merge (RV-01, Alto) | revisão de `0eb1e75`; documentação por commitar | [tasks/E1.07-C-M.md](tasks/E1.07-C-M.md) |
+| E1.07-C — Sessões, validade, revogação e continuidade da identidade | Implementada na branch `feat/e107-c-secure-sessions` (`0eb1e75`); revista em E1.07-C-M e corrigida em E1.07-C-R1; **merge suspenso** até nova revisão curta e aprovação | `feat: implement secure revocable local sessions` | [tasks/E1.07-C.md](tasks/E1.07-C.md) |
+| E1.07-C-M — Revisão independente de segurança das sessões | Concluída; recomendou suspender o merge (RV-01, Alto) | `e19ef76` (`docs: record independent session security review`) | [tasks/E1.07-C-M.md](tasks/E1.07-C-M.md) |
+| E1.07-C-R1 — Correcções de segurança das sessões | Implementada na mesma branch; aguarda revisão independente curta; sem merge | `fix: harden session clocks and revocation integrity` | [tasks/E1.07-C-R1.md](tasks/E1.07-C-R1.md) |
+| E1.07-X — Exclusividade do serviço por base | Especificação preliminar; não autorizada; bloqueia E1.08 | — | [tasks/E1.07-X.md](tasks/E1.07-X.md) |
 | E1.07-D a E1.07-F | Planeadas, não autorizadas | — | [tasks/E1.07.md](tasks/E1.07.md) |
 | E1.08 a E1.10 | Planeadas, não autorizadas | — | [implementation-plan.md](implementation-plan.md) |
 
-Tarefa activa: **E1.07-C**, implementada na branch `feat/e107-c-secure-sessions` e publicada para revisão independente. Não há merge: a integração em `main` exige revisão e aprovação explícita do responsável (D-117). E1.07-D a E1.07-F estão especificadas mas não autorizadas.
+Tarefa activa: **E1.07-C-R1** (correcções de E1.07-C), na branch `feat/e107-c-secure-sessions`, publicada para revisão independente curta. Não há merge: a integração em `main` exige revisão e aprovação explícita do responsável (D-117). E1.07-D a E1.07-F estão especificadas mas não autorizadas.
 
-A revisão independente **E1.07-C-M** encontrou um defeito Alto (RV-01): depois de um avanço seguido de retrocesso do relógio de parede, o relógio efectivo das sessões congela e as sessões e comprovativos deixam de expirar até o tempo real alcançar o instante adiantado. Recomenda suspender o merge até à correcção, numa tarefa autorizada (PD-45). Detalhe em [tasks/E1.07-C-M.md](tasks/E1.07-C-M.md).
+A revisão independente **E1.07-C-M** encontrou um defeito Alto (RV-01): depois de um avanço seguido de retrocesso do relógio de parede, o relógio efectivo das sessões congelava e as sessões e comprovativos deixavam de expirar. A tarefa **E1.07-C-R1** corrigiu-o na mesma branch, juntamente com RV-03 (migração 5 contra reinserções, incluindo a anulação de revogações por `REPLACE`), RV-04 (sem eliminação no arranque) e RV-05 (testes para R4, R5, R6 e R9). O merge continua suspenso até uma revisão independente curta do checkpoint corrigido e aprovação explícita. A PD-43 (exclusividade por base) continua aberta e bloqueia E1.08 (E1.07-X). Detalhe em [tasks/E1.07-C-R1.md](tasks/E1.07-C-R1.md).
 
 **Na branch de E1.07-C, o sistema tem autenticação local offline e sessões locais revogáveis, mas não tem autorização funcional.** Em `main` ainda não há sessões.
 
@@ -76,6 +78,10 @@ A revisão independente **E1.07-C-M** encontrou um defeito Alto (RV-01): depois 
   - Trabalho na branch `feat/e107-c-secure-sessions`, publicada para revisão independente.
   - A confirmação do *push* (hash local igual ao remoto) consta do relatório de entrega da tarefa.
   - PR preparado sem merge; a descrição está em [tasks/E1.07-C.md](tasks/E1.07-C.md#pull-request). A ferramenta `gh` continua indisponível.
+- E1.07-C-M e E1.07-C-R1: após `git fetch`, `origin/main` = `ab22404` e a branch local = remota = `0eb1e75`, só com a documentação da revisão por commitar.
+  - Commit documental `e19ef76` (só documentação), publicado na branch com o hash local igual ao remoto.
+  - Commit de correcção `fix: harden session clocks and revocation integrity` na mesma branch, sem *force push*; a confirmação do *push* consta do relatório de entrega.
+  - PR ainda inexistente; descrição actualizada em [tasks/E1.07-C-R1.md](tasks/E1.07-C-R1.md#pull-request). Sem merge.
 
 ## Ambiente de referência
 
@@ -98,6 +104,21 @@ node -v   # v24.22.3
 Noutra máquina, instale o Node 24.22.3 (instalador oficial ou um gestor de versões que leia `.node-version`, como o fnm) e o pnpm 9.15.9. Com o Node 24 em Windows x64 não são necessárias ferramentas de compilação C++: o `better-sqlite3` descarrega um binário pré-compilado.
 
 ## Validação verificada
+
+### E1.07-C-R1 (correcções das sessões), 2026-11-16
+
+Node.js 24.22.3 e pnpm 9.15.9, na branch `feat/e107-c-secure-sessions`, sobre `e19ef76`:
+
+- `pnpm.cmd lint`, `typecheck`, `test` (**597/597**, 14 ficheiros), `build` (12/12) e `check`: aprovados. Os 578 testes anteriores mantêm-se (13 ficheiros com as mesmas contagens; todos os nomes presentes); 19 novos; ajustes fundamentados em K01, S49, S52 e S53.
+- 597/597 também com os 13 directórios de build retirados. Desktop 6/6; smoke `KIL_ELECTRON_SMOKE_OK`; `git diff --check` sem erros.
+- Instalação limpa num directório externo (`--frozen-lockfile`, pacotes reutilizados do *store*): `pnpm check` 597/597, 12/12.
+- Mutações: **31/31 detectadas** (9 da implementação, 9 da revisão, incluindo R4, R5, R6 e R9, e 13 regressões de E1.07-C-R1), todas repostas com SHA-256 confirmado.
+- Migração real a partir de bases criadas pelo código compilado de `ab22404` (E1.07-B) e de `0eb1e75` (E1.07-C), verificada com o código compilado desta tarefa: **65/65**.
+- Reprodução RV-01 da revisão sobre o código compilado: **8/8** (antes 5/8).
+- `pnpm audit`: 1 moderado (PD-19); `--prod`: 0. Nenhuma dependência alterada.
+- Não executado: suspensão real do computador (PD-50); ensaio com dois processos (PD-43, E1.07-X).
+
+Detalhe completo em [tasks/E1.07-C-R1.md](tasks/E1.07-C-R1.md).
 
 ### E1.07-C-M (revisão independente das sessões), 2026-11-16
 
@@ -379,12 +400,14 @@ Notas sobre o arranque do Electron:
 | PD-40 | Uma `AuthenticatedIdentity` continua reconhecida por `isAuthenticatedIdentity` durante toda a vida do processo, após suspensão, substituição da credencial ou reinício do serviço (RV-05). | Sem consumidores hoje. Uma sessão que a aceite sem revalidar sobreviveria à perda de elegibilidade. | **Resolvida em E1.07-C** (branch por integrar): a criação de sessões exige um comprovativo interno de 60 s, de utilização única e atómica, ligado ao arranque e às versões de segurança, com revalidação na criação e em cada utilização (D-108, D-110, D-114). Testes S01–S12, S41–S44; mutações M1, M2a, M3a e M4a detectadas. Encerramento formal após revisão e integração (D-118). A revisão E1.07-C-M confirmou o comprovativo, mas suspendeu o merge por RV-01 (PD-45). |
 | PD-41 | Qualquer reinício do serviço (actualização, falha, reinício do posto) termina todas as sessões (D-114). | Intencional e conservador, mas obriga a novo login em todos os postos após cada reinício. | Aberta. Por D-119, mantém-se na arquitectura actual, sem recuperação automática de sessões; disponibilidade a avaliar com os postos POS e a instalação (E1.08, E1.10). |
 | PD-42 | O transporte e a guarda do token de sessão até à interface (loopback, memória do renderer, registos do Electron) não estão definidos. O token é um segredo ao portador. | Uma exposição errada permitiria usar a sessão a partir de outro processo local. | Aberta; requisito de E1.08. Por D-120, o token nunca é guardado em `localStorage`. |
-| PD-43 | Assume-se um único serviço local por base, mas a premissa não é imposta. Reproduzido em E1.07-C-M (RV-02): dois processos atingem `READY` sobre a mesma base; cada arranque revoga as sessões do outro (`service-restarted`); o limite de 5 sessões passa a valer por processo; a limitação de tentativas é partilhada. | Revogações inesperadas, limite de sessões contornável e semântica do reinício perdida. | Aberta; **bloqueante para E1.08** (D-121). Proposta em [E1.07-C-M](tasks/E1.07-C-M.md#ciclo-de-vida-e-pd-43-secção-9): bloqueio exclusivo do SQLite (`locking_mode = EXCLUSIVE`) adquirido antes de `READY`, recusa `database-locked` e recuperação automática pelo sistema operativo após terminação inesperada (prova de conceito executada). Tarefa específica antes de E1.08. |
+| PD-43 | Assume-se um único serviço local por base, mas a premissa não é imposta. Reproduzido em E1.07-C-M (RV-02): dois processos atingem `READY` sobre a mesma base; cada arranque revoga as sessões do outro (`service-restarted`); o limite de 5 sessões passa a valer por processo; a limitação de tentativas é partilhada. | Revogações inesperadas, limite de sessões contornável e semântica do reinício perdida. | Aberta; **bloqueante para E1.08** (D-121). Proposta em [E1.07-C-M](tasks/E1.07-C-M.md#ciclo-de-vida-e-pd-43-secção-9): bloqueio exclusivo do SQLite (`locking_mode = EXCLUSIVE`) adquirido antes de `READY`, recusa `database-locked` e recuperação automática pelo sistema operativo após terminação inesperada (prova de conceito executada). Tarefa específica antes de E1.08. Em E1.07-C-R1: premissa de instância única documentada (D-127) e tarefa [E1.07-X](tasks/E1.07-X.md) especificada, não implementada. |
 | PD-44 | Divergência de planeamento: a especificação preliminar de E1.07-C previa revogar sessões na desactivação de associações ou estabelecimentos. A autorização de E1.07-C não o inclui, porque a sessão não tem empresa. | A perda de elegibilidade empresarial não termina a sessão; tem de ser reavaliada em cada operação. | Aberta; a cumprir pela autorização em E1.07-D. Por D-122, a sessão global não é necessariamente revogada, mas o acesso à empresa afectada cessa imediatamente e a autorização é revalidada em cada operação protegida. |
-| PD-45 | RV-01 (E1.07-C-M): `createSessionClock` congela o instante efectivo depois de um avanço seguido de retrocesso do relógio de parede. Sessões criadas no intervalo não expiram por inactividade nem de forma absoluta, e os comprovativos não expiram, até o tempo real alcançar o instante adiantado ou o serviço reiniciar. O teste K01 afirma o congelamento. | Prolongamento indevido de sessões, de dimensão igual ao salto do relógio. | Aberta; **bloqueia o merge de E1.07-C**. Correcção proposta (avanço pelo monotónico desde a última leitura) e testes K02 e S47b em [E1.07-C-M](tasks/E1.07-C-M.md#rv-01--relógio-efectivo-congelado-após-avanço-e-retrocesso-alto); exige autorização específica. |
-| PD-46 | RV-03 (E1.07-C-M): `INSERT OR REPLACE` sobre `password_credentials` repõe `credential_version` a 1 sem revogar sessões, porque a eliminação implícita não activa `password_credentials_never_deleted`. Nenhum caminho do código o usa. | Defesa em profundidade incompleta; exige escrita SQL directa na base. | Aberta, baixa; proposta: trigger `BEFORE INSERT` que recuse credencial existente, numa migração aditiva. |
-| PD-47 | RV-04 (E1.07-C-M): a limpeza no arranque calcula a retenção só com o relógio de parede; com a parede adiantada 1 ano, todos os registos terminados foram eliminados. | Perda de registos técnicos de sessões por erro de relógio. | Aberta, baixa; a tratar com a retenção definitiva e a auditoria (E1.07-E). |
-| PD-48 | RV-05 (E1.07-C-M): mutações não detectadas pela suite: R4 (versões do comprovativo lidas antes do recálculo de parâmetros), R5 (tecto da política), R6 (registos no futuro) e R9 (idade negativa do comprovativo). | Uma regressão em R4 recusaria a primeira sessão após recálculo sem falhar testes. | Aberta, baixa; testes propostos em [E1.07-C-M](tasks/E1.07-C-M.md#mutações-secção-13). |
+| PD-45 | RV-01 (E1.07-C-M): `createSessionClock` congela o instante efectivo depois de um avanço seguido de retrocesso do relógio de parede. Sessões criadas no intervalo não expiram por inactividade nem de forma absoluta, e os comprovativos não expiram, até o tempo real alcançar o instante adiantado ou o serviço reiniciar. O teste K01 afirma o congelamento. | Prolongamento indevido de sessões, de dimensão igual ao salto do relógio. | **Resolvida na branch** (E1.07-C-R1, D-124): `efectivo = max(parede, anterior + Δmonotónico)`; K01 ajustado; K02–K05, S47b–S47d; mutação X01 detectada; reprodução da revisão 8/8. Encerramento após revisão curta e merge. |
+| PD-46 | RV-03 (E1.07-C-M): `INSERT OR REPLACE` sobre `password_credentials` repõe `credential_version` a 1 sem revogar sessões, porque a eliminação implícita não activa `password_credentials_never_deleted`. Nenhum caminho do código o usa. | Defesa em profundidade incompleta; exige escrita SQL directa na base. | **Resolvida na branch** (E1.07-C-R1, D-126): migração 5 com triggers `BEFORE INSERT`, alargada a `REPLACE INTO users` (com `foreign_keys` desligado) e a `REPLACE INTO local_sessions`, que anulava revogações; S63–S65; fronteira de confiança documentada. Encerramento após revisão e merge. |
+| PD-47 | RV-04 (E1.07-C-M): a limpeza no arranque calcula a retenção só com o relógio de parede; com a parede adiantada 1 ano, todos os registos terminados foram eliminados. | Perda de registos técnicos de sessões por erro de relógio. | **Mitigada** (E1.07-C-R1, D-125): o arranque não elimina registos; `cleanupSessions()` corta pelo instante mais antigo plausível; S48b, S48c. Aberta para a retenção definitiva e a referência temporal confiável em E1.07-E (um processo iniciado com o relógio adiantado não é detectado). |
+| PD-48 | RV-05 (E1.07-C-M): mutações não detectadas pela suite: R4 (versões do comprovativo lidas antes do recálculo de parâmetros), R5 (tecto da política), R6 (registos no futuro) e R9 (idade negativa do comprovativo). | Uma regressão em R4 recusaria a primeira sessão após recálculo sem falhar testes. | **Resolvida na branch** (E1.07-C-R1): S59 (R4), S60 (R5), S61 (R6), S62 (R9); as quatro detectadas individualmente. Encerramento após revisão e merge. |
+| PD-49 | Sem eliminação automática no arranque (D-125), os registos de sessões terminadas crescem sem limite até existir a retenção definitiva. | Crescimento da base (ordem de grandeza não medida: centenas de MB por ano com milhares de sessões por dia). | Aberta; aceite até E1.07-E, que define retenção, referência temporal e limite ou alerta de volume. |
+| PD-50 | O ensaio de suspensão e retoma real do computador não foi executado em E1.07-C-R1 (sem ambiente seguro dedicado). A lógica está coberta com relógios injectados. | Comportamento real de `performance.now()` durante a suspensão não observado. | Aberta; requisito do Gate E1.07-F. |
 
 As decisões arquitecturais ainda em aberto estão em [architecture.md](architecture.md#decisões-pendentes).
 

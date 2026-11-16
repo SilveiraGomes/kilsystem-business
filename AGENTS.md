@@ -60,6 +60,17 @@ Estas regras complementam as anteriores e aplicam-se a qualquer agente (Codex, C
 - Não alterar configuração global da máquina (política de execução do PowerShell, `git config --global`, PATH, instalações de Node.js) para contornar bloqueios; usar as alternativas locais descritas em `docs/project-status.md`.
 - Executar todos os comandos com a versão de Node.js de `.node-version`. O `engine-strict` recusa instalações com outra versão; resultados obtidos noutra versão não contam como validação.
 
+## Recursos temporários dos ensaios
+
+Aplicam-se a ensaios, revisões, mutações e instalações limpas (D-128):
+
+- Cada ensaio cria a sua própria pasta temporária, com um nome identificável, e regista os caminhos que criou.
+- Antes de eliminar, confirmar o caminho absoluto e que foi criado pelo próprio ensaio.
+- Não usar *wildcards* para eliminar pastas de testes nem caminhos calculados a partir de variáveis por validar.
+- Não eliminar ficheiros ou pastas criados por outros agentes ou sessões, nem dados na raiz de `TEMP`.
+- Ficheiros alterados temporariamente (mutações, artefactos de build movidos) são repostos a partir de cópias e confirmados por SHA-256 antes de se considerar o ensaio concluído.
+- Em Windows, árvores com `node_modules` do pnpm (junções, caminhos com mais de 260 caracteres) não são eliminadas de forma fiável por `Remove-Item -Recurse` do PowerShell 5.1 nem por `rmdir /s /q`. Usar `fs.rmSync(caminho, { recursive: true })` do Node.js com o caminho literal confirmado, e registar a remoção só depois de verificar que o caminho deixou de existir.
+
 ## Git e GitHub
 
 Repositório oficial: https://github.com/SilveiraGomes/kilsystem-business (remoto `origin`). Estas regras aplicam-se ao Codex, ao Claude Code e a qualquer outro agente.
