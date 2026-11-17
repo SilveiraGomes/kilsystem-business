@@ -315,6 +315,24 @@ Localização: `packages/shared-types/src` (`permission.ts`, `role.ts`, `role-as
 
 A revisão independente [E1.07-D1-M](tasks/E1.07-D1-M.md), realizada depois de o responsável integrar o PR #8, recomenda **NO-GO** para iniciar D2: `isAuthorizationGranted(unknown)` reconhece um objecto estrutural mínimo `{ outcome: 'GRANTED' }`, e o contrato não distingue a proveniência do catálogo operacional de catálogos de teste/fabricados (PD-62, PD-63). Não existe exploração actual porque estas regras não estão ligadas ao serviço. A correcção e nova revisão antecedem D2.
 
+**Correcção [E1.07-D1-R1](tasks/E1.07-D1-R1.md)** (branch `feat/e107-d1-r1-authorization-integrity`, por rever em E1.07-D1-R2; D-163 a D-167). Descrição do desenho da branch, que ainda não está em `main`:
+
+- **Proveniência das decisões (D-163):** um `WeakMap` privado de `authorization.ts` regista cada decisão emitida por `evaluateAuthorizationFacts`, com o resultado e a proveniência do catálogo fixados na emissão. `inspectDomainDecision` distingue a decisão genuína (`recognized: true`) de qualquer outro valor. Estruturas fabricadas, asserções de tipo, cópias, clones, *proxies* e valores desserializados nunca são reconhecidos. Nenhuma função pública fabrica decisões.
+- **Resposta externa (D-164):** `toExternalDomainEvaluationResponse` é uma avaliação de domínio ilustrativa. Só uma concessão genuína sobre o catálogo oficial dá `{ allowed: true }`; tudo o resto dá a mesma recusa genérica `access-denied`.
+- **Proveniência dos catálogos (D-165):** `OFFICIAL` (só `OFFICIAL_PERMISSION_CATALOG`), `EXPERIMENTAL` (criados ou estendidos para testes) e `UNKNOWN` (recusado por todas as funções, `untrusted-catalog`). A versão e as definições idênticas não provam origem. `PermissionCatalogProvider` foi retirada; o caminho operacional usa só o catálogo oficial (`requireOfficialPermissionCatalog`).
+- **Imutabilidade (D-166):** definições, listas de valores, catálogo, permissões, decisões e colecções devolvidas congelados em execução. As listas de outros módulos ficam na PD-64.
+- **Fronteira de confiança (D-167):** protege contra fabricação e confusão de autoridade através das interfaces suportadas, não contra código com controlo total do processo. É local à instância do módulo (falha fechada). Uma decisão de domínio não substitui a autorização operacional de D4 (sessão, recurso, associação persistida, permissão, execução controlada).
+
+```text
+pedido do consumidor ──▶ evaluateAuthorizationFacts(catálogo reconhecido, factos) ──▶ decisão de domínio (registada)
+                                                                                     │
+  valor fabricado / clone / JSON ──▶ inspectDomainDecision: recognized=false ◀──────┤
+                                                                                     ▼
+              toExternalDomainEvaluationResponse: allowed=true só se GRANTED ∧ catálogo OFFICIAL
+                                                                                     ▼
+              autorização operacional (E1.07-D4, não existe): sessão + recurso + associação persistida + execução
+```
+
 ```text
 autoridade da plataforma KIL   (sem permissões no catálogo; não implementada, D-083)
 autoridade da instalação       installation.*  ──▶ InstallationAuthorityGrant (contrato; emissão em D3)

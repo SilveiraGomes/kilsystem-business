@@ -22,7 +22,7 @@ import {
  * determinam autoridade. Não há perfis globais, herança entre perfis nem permissões negativas.
  */
 
-export const ROLE_STATUSES = ['ACTIVE', 'INACTIVE'] as const;
+export const ROLE_STATUSES = Object.freeze(['ACTIVE', 'INACTIVE'] as const);
 
 export type RoleStatus = (typeof ROLE_STATUSES)[number];
 
@@ -133,6 +133,7 @@ export const createRolePermission = (input: RolePermissionInput): RolePermission
 /**
  * Regras de uma concessão nova a um perfil empresarial:
  * - mesmo tenant do perfil (`TenantMismatchError`) e o mesmo perfil (`DomainValidationError`);
+ * - catálogo reconhecido (`untrusted-catalog`); E1.07-D2 passa só o catálogo oficial;
  * - permissão registada e disponível no catálogo (`unknown-permission`, `permission-unavailable`);
  * - permissão da autoridade empresarial: permissões da instalação nunca são concedidas a perfis
  *   empresariais (`permission-authority-incompatible`).

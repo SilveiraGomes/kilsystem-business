@@ -32,11 +32,11 @@ import { parseOneOf, type Timestamp } from './validation.js';
  *   associação; exige uma associação `COMPANY_WIDE`.
  * - `BRANCH`: o perfil vale só no estabelecimento indicado.
  */
-export const ROLE_ASSIGNMENT_SCOPES = ['COMPANY_WIDE', 'BRANCH'] as const;
+export const ROLE_ASSIGNMENT_SCOPES = Object.freeze(['COMPANY_WIDE', 'BRANCH'] as const);
 
 export type RoleAssignmentScope = (typeof ROLE_ASSIGNMENT_SCOPES)[number];
 
-export const ROLE_ASSIGNMENT_STATUSES = ['ACTIVE', 'INACTIVE'] as const;
+export const ROLE_ASSIGNMENT_STATUSES = Object.freeze(['ACTIVE', 'INACTIVE'] as const);
 
 export type RoleAssignmentStatus = (typeof ROLE_ASSIGNMENT_STATUSES)[number];
 
