@@ -1,9 +1,11 @@
 import { PersistenceError, resolveDatabaseLocation } from '@kil-business/database';
 
-export const LOCAL_SERVICE_ENVIRONMENTS = ['development', 'test', 'production'] as const;
-export const LOG_LEVELS = ['debug', 'info', 'warn', 'error'] as const;
-export const MISSING_DATABASE_POLICIES = ['create', 'fail'] as const;
-export const PENDING_MIGRATION_POLICIES = ['apply', 'fail'] as const;
+// Listas e nomes de variáveis congelados em execução (E1.07-D1-H): a validação da configuração e o
+// filtro de níveis do registo consultam-nos, e `as const` só protege em compilação.
+export const LOCAL_SERVICE_ENVIRONMENTS = Object.freeze(['development', 'test', 'production'] as const);
+export const LOG_LEVELS = Object.freeze(['debug', 'info', 'warn', 'error'] as const);
+export const MISSING_DATABASE_POLICIES = Object.freeze(['create', 'fail'] as const);
+export const PENDING_MIGRATION_POLICIES = Object.freeze(['apply', 'fail'] as const);
 
 export type LocalServiceEnvironment = (typeof LOCAL_SERVICE_ENVIRONMENTS)[number];
 export type LogLevel = (typeof LOG_LEVELS)[number];
@@ -26,14 +28,14 @@ export interface LocalServiceConfig {
 }
 
 /** Variáveis de ambiente lidas explicitamente; nenhum ficheiro `.env` é carregado. */
-export const LOCAL_SERVICE_ENV = {
+export const LOCAL_SERVICE_ENV = Object.freeze({
   databasePath: 'LOCAL_DATABASE_PATH',
   environment: 'LOCAL_SERVICE_ENVIRONMENT',
   instanceId: 'LOCAL_SERVICE_INSTANCE_ID',
   logLevel: 'LOCAL_SERVICE_LOG_LEVEL',
   onMissingDatabase: 'LOCAL_SERVICE_ON_MISSING_DATABASE',
   onPendingMigrations: 'LOCAL_SERVICE_ON_PENDING_MIGRATIONS',
-} as const;
+} as const);
 
 export class LocalServiceConfigError extends Error {
   override readonly name = 'LocalServiceConfigError';

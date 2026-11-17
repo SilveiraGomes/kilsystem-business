@@ -29,6 +29,12 @@ export interface TaxIdPolicy {
   readonly ruleFor: (jurisdiction: Jurisdiction) => TaxIdRule | undefined;
 }
 
+/**
+ * A política guarda e devolve um instantâneo congelado de cada regra, fixado na criação
+ * (E1.07-D1-H, PD-64): quem recebe a política não consegue alterar a regra aplicada aos restantes
+ * utilizadores através de `ruleFor`, e alterações posteriores às propriedades do objecto fornecido
+ * não mudam a validação. O objecto do consumidor não é congelado.
+ */
 export const createTaxIdPolicy = (rules: readonly TaxIdRule[]): TaxIdPolicy => {
   const byJurisdiction = new Map<Jurisdiction, TaxIdRule>();
   for (const rule of rules) {
@@ -37,7 +43,12 @@ export const createTaxIdPolicy = (rules: readonly TaxIdRule[]): TaxIdPolicy => {
     if (byJurisdiction.has(jurisdiction)) {
       throw new DomainValidationError('jurisdiction', 'tem mais de uma regra fiscal configurada');
     }
-    byJurisdiction.set(jurisdiction, rule);
+    // `this` continua a ser o objecto original, como na chamada `rule.isValid(nif)` anterior.
+    const isValid = rule.isValid;
+    byJurisdiction.set(
+      jurisdiction,
+      Object.freeze({ jurisdiction, source: rule.source, isValid: (nif: string): boolean => isValid.call(rule, nif) }),
+    );
   }
   return Object.freeze({ ruleFor: (jurisdiction: Jurisdiction) => byJurisdiction.get(jurisdiction) });
 };

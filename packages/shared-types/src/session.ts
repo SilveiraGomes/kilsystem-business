@@ -12,8 +12,11 @@ export type SessionId = Brand<string, 'SessionId'>;
 
 export const parseSessionId = (value: unknown, field = 'sessionId'): SessionId => parseUuid(value, field) as SessionId;
 
-/** Motivos de revogação persistidos; a lista é igual à da restrição `CHECK` da migração 4. */
-export const SESSION_REVOCATION_REASONS = [
+/**
+ * Motivos de revogação persistidos; a lista é igual à da restrição `CHECK` da migração 4.
+ * Congelada em execução (E1.07-D1-H, PD-64).
+ */
+export const SESSION_REVOCATION_REASONS = Object.freeze([
   'logout',
   'administrative',
   'user-sessions-revoked',
@@ -23,7 +26,7 @@ export const SESSION_REVOCATION_REASONS = [
   'service-restarted',
   'idle-timeout',
   'absolute-timeout',
-] as const;
+] as const);
 
 export type SessionRevocationReason = (typeof SESSION_REVOCATION_REASONS)[number];
 

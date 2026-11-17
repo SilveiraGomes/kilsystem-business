@@ -40,9 +40,9 @@ Este plano regista as etapas concluídas e o planeamento inicial da fase E1 até
 | [E1.07-D1](tasks/E1.07-D1.md) | Contratos de autoridade, perfis, permissões, catálogo, atribuições e regras puras (sem persistência nem integração) | Integrada no PR #8; corrigida no PR #9 e aprovada por R2; fecho definitivo ainda não anunciado | `c43cdaa`; `0f1f9a6`; merges `8f81d5f`, `1a69eb1` |
 | [E1.07-D1-M](tasks/E1.07-D1-M.md) | Revisão independente dos contratos e da futura fronteira de autoridade | Concluída; **NO-GO**; registo integrado em `main` | `40d70cf` (`docs: record independent authorization contract review`); merge `f225366` |
 | [E1.07-D1-R1](tasks/E1.07-D1-R1.md) | Integridade e proveniência das decisões e do catálogo; imutabilidade das definições (PD-62, PD-63) | Integrada pelo responsável no PR #9 antes da revisão; aprovada por E1.07-D1-R2 | `0f1f9a6`; merge `1a69eb1` |
-| [E1.07-D1-R2](tasks/E1.07-D1-R2.md) | Revisão independente da correcção E1.07-D1-R1 | Concluída; **GO** para R1; não autoriza D2 | `docs: record final authorization integrity review` |
-| [E1.07-D1-H](tasks/E1.07-D1-H.md) | Imutabilidade transversal das listas de valores do domínio (PD-64) | Especificação preliminar; **não iniciada e não autorizada**; executar antes de D2 | — |
-| [E1.07-D2](tasks/E1.07-D2.md) | Persistência RBAC (migração 6), repositórios e motor sobre concessões persistidas | **Suspensa, não autorizada** até D1-H e aprovação explícita | — |
+| [E1.07-D1-R2](tasks/E1.07-D1-R2.md) | Revisão independente da correcção E1.07-D1-R1 | Concluída; **GO** para R1; não autoriza D2; registo integrado pelo responsável (PR #10) | `cbe2ad5`; merge `0539b15` |
+| [E1.07-D1-H](tasks/E1.07-D1-H.md) | Imutabilidade transversal dos contratos de domínio (PD-64) | Implementada e publicada na branch `feat/e107-d1-h-domain-immutability`; aguarda a revisão E1.07-D1-H-M; sem merge | `fix: enforce runtime immutability of domain contracts` |
+| [E1.07-D2](tasks/E1.07-D2.md) | Persistência RBAC (migração 6), repositórios e motor sobre concessões persistidas | **Suspensa, não autorizada** até à revisão e integração de D1-H e aprovação explícita | — |
 | [E1.07-D3](tasks/E1.07-D3.md) | Autoridade inicial da instalação, administração empresarial, delegação e prevenção de escalada | Planeada, **não autorizada** | — |
 | [E1.07-D4](tasks/E1.07-D4.md) | Contexto derivado de sessão e autorização integrada; encerra PD-27, PD-28 e PD-44 | Planeada, **não autorizada** | — |
 | [E1.07-E](tasks/E1.07-E.md) | Protecção de contas e auditoria | Planeada, **não autorizada** | — |
@@ -114,14 +114,21 @@ Decisões do responsável D-098 a D-106. A implementação continua sujeita à a
 | Autoridade sobre logout, gestão e revogação de sessões/acesso empresarial | PD-59 | Decidida em D-160; implementar em E1.07-D3/D4/E |
 | Correspondência operação/permissão, perfis e catálogo sectorial | PD-60 | Princípio decidido em D-161; validação funcional em E1.07-D3 e etapas sectoriais |
 | Códigos de permissão desconhecidos ou `WITHDRAWN` | PD-61 | Política decidida em D-162; persistência em E1.07-D2 |
-| Decisões `GRANTED` estruturalmente forjáveis | PD-62 | Encerrada por E1.07-D1-R2 (D-168); vinculação operacional permanece em D4 (D-167) |
-| Proveniência do catálogo e definições iniciais superficialmente congeladas | PD-63 | Encerrada por E1.07-D1-R2 (D-168); composição só com o catálogo oficial permanece requisito de D2 (D-167) |
+| Decisões `GRANTED` estruturalmente forjáveis | PD-62 | Encerrada por E1.07-D1-R2 (D-168), formalizada após o PR #10 (D-170); vinculação operacional permanece em D4 (D-167) |
+| Proveniência do catálogo e definições iniciais superficialmente congeladas | PD-63 | Encerrada por E1.07-D1-R2 (D-168), formalizada após o PR #10 (D-170); composição só com o catálogo oficial permanece requisito de D2 (D-167) |
 
 ### Trabalho identificado em E1.07-D1-R1
 
 | Trabalho | Pendência | Etapa |
 | --- | --- | --- |
-| Congelar em execução as listas de valores permitidos dos restantes módulos de `shared-types` (associações, identidades, empresas, estabelecimentos, sectores, sessões) | PD-64 | E1.07-D1-H, depois de R1 e antes de D2 (D-169); não iniciada |
+| Congelar em execução as listas de valores permitidos dos restantes módulos de `shared-types` (associações, identidades, empresas, estabelecimentos, sectores, sessões) | PD-64 | E1.07-D1-H (D-171, D-172): resolvida na branch, por rever e integrar antes de D2 |
+
+### Trabalho identificado em E1.07-D1-H
+
+| Trabalho | Pendência | Etapa |
+| --- | --- | --- |
+| *Timeouts* intermitentes do limite de 5 s em testes Argon2/SQLite sob carga | PD-65 | Proposta: E1.07-F, com PD-56/PD-57; por aprovar |
+| `picomatch` alta (GHSA-fc5q-39xc-vjpf), só desenvolvimento, sem correcção publicada | PD-66 | Avaliação própria, por aprovar |
 
 ## Dependências entre funcionalidades e decisões pendentes
 
@@ -134,7 +141,7 @@ Relação entre as funcionalidades ainda não desenvolvidas e as decisões pende
 | Persistência central (E1.09) | Driver PostgreSQL, modelo de tenancy e row-level security |
 | Ferramenta operacional de inicialização | Entrada interactiva protegida, sem palavras-passe em argumentos ou ficheiros (PD-31) |
 | Sessões (E1.07-C) | Implementadas (D-107 a D-116) e corrigidas em E1.07-C-R1 (D-124 a D-127). Por decidir: transporte e guarda do token até à interface (E1.08, PD-42); política por tipo de posto; impacto operacional do fim das sessões no reinício (PD-41) |
-| Autorização RBAC (E1.07-D) | Contratos D-146 a D-167; R1 aprovada e PD-62/PD-63 encerradas em D-168. Antes de D2: D1-H/PD-64 (D-169) e aprovação explícita. D2: aplicar D-162, usar só o catálogo oficial e uma instância do módulo (D-167). D3: aplicar D-159 a D-161. D4: PD-27, PD-28, PD-44 e autorização operacional distinta da decisão de domínio (D-167) |
+| Autorização RBAC (E1.07-D) | Contratos D-146 a D-167; R1 aprovada e PD-62/PD-63 encerradas em D-168. Antes de D2: revisão e integração de D1-H/PD-64 (D-169, D-171) e aprovação explícita. D2: aplicar D-162, usar só o catálogo oficial e uma instância do módulo (D-167). D3: aplicar D-159 a D-161. D4: PD-27, PD-28, PD-44 e autorização operacional distinta da decisão de domínio (D-167) |
 | Protecção de contas e auditoria (E1.07-E) | Limiares de bloqueio; retenção e consulta da auditoria, incluindo eventos de sessão (PD-26) |
 | API local e integração Electron (E1.08) | E1.07-B a E1.07-F; exclusividade do serviço por base (E1.07-X, PD-43, D-121; integrada pelo PR #7, D-140); transporte em loopback e do token de sessão, nunca em `localStorage` (PD-42, D-120); E1.06-S1 concluída; PD-27 e PD-28 resolvidas (bloqueantes, D-106); PD-29 resolvida (D-099); medidas contra a negação de serviço da instância (PD-35, PD-39) |
 | Ciclo de vida das empresas | Tabela de transições e auditoria (D-061); preservação do NIF (D-055) |
