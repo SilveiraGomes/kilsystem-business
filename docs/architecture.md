@@ -313,15 +313,16 @@ sessions.validate / registerActivity / logout          identityProvisioning.sess
 
 Localização: `packages/shared-types/src` (`permission.ts`, `role.ts`, `role-assignment.ts`, `authorization.ts`, `authorization-repositories.ts`). **Só contratos de domínio e regras puras**: sem persistência, sem ligação ao serviço local, sem emissão de `TenantContext`. Não são uma fronteira de segurança efectiva; o RBAC só fica operacional em E1.07-D4 (D-146, D-155). Detalhe em [tasks/E1.07-D1.md](tasks/E1.07-D1.md).
 
-A revisão independente [E1.07-D1-M](tasks/E1.07-D1-M.md), realizada depois de o responsável integrar o PR #8, recomenda **NO-GO** para iniciar D2: `isAuthorizationGranted(unknown)` reconhece um objecto estrutural mínimo `{ outcome: 'GRANTED' }`, e o contrato não distingue a proveniência do catálogo operacional de catálogos de teste/fabricados (PD-62, PD-63). Não existe exploração actual porque estas regras não estão ligadas ao serviço. A correcção e nova revisão antecedem D2.
+A revisão independente [E1.07-D1-M](tasks/E1.07-D1-M.md), realizada depois de o responsável integrar o PR #8, recomendou historicamente NO-GO: `isAuthorizationGranted(unknown)` reconhecia `{ outcome: 'GRANTED' }`, e o contrato não distinguia a proveniência do catálogo. E1.07-D1-R1 corrigiu os defeitos e E1.07-D1-R2 encerrou PD-62/PD-63 (D-168). D2 continua não autorizada e aguarda D1-H/PD-64 (D-169).
 
-**Correcção [E1.07-D1-R1](tasks/E1.07-D1-R1.md)** (branch `feat/e107-d1-r1-authorization-integrity`, por rever em E1.07-D1-R2; D-163 a D-167). Descrição do desenho da branch, que ainda não está em `main`:
+**Correcção [E1.07-D1-R1](tasks/E1.07-D1-R1.md)** (D-163 a D-167), integrada pelo responsável no PR #9 antes da revisão e aprovada por [E1.07-D1-R2](tasks/E1.07-D1-R2.md) (D-168). PD-62 e PD-63 estão encerradas. O desenho integrado é:
 
 - **Proveniência das decisões (D-163):** um `WeakMap` privado de `authorization.ts` regista cada decisão emitida por `evaluateAuthorizationFacts`, com o resultado e a proveniência do catálogo fixados na emissão. `inspectDomainDecision` distingue a decisão genuína (`recognized: true`) de qualquer outro valor. Estruturas fabricadas, asserções de tipo, cópias, clones, *proxies* e valores desserializados nunca são reconhecidos. Nenhuma função pública fabrica decisões.
 - **Resposta externa (D-164):** `toExternalDomainEvaluationResponse` é uma avaliação de domínio ilustrativa. Só uma concessão genuína sobre o catálogo oficial dá `{ allowed: true }`; tudo o resto dá a mesma recusa genérica `access-denied`.
 - **Proveniência dos catálogos (D-165):** `OFFICIAL` (só `OFFICIAL_PERMISSION_CATALOG`), `EXPERIMENTAL` (criados ou estendidos para testes) e `UNKNOWN` (recusado por todas as funções, `untrusted-catalog`). A versão e as definições idênticas não provam origem. `PermissionCatalogProvider` foi retirada; o caminho operacional usa só o catálogo oficial (`requireOfficialPermissionCatalog`).
 - **Imutabilidade (D-166):** definições, listas de valores, catálogo, permissões, decisões e colecções devolvidas congelados em execução. As listas de outros módulos ficam na PD-64.
 - **Fronteira de confiança (D-167):** protege contra fabricação e confusão de autoridade através das interfaces suportadas, não contra código com controlo total do processo. É local à instância do módulo (falha fechada). Uma decisão de domínio não substitui a autorização operacional de D4 (sessão, recurso, associação persistida, permissão, execução controlada).
+- **PD-64 (D-169):** sete listas de valores dos restantes módulos permanecem alteráveis. A gravidade é baixa; a especificação preliminar E1.07-D1-H deve ser implementada antes de D2, mediante autorização própria.
 
 ```text
 pedido do consumidor ──▶ evaluateAuthorizationFacts(catálogo reconhecido, factos) ──▶ decisão de domínio (registada)
@@ -386,7 +387,7 @@ decisão = associação empresarial ∩ associação local ∩ âmbito da atribu
 - Autenticação local offline com Argon2id nativo (RFC 9106), política NIST SP 800-63B, limitação persistente de tentativas, inicialização explícita da instalação e integração segura no ciclo de vida do serviço (D-090 a D-097).
 - Sessões locais revogáveis com tokens opacos, comprovativo interno de utilização única, versões de segurança monotónicas, relógio efectivo conservador e ligação ao arranque do serviço; uma sessão não é uma autorização empresarial (D-107 a D-116).
 - Exclusividade do serviço local por base SQLite, pelo bloqueio exclusivo do próprio SQLite adquirido e comprovado antes de qualquer leitura ou escrita, com identificação canónica da base e recusa tipada `database-locked` (D-130 a D-134, E1.07-X).
-- Autorização RBAC em quatro subtarefas (D-146). Contratos de E1.07-D1: autoridades distintas de plataforma, instalação e empresa; catálogo de permissões tipado e versionado; perfis por tenant; concessões explícitas sem negativas, *wildcards* nem hierarquias; atribuições através de associações; intersecção de âmbitos e união de concessões só no alvo; recusa por omissão e resposta externa genérica (D-147 a D-156); política complementar D-159 a D-162. A revisão E1.07-D1-M mantém D2 suspensa por PD-62/PD-63. Não operacional até E1.07-D4.
+- Autorização RBAC em quatro subtarefas (D-146). Contratos de E1.07-D1 e políticas D-147 a D-167; E1.07-D1-R2 encerrou PD-62/PD-63 (D-168). PD-64 segue para D1-H antes de D2 (D-169). D2 continua não autorizada e o RBAC não é operacional até E1.07-D4.
 
 ## Estrutura do monorepositório
 
@@ -410,7 +411,7 @@ decisão = associação empresarial ∩ associação local ∩ âmbito da atribu
 - Estratégia e protocolo de sincronização, resolução de conflitos, idempotência e operação offline.
 - Modelo de tenancy no PostgreSQL (colunas, schemas ou bases separadas), row-level security e driver PostgreSQL.
 - Framework de empacotamento, actualizações e assinatura de código do Electron.
-- Persistência, administração e integração da autorização (E1.07-D2 a E1.07-D4; D2 suspensa até resolver PD-62/PD-63 e rever a correcção) e recuperação de conta (E1.07-E); origem autenticada do `TenantContext` (E1.07-D4). O modelo de identidade e associações está definido desde E1.07-A, a autenticação local desde E1.07-B e as sessões locais desde E1.07-C; o transporte da sessão até à interface fica para E1.08 (PD-42).
+- Persistência, administração e integração da autorização (E1.07-D2 a E1.07-D4; D2 suspensa até D1-H/PD-64 e aprovação explícita) e recuperação de conta (E1.07-E); origem autenticada do `TenantContext` (E1.07-D4). O modelo de identidade e associações está definido desde E1.07-A, a autenticação local desde E1.07-B e as sessões locais desde E1.07-C; o transporte da sessão até à interface fica para E1.08 (PD-42).
 - Hosting, observabilidade, backups, recuperação de desastre e topologia de implantação.
 - Biblioteca de componentes e sistema visual definitivo.
 - Versões e arquitectura concretas do React Native quando começar o monitor móvel.

@@ -88,7 +88,9 @@ contratos de autorização RBAC em `packages/shared-types`: autoridades da plata
 da instalação e da empresa, catálogo de permissões versionado, perfis por empresa,
 atribuições através de associações e regras puras de avaliação. **Não são uma
 autorização operacional**: nada é persistido nem ligado ao serviço até E1.07-D4. O plano das subtarefas seguintes está em [docs/tasks/E1.07.md](docs/tasks/E1.07.md).
-A revisão [E1.07-D1-M](docs/tasks/E1.07-D1-M.md) recomenda **NO-GO** para iniciar D2
-até corrigir a proveniência das decisões e do catálogo. D2 permanece não autorizada.
+A correcção de proveniência e imutabilidade E1.07-D1-R1 foi integrada pelo responsável
+no PR #9 e aprovada pela revisão [E1.07-D1-R2](docs/tasks/E1.07-D1-R2.md), encerrando
+PD-62 e PD-63. A PD-64 permanece para E1.07-D1-H antes de D2. D2 continua suspensa e
+não autorizada; o RBAC continua não operacional.
 
 Consulte [docs/architecture.md](docs/architecture.md) e [AGENTS.md](AGENTS.md) antes de contribuir. Para retomar o trabalho noutra sessão ou com outro agente, comece por [docs/project-status.md](docs/project-status.md).
