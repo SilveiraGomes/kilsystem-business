@@ -54,7 +54,7 @@ Copie `.env.example` para `.env` apenas no ambiente local e substitua os marcado
 - `services/local-api`: serviço local Node.js que gere o ciclo de vida da base SQLite (sem HTTP nesta fase); ver [docs/tasks/E1.05.md](docs/tasks/E1.05.md).
 - `services/central-api`: API Fastify para serviços centrais.
 - `services/sync-service`: futuro serviço de sincronização.
-- `packages/shared-types`: contratos de domínio multiempresa, identidades locais e associações a empresas e estabelecimentos.
+- `packages/shared-types`: contratos de domínio multiempresa, identidades locais, associações a empresas e estabelecimentos, sessões e contratos de autorização (E1.07-D1).
 - `packages/database`: persistência SQLite local isolada por empresa, incluindo identidades e associações (migração 2), credenciais (migração 3) e sessões locais (migração 4).
 - Restantes `packages/*`: fronteiras partilhadas, ainda sem regras de negócio.
 - `tests`: verificações transversais iniciais.
@@ -75,13 +75,18 @@ E1.07-C (integrada em `main` pelo PR #6) acrescenta sessões locais revogáveis:
 
 Uma sessão comprova apenas a identidade autenticada: não concede acesso a empresas.
 
-E1.07-X (branch `feat/e107-x-database-exclusivity`, em revisão) garante um único
-serviço por base: o serviço detém a base SQLite em exclusivo enquanto está activo,
+E1.07-X (integrada em `main` pelo PR #7) garante um único serviço por base: o serviço detém a base SQLite em exclusivo enquanto está activo,
 e um segundo serviço sobre a mesma base é recusado (`database-locked`) sem a alterar.
 Com o serviço activo, nenhuma ferramenta externa abre a base. As cópias de
 segurança fazem-se pela instância proprietária (E1.10), nunca copiando o ficheiro activo.
 
 Estas funções existem apenas na composição interna do serviço local, sem HTTP nem
-IPC. O plano das subtarefas seguintes está em [docs/tasks/E1.07.md](docs/tasks/E1.07.md).
+IPC.
+
+E1.07-D1 (branch `feat/e107-d1-authorization-contracts`, em revisão) define os
+contratos de autorização RBAC em `packages/shared-types`: autoridades da plataforma,
+da instalação e da empresa, catálogo de permissões versionado, perfis por empresa,
+atribuições através de associações e regras puras de avaliação. **Não são uma
+autorização operacional**: nada é persistido nem ligado ao serviço até E1.07-D4. O plano das subtarefas seguintes está em [docs/tasks/E1.07.md](docs/tasks/E1.07.md).
 
 Consulte [docs/architecture.md](docs/architecture.md) e [AGENTS.md](AGENTS.md) antes de contribuir. Para retomar o trabalho noutra sessão ou com outro agente, comece por [docs/project-status.md](docs/project-status.md).

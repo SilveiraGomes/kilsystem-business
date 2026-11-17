@@ -39,7 +39,9 @@ export type RecordKind =
   | 'User'
   | 'CompanyMembership'
   | 'BranchMembership'
-  | 'PasswordCredential';
+  | 'PasswordCredential'
+  | 'Role'
+  | 'RoleAssignment';
 
 export class RecordNotFoundError extends Error {
   override readonly name = 'RecordNotFoundError';
@@ -60,12 +62,38 @@ export type RecordConflictReason =
   | 'duplicate-branch-membership'
   | 'membership-not-branch-restricted'
   | 'duplicate-credential'
-  | 'credential-changed';
+  | 'credential-changed'
+  | 'duplicate-role-code'
+  | 'duplicate-role-permission'
+  | 'duplicate-role-assignment';
 
 export class RecordConflictError extends Error {
   override readonly name = 'RecordConflictError';
 
   constructor(readonly reason: RecordConflictReason) {
     super(`Operação recusada por conflito: ${reason}.`);
+  }
+}
+
+/**
+ * Violação de uma regra dos contratos de autorização (E1.07-D1): catálogo de permissões, concessões
+ * a perfis e atribuições. Não é uma decisão de autorização nem deve chegar a consumidores externos.
+ */
+export type AuthorizationContractErrorReason =
+  | 'duplicate-permission'
+  | 'invalid-catalog-version'
+  | 'unknown-permission'
+  | 'permission-unavailable'
+  | 'permission-authority-incompatible'
+  | 'role-inactive'
+  | 'membership-inactive'
+  | 'branch-inactive'
+  | 'assignment-scope-exceeds-membership';
+
+export class AuthorizationContractError extends Error {
+  override readonly name = 'AuthorizationContractError';
+
+  constructor(readonly reason: AuthorizationContractErrorReason) {
+    super(`Regra de autorização violada: ${reason}.`);
   }
 }

@@ -2,7 +2,7 @@
 
 ## Estado deste documento
 
-Este documento regista a fundação E1.01, a primeira aplicação desktop E1.02, a arquitectura de negócio consolidada em E1.02-H, os contratos multiempresa de E1.03, a persistência SQLite de E1.04, o ciclo de vida do serviço local de E1.05, o ambiente de execução e as decisões de E1.06, a actualização segura do Electron em E1.06-S1, a modernização do Vitest em E1.06-S2, a identidade local com associações multiempresa de E1.07-A, a autenticação local offline de E1.07-B e as sessões locais revogáveis de E1.07-C. “Definido” significa uma decisão já fornecida ou validada pelo projecto; “pendente” requer validação posterior e não deve ser inferido.
+Este documento regista a fundação E1.01, a primeira aplicação desktop E1.02, a arquitectura de negócio consolidada em E1.02-H, os contratos multiempresa de E1.03, a persistência SQLite de E1.04, o ciclo de vida do serviço local de E1.05, o ambiente de execução e as decisões de E1.06, a actualização segura do Electron em E1.06-S1, a modernização do Vitest em E1.06-S2, a identidade local com associações multiempresa de E1.07-A, a autenticação local offline de E1.07-B, as sessões locais revogáveis de E1.07-C, a exclusividade por base de E1.07-X e os contratos de autorização RBAC de E1.07-D1 (não operacionais). “Definido” significa uma decisão já fornecida ou validada pelo projecto; “pendente” requer validação posterior e não deve ser inferido.
 
 ## Visão geral
 
@@ -309,6 +309,28 @@ sessions.validate / registerActivity / logout          identityProvisioning.sess
 - **Premissa de instância única (D-127):** todas as garantias das sessões (revogação no reinício, limite de sessões, comprovativos por processo, relógio monotónico por processo) pressupõem **um único serviço operacional por base**. Desde E1.07-X ([tasks/E1.07-X.md](tasks/E1.07-X.md), na branch `feat/e107-x-database-exclusivity`), a premissa é imposta pelo bloqueio exclusivo da base (ver “Serviço local”): uma segunda instância é recusada antes de revogar sessões ou escrever (PD-43, resolvida na branch).
 - **Limites conhecidos:** reinício termina todas as sessões (PD-41); transporte do token por definir em E1.08 (PD-42); auditoria das sessões em E1.07-E (PD-26); retenção definitiva e crescimento dos registos (PD-47, PD-49); suspensão real do computador não ensaiada (PD-50, Gate E1.07-F).
 
+## Autorização: contratos RBAC (E1.07-D1)
+
+Localização: `packages/shared-types/src` (`permission.ts`, `role.ts`, `role-assignment.ts`, `authorization.ts`, `authorization-repositories.ts`). **Só contratos de domínio e regras puras**: sem persistência, sem ligação ao serviço local, sem emissão de `TenantContext`. Não são uma fronteira de segurança efectiva; o RBAC só fica operacional em E1.07-D4 (D-146, D-155). Detalhe em [tasks/E1.07-D1.md](tasks/E1.07-D1.md).
+
+```text
+autoridade da plataforma KIL   (sem permissões no catálogo; não implementada, D-083)
+autoridade da instalação       installation.*  ──▶ InstallationAuthorityGrant (contrato; emissão em D3)
+autoridade da empresa          Role ──(RolePermission: concessões explícitas)──▶ PermissionCode do catálogo
+                                  └──(RoleAssignment: COMPANY_WIDE | BRANCH)──▶ CompanyMembership (D-081)
+
+decisão = associação empresarial ∩ associação local ∩ âmbito da atribuição ∩ âmbito exigido
+        → união das concessões aplicáveis a ESSE alvo → GRANTED | DENIED(motivo interno) → resposta externa genérica
+```
+
+- **Autoridades (D-147):** plataforma, instalação e empresa são distintas; nenhuma implica outra. A instalação não tem operações comerciais nem acede a dados comerciais; os perfis empresariais nunca recebem permissões `installation.*`.
+- **Permissões (D-148, D-149):** `PermissionCode` com gramática explícita (2–4 segmentos ASCII minúsculos, até 96 caracteres, sem *wildcards* nem `all`/`any`). Catálogo tipado, versionado e imutável, definido em código e estendido só por versão superior. Cada permissão tem âmbito (`INSTALLATION`, `COMPANY`, `BRANCH`), categoria (`ADMINISTRATION`, `OPERATION`) e estado (`AVAILABLE`, `WITHDRAWN`). Catálogo inicial: 24 permissões de administração.
+- **Perfis e concessões (D-150, D-151):** perfis por tenant, com código normalizado e único no tenant; nome só de apresentação. Concessões explícitas, sem permissões negativas, *wildcards* nem hierarquias.
+- **Atribuições (D-152):** sempre através de uma associação empresarial do mesmo tenant; `COMPANY_WIDE` exige associação `COMPANY_WIDE`; `BRANCH` exige estabelecimento activo e, sob `BRANCH_RESTRICTED`, associação local activa.
+- **Avaliação pura (D-153, D-154):** recusa por omissão; permissão registada, disponível e com o âmbito do alvo; factos de outro tenant recusam toda a decisão; concessões de um estabelecimento nunca valem noutro; permissões `OPERATION` exigem empresa `ACTIVE`. Motivos internos tipados; resposta externa idêntica para todas as recusas.
+- **Repositórios futuros (D-155):** interfaces `RoleRepository`, `RolePermissionRepository` e `RoleAssignmentRepository`, com `TenantContext` e semântica D-020; implementação em E1.07-D2.
+- **Prevenção de escalada (D-156):** requisitos de delegação para E1.07-D3 e E1.07-D4.
+
 ## Decisões definidas
 
 - Monorepositório com pnpm workspaces e Git.
@@ -343,6 +365,7 @@ sessions.validate / registerActivity / logout          identityProvisioning.sess
 - Autenticação local offline com Argon2id nativo (RFC 9106), política NIST SP 800-63B, limitação persistente de tentativas, inicialização explícita da instalação e integração segura no ciclo de vida do serviço (D-090 a D-097).
 - Sessões locais revogáveis com tokens opacos, comprovativo interno de utilização única, versões de segurança monotónicas, relógio efectivo conservador e ligação ao arranque do serviço; uma sessão não é uma autorização empresarial (D-107 a D-116).
 - Exclusividade do serviço local por base SQLite, pelo bloqueio exclusivo do próprio SQLite adquirido e comprovado antes de qualquer leitura ou escrita, com identificação canónica da base e recusa tipada `database-locked` (D-130 a D-134, E1.07-X).
+- Autorização RBAC em quatro subtarefas (D-146). Contratos de E1.07-D1: autoridades distintas de plataforma, instalação e empresa; catálogo de permissões tipado e versionado; perfis por tenant; concessões explícitas sem negativas, *wildcards* nem hierarquias; atribuições através de associações; intersecção de âmbitos e união de concessões só no alvo; recusa por omissão e resposta externa genérica (D-147 a D-156). Não operacional até E1.07-D4.
 
 ## Estrutura do monorepositório
 
@@ -352,7 +375,7 @@ sessions.validate / registerActivity / logout          identityProvisioning.sess
 - `services/local-api`: serviço local Node.js (configuração, ciclo de vida, persistência SQLite e executável). A fábrica Fastify de E1.01 (`app.ts`) mantém-se sem uso.
 - `services/central-api`: composição da API central Fastify.
 - `services/sync-service`: fronteira do futuro mecanismo de sincronização.
-- `packages/shared-types`: contratos de domínio multiempresa, de identidade e de associações, e interfaces de repositório, sem dependência de infraestrutura.
+- `packages/shared-types`: contratos de domínio multiempresa, de identidade, de associações, de sessões e de autorização (E1.07-D1), e interfaces de repositório, sem dependência de infraestrutura.
 - `packages/database`: persistência SQLite local (ligação, migrações, repositórios multiempresa, directório de identidades e associações); fronteira futura para PostgreSQL.
 - `packages/accounting`: fronteira do domínio contabilístico.
 - `packages/fiscal`: fronteira do domínio fiscal.
@@ -366,7 +389,7 @@ sessions.validate / registerActivity / logout          identityProvisioning.sess
 - Estratégia e protocolo de sincronização, resolução de conflitos, idempotência e operação offline.
 - Modelo de tenancy no PostgreSQL (colunas, schemas ou bases separadas), row-level security e driver PostgreSQL.
 - Framework de empacotamento, actualizações e assinatura de código do Electron.
-- Estratégia de autorização e recuperação de conta; origem autenticada do `TenantContext` (E1.07-D e E1.07-E). O modelo de identidade e associações está definido desde E1.07-A, a autenticação local desde E1.07-B e as sessões locais desde E1.07-C; o transporte da sessão até à interface fica para E1.08 (PD-42).
+- Persistência, administração e integração da autorização (E1.07-D2 a E1.07-D4; o modelo de contratos está definido desde E1.07-D1) e recuperação de conta (E1.07-E); origem autenticada do `TenantContext` (E1.07-D4). O modelo de identidade e associações está definido desde E1.07-A, a autenticação local desde E1.07-B e as sessões locais desde E1.07-C; o transporte da sessão até à interface fica para E1.08 (PD-42).
 - Hosting, observabilidade, backups, recuperação de desastre e topologia de implantação.
 - Biblioteca de componentes e sistema visual definitivo.
 - Versões e arquitectura concretas do React Native quando começar o monitor móvel.
@@ -382,4 +405,4 @@ sessions.validate / registerActivity / logout          identityProvisioning.sess
 
 ## Restrições da fundação
 
-E1.01 a E1.07-C não criam bases de produção, endpoints de negócio, POS, facturação, contabilidade ou módulos sectoriais. E1.07-A cria identidades e associações. E1.07-B acrescenta credenciais e autenticação local. E1.07-C acrescenta sessões locais revogáveis, sem permissões, RBAC, JWT nem qualquer exposição externa. E1.07-X impõe um único serviço por base, sem HTTP, IPC nem dependências novas. A persistência SQLite é gerida pelo serviço local, sem servidor HTTP e sem localização de produção definida. Os indicadores visuais da aplicação desktop são explicitamente demonstrativos. Os pacotes de domínio contêm apenas contratos e validações estruturais, sem regras fiscais, contabilísticas ou sectoriais.
+E1.01 a E1.07-C não criam bases de produção, endpoints de negócio, POS, facturação, contabilidade ou módulos sectoriais. E1.07-A cria identidades e associações. E1.07-B acrescenta credenciais e autenticação local. E1.07-C acrescenta sessões locais revogáveis, sem permissões, RBAC, JWT nem qualquer exposição externa. E1.07-X impõe um único serviço por base, sem HTTP, IPC nem dependências novas. E1.07-D1 acrescenta só contratos e regras puras de autorização, sem persistência, migração nem integração. A persistência SQLite é gerida pelo serviço local, sem servidor HTTP e sem localização de produção definida. Os indicadores visuais da aplicação desktop são explicitamente demonstrativos. Os pacotes de domínio contêm apenas contratos e validações estruturais, sem regras fiscais, contabilísticas ou sectoriais.
