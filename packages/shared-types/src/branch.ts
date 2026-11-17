@@ -15,7 +15,8 @@ import {
   type Timestamp,
 } from './validation.js';
 
-export const BRANCH_STATUSES = ['ACTIVE', 'INACTIVE'] as const;
+/** Congelada em execução (E1.07-D1-H, PD-64). */
+export const BRANCH_STATUSES = Object.freeze(['ACTIVE', 'INACTIVE'] as const);
 
 export type BranchStatus = (typeof BRANCH_STATUSES)[number];
 

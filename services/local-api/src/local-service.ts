@@ -66,14 +66,18 @@ export const LOCAL_SERVICE_STATES = ['STOPPED', 'STARTING', 'READY', 'STOPPING',
 
 export type LocalServiceState = (typeof LOCAL_SERVICE_STATES)[number];
 
-/** Transições permitidas; qualquer outra é recusada com `LocalServiceStateError`. */
+/**
+ * Transições permitidas; qualquer outra é recusada com `LocalServiceStateError`. Cada lista é
+ * congelada, além do objecto (E1.07-D1-H): congelar só o exterior deixava acrescentar ou retirar
+ * transições através dos arrays internos.
+ */
 export const LOCAL_SERVICE_TRANSITIONS: Readonly<Record<LocalServiceState, readonly LocalServiceState[]>> =
   Object.freeze({
-    STOPPED: ['STARTING'],
-    STARTING: ['READY', 'FAILED'],
-    READY: ['STOPPING'],
-    STOPPING: ['STOPPED', 'FAILED'],
-    FAILED: ['STARTING', 'STOPPED'],
+    STOPPED: Object.freeze(['STARTING'] as const),
+    STARTING: Object.freeze(['READY', 'FAILED'] as const),
+    READY: Object.freeze(['STOPPING'] as const),
+    STOPPING: Object.freeze(['STOPPED', 'FAILED'] as const),
+    FAILED: Object.freeze(['STARTING', 'STOPPED'] as const),
   });
 
 export type LocalServiceStateErrorReason = 'invalid-transition' | 'not-ready';

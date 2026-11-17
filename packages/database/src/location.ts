@@ -3,8 +3,11 @@ import path from 'node:path';
 
 import { PersistenceError } from './errors.js';
 
-/** Extensões ignoradas pelo `.gitignore`, para que uma base mal colocada nunca seja versionada. */
-export const DATABASE_FILE_EXTENSIONS = ['.sqlite', '.sqlite3', '.db'] as const;
+/**
+ * Extensões ignoradas pelo `.gitignore`, para que uma base mal colocada nunca seja versionada.
+ * Congelada em execução (E1.07-D1-H): a validação da localização consulta esta lista.
+ */
+export const DATABASE_FILE_EXTENSIONS = Object.freeze(['.sqlite', '.sqlite3', '.db'] as const);
 
 export interface DatabaseLocationOptions {
   /** Directórios onde a base nunca pode ficar: código-fonte, repositório e artefactos de build. */

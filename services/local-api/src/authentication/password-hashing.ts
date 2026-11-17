@@ -35,13 +35,16 @@ export const MINIMUM_PASSWORD_HASHING_PARAMETERS: Argon2idParameters = Object.fr
   passes: 2,
 });
 
-/** Limites aceites em credenciais persistidas; protegem contra registos alterados (custo abusivo). */
+/**
+ * Limites aceites em credenciais persistidas; protegem contra registos alterados (custo abusivo).
+ * Cada limite é congelado, além do objecto (E1.07-D1-H). Os valores não mudam.
+ */
 export const STORED_PARAMETER_BOUNDS = Object.freeze({
-  hashBytes: { max: 64, min: 32 },
-  memoryKiB: { max: 1048576, min: 19456 },
-  parallelism: { max: 16, min: 1 },
-  passes: { max: 16, min: 1 },
-  saltBytes: { max: 64, min: 16 },
+  hashBytes: Object.freeze({ max: 64, min: 32 }),
+  memoryKiB: Object.freeze({ max: 1048576, min: 19456 }),
+  parallelism: Object.freeze({ max: 16, min: 1 }),
+  passes: Object.freeze({ max: 16, min: 1 }),
+  saltBytes: Object.freeze({ max: 64, min: 16 }),
 });
 
 export interface PasswordHash extends Argon2idParameters {

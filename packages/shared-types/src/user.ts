@@ -10,9 +10,10 @@ import {
 
 /**
  * Estados administrativos da identidade (D-080). `ACTIVE` significa disponibilidade administrativa;
- * não significa autenticação concluída nem existência de credenciais.
+ * não significa autenticação concluída nem existência de credenciais. Congelada em execução
+ * (E1.07-D1-H, PD-64): os validadores consultam esta lista.
  */
-export const USER_STATUSES = ['ACTIVE', 'SUSPENDED', 'INACTIVE'] as const;
+export const USER_STATUSES = Object.freeze(['ACTIVE', 'SUSPENDED', 'INACTIVE'] as const);
 
 export type UserStatus = (typeof USER_STATUSES)[number];
 

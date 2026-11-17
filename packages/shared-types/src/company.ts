@@ -15,8 +15,8 @@ import {
   type Timestamp,
 } from './validation.js';
 
-/** Estados empresariais (D-025); não representam estados de licenciamento. */
-export const COMPANY_STATUSES = ['DRAFT', 'ACTIVE', 'SUSPENDED', 'INACTIVE'] as const;
+/** Estados empresariais (D-025); não representam estados de licenciamento. Congelada (PD-64). */
+export const COMPANY_STATUSES = Object.freeze(['DRAFT', 'ACTIVE', 'SUSPENDED', 'INACTIVE'] as const);
 
 export type CompanyStatus = (typeof COMPANY_STATUSES)[number];
 

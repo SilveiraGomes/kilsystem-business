@@ -22,12 +22,15 @@ import { assertChronology, parseOneOf, parseTimestamp, type Timestamp } from './
  * Âmbito de uma associação empresarial (D-082). Não concede permissões funcionais:
  * `COMPANY_WIDE` abrange todos os estabelecimentos activos da empresa; `BRANCH_RESTRICTED`
  * abrange apenas os estabelecimentos explicitamente associados (nenhum, se não houver).
+ *
+ * Esta lista e `MEMBERSHIP_STATUSES` são congeladas em execução (E1.07-D1-H, PD-64): `parseOneOf`
+ * consulta-as, e `as const` só protege em compilação.
  */
-export const MEMBERSHIP_SCOPES = ['COMPANY_WIDE', 'BRANCH_RESTRICTED'] as const;
+export const MEMBERSHIP_SCOPES = Object.freeze(['COMPANY_WIDE', 'BRANCH_RESTRICTED'] as const);
 
 export type MembershipScope = (typeof MEMBERSHIP_SCOPES)[number];
 
-export const MEMBERSHIP_STATUSES = ['ACTIVE', 'INACTIVE'] as const;
+export const MEMBERSHIP_STATUSES = Object.freeze(['ACTIVE', 'INACTIVE'] as const);
 
 export type MembershipStatus = (typeof MEMBERSHIP_STATUSES)[number];
 
