@@ -313,6 +313,8 @@ sessions.validate / registerActivity / logout          identityProvisioning.sess
 
 Localização: `packages/shared-types/src` (`permission.ts`, `role.ts`, `role-assignment.ts`, `authorization.ts`, `authorization-repositories.ts`). **Só contratos de domínio e regras puras**: sem persistência, sem ligação ao serviço local, sem emissão de `TenantContext`. Não são uma fronteira de segurança efectiva; o RBAC só fica operacional em E1.07-D4 (D-146, D-155). Detalhe em [tasks/E1.07-D1.md](tasks/E1.07-D1.md).
 
+A revisão independente [E1.07-D1-M](tasks/E1.07-D1-M.md), realizada depois de o responsável integrar o PR #8, recomenda **NO-GO** para iniciar D2: `isAuthorizationGranted(unknown)` reconhece um objecto estrutural mínimo `{ outcome: 'GRANTED' }`, e o contrato não distingue a proveniência do catálogo operacional de catálogos de teste/fabricados (PD-62, PD-63). Não existe exploração actual porque estas regras não estão ligadas ao serviço. A correcção e nova revisão antecedem D2.
+
 ```text
 autoridade da plataforma KIL   (sem permissões no catálogo; não implementada, D-083)
 autoridade da instalação       installation.*  ──▶ InstallationAuthorityGrant (contrato; emissão em D3)
@@ -330,6 +332,7 @@ decisão = associação empresarial ∩ associação local ∩ âmbito da atribu
 - **Avaliação pura (D-153, D-154):** recusa por omissão; permissão registada, disponível e com o âmbito do alvo; factos de outro tenant recusam toda a decisão; concessões de um estabelecimento nunca valem noutro; permissões `OPERATION` exigem empresa `ACTIVE`. Motivos internos tipados; resposta externa idêntica para todas as recusas.
 - **Repositórios futuros (D-155):** interfaces `RoleRepository`, `RolePermissionRepository` e `RoleAssignmentRepository`, com `TenantContext` e semântica D-020; implementação em E1.07-D2.
 - **Prevenção de escalada (D-156):** requisitos de delegação para E1.07-D3 e E1.07-D4.
+- **Estados, sessões e catálogo (D-159 a D-162):** política explícita por estado empresarial; autoridades distintas para logout e revogação de sessões/acesso; correspondência obrigatória operação/permissão; códigos desconhecidos ou retirados nunca concedem nem são convertidos ou eliminados silenciosamente.
 
 ## Decisões definidas
 
@@ -365,7 +368,7 @@ decisão = associação empresarial ∩ associação local ∩ âmbito da atribu
 - Autenticação local offline com Argon2id nativo (RFC 9106), política NIST SP 800-63B, limitação persistente de tentativas, inicialização explícita da instalação e integração segura no ciclo de vida do serviço (D-090 a D-097).
 - Sessões locais revogáveis com tokens opacos, comprovativo interno de utilização única, versões de segurança monotónicas, relógio efectivo conservador e ligação ao arranque do serviço; uma sessão não é uma autorização empresarial (D-107 a D-116).
 - Exclusividade do serviço local por base SQLite, pelo bloqueio exclusivo do próprio SQLite adquirido e comprovado antes de qualquer leitura ou escrita, com identificação canónica da base e recusa tipada `database-locked` (D-130 a D-134, E1.07-X).
-- Autorização RBAC em quatro subtarefas (D-146). Contratos de E1.07-D1: autoridades distintas de plataforma, instalação e empresa; catálogo de permissões tipado e versionado; perfis por tenant; concessões explícitas sem negativas, *wildcards* nem hierarquias; atribuições através de associações; intersecção de âmbitos e união de concessões só no alvo; recusa por omissão e resposta externa genérica (D-147 a D-156). Não operacional até E1.07-D4.
+- Autorização RBAC em quatro subtarefas (D-146). Contratos de E1.07-D1: autoridades distintas de plataforma, instalação e empresa; catálogo de permissões tipado e versionado; perfis por tenant; concessões explícitas sem negativas, *wildcards* nem hierarquias; atribuições através de associações; intersecção de âmbitos e união de concessões só no alvo; recusa por omissão e resposta externa genérica (D-147 a D-156); política complementar D-159 a D-162. A revisão E1.07-D1-M mantém D2 suspensa por PD-62/PD-63. Não operacional até E1.07-D4.
 
 ## Estrutura do monorepositório
 
@@ -389,7 +392,7 @@ decisão = associação empresarial ∩ associação local ∩ âmbito da atribu
 - Estratégia e protocolo de sincronização, resolução de conflitos, idempotência e operação offline.
 - Modelo de tenancy no PostgreSQL (colunas, schemas ou bases separadas), row-level security e driver PostgreSQL.
 - Framework de empacotamento, actualizações e assinatura de código do Electron.
-- Persistência, administração e integração da autorização (E1.07-D2 a E1.07-D4; o modelo de contratos está definido desde E1.07-D1) e recuperação de conta (E1.07-E); origem autenticada do `TenantContext` (E1.07-D4). O modelo de identidade e associações está definido desde E1.07-A, a autenticação local desde E1.07-B e as sessões locais desde E1.07-C; o transporte da sessão até à interface fica para E1.08 (PD-42).
+- Persistência, administração e integração da autorização (E1.07-D2 a E1.07-D4; D2 suspensa até resolver PD-62/PD-63 e rever a correcção) e recuperação de conta (E1.07-E); origem autenticada do `TenantContext` (E1.07-D4). O modelo de identidade e associações está definido desde E1.07-A, a autenticação local desde E1.07-B e as sessões locais desde E1.07-C; o transporte da sessão até à interface fica para E1.08 (PD-42).
 - Hosting, observabilidade, backups, recuperação de desastre e topologia de implantação.
 - Biblioteca de componentes e sistema visual definitivo.
 - Versões e arquitectura concretas do React Native quando começar o monitor móvel.
