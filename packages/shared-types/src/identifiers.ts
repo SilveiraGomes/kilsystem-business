@@ -11,6 +11,10 @@ export type CorrelationId = Brand<string, 'CorrelationId'>;
 export type UserId = Brand<string, 'UserId'>;
 export type CompanyMembershipId = Brand<string, 'CompanyMembershipId'>;
 export type BranchMembershipId = Brand<string, 'BranchMembershipId'>;
+/** Perfil empresarial (E1.07-D1). UUID persistível; não é segredo nem credencial. */
+export type RoleId = Brand<string, 'RoleId'>;
+/** Atribuição de um perfil a uma associação empresarial (E1.07-D1). UUID; não é segredo nem credencial. */
+export type RoleAssignmentId = Brand<string, 'RoleAssignmentId'>;
 
 /** Limite de comprimento para identificadores de actor e de correlação. */
 export const MAX_TRACE_ID_LENGTH = 128;
@@ -31,6 +35,11 @@ export const parseCompanyMembershipId = (value: unknown, field = 'companyMembers
 
 export const parseBranchMembershipId = (value: unknown, field = 'branchMembershipId'): BranchMembershipId =>
   parseUuid(value, field) as BranchMembershipId;
+
+export const parseRoleId = (value: unknown, field = 'roleId'): RoleId => parseUuid(value, field) as RoleId;
+
+export const parseRoleAssignmentId = (value: unknown, field = 'roleAssignmentId'): RoleAssignmentId =>
+  parseUuid(value, field) as RoleAssignmentId;
 
 export const isTraceId =(value: unknown): value is string =>
   isRequiredText(value) && value === value.trim() && value.length <= MAX_TRACE_ID_LENGTH;

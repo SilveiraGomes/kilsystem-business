@@ -1,3 +1,5 @@
+export * from './authorization.js';
+export * from './authorization-repositories.js';
 export * from './branch.js';
 export * from './company.js';
 export * from './errors.js';
@@ -5,7 +7,10 @@ export * from './identifiers.js';
 export * from './identity-repositories.js';
 export * from './membership.js';
 export * from './password-policy.js';
+export * from './permission.js';
 export * from './repositories.js';
+export * from './role.js';
+export * from './role-assignment.js';
 export * from './sectors.js';
 export * from './session.js';
 export * from './tax-identification.js';
