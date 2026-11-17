@@ -6,8 +6,8 @@ import {
   createRole,
   createRoleAssignment,
   createRolePermission,
-  extendPermissionCatalog,
-  INITIAL_PERMISSION_CATALOG,
+  extendExperimentalPermissionCatalog,
+  OFFICIAL_PERMISSION_CATALOG,
   type AuthorizationFacts,
   type AuthorizationRequest,
   type AuthorizationScopeInput,
@@ -31,10 +31,11 @@ import { newBranchMembership, newCompanyMembership, newUser } from './identity-f
 // Dados fictícios para testes de autorização (E1.07-D1); nenhum valor corresponde a dados reais.
 
 /**
- * Catálogo dos testes: o inicial mais `sales.create`, um exemplo FICTÍCIO de operação comercial de
- * estabelecimento usado para os cenários obrigatórios. Não é uma funcionalidade disponível.
+ * Catálogo dos testes: o oficial mais `sales.create`, um exemplo FICTÍCIO de operação comercial de
+ * estabelecimento usado para os cenários obrigatórios. Não é uma funcionalidade disponível. É um
+ * catálogo EXPERIMENTAL (E1.07-D1-R1): as concessões avaliadas sobre ele nunca são oficiais.
  */
-export const TEST_CATALOG: PermissionCatalog = extendPermissionCatalog(INITIAL_PERMISSION_CATALOG, 2, [
+export const TEST_CATALOG: PermissionCatalog = extendExperimentalPermissionCatalog(OFFICIAL_PERMISSION_CATALOG, 2, [
   {
     authorityScope: 'BRANCH',
     category: 'OPERATION',
@@ -164,3 +165,10 @@ export const factsFor = (
   company: CompanyAuthorizationFacts | undefined,
   extra: Partial<AuthorizationFacts> = {},
 ): AuthorizationFacts => ({ catalog: TEST_CATALOG, request, company, ...extra });
+
+/** Factos avaliados sobre o catálogo OFICIAL (sem códigos fictícios). */
+export const officialFactsFor = (
+  request: AuthorizationRequest,
+  company: CompanyAuthorizationFacts | undefined,
+  extra: Partial<AuthorizationFacts> = {},
+): AuthorizationFacts => factsFor(request, company, { catalog: OFFICIAL_PERMISSION_CATALOG, ...extra });

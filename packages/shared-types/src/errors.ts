@@ -82,6 +82,10 @@ export class RecordConflictError extends Error {
 export type AuthorizationContractErrorReason =
   | 'duplicate-permission'
   | 'invalid-catalog-version'
+  /** Catálogo sem proveniência reconhecida (estrutura fabricada, cópia ou clone; E1.07-D1-R1). */
+  | 'untrusted-catalog'
+  /** Catálogo reconhecido mas experimental, onde só o oficial é admissível (E1.07-D1-R1). */
+  | 'catalog-not-official'
   | 'unknown-permission'
   | 'permission-unavailable'
   | 'permission-authority-incompatible'

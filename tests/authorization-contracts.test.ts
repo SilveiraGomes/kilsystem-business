@@ -6,8 +6,8 @@ import {
   authorityOfPermissionScope,
   AuthorizationContractError,
   checkPermissionCode,
+  createExperimentalPermissionCatalog,
   createPermission,
-  createPermissionCatalog,
   createRole,
   createRoleAssignment,
   createRolePermission,
@@ -16,12 +16,12 @@ import {
   deactivateRole,
   deactivateRoleAssignment,
   DomainValidationError,
-  extendPermissionCatalog,
-  INITIAL_PERMISSION_CATALOG,
+  extendExperimentalPermissionCatalog,
   INITIAL_PERMISSION_DEFINITIONS,
   isPermissionCode,
   isRoleActive,
   normalizeRoleCode,
+  OFFICIAL_PERMISSION_CATALOG,
   parsePermissionCode,
   parseRoleAssignmentId,
   parseRoleId,
@@ -195,7 +195,7 @@ describe('E1.07-D1 permission codes', () => {
 
 describe('E1.07-D1 permission catalog', () => {
   it('D08 provides a versioned, frozen, unique initial catalog limited to administration', () => {
-    const catalog = INITIAL_PERMISSION_CATALOG;
+    const catalog = OFFICIAL_PERMISSION_CATALOG;
     const codes = catalog.permissions.map((permission) => permission.code);
     expect(catalog.version).toBe(1);
     expect(Object.isFrozen(catalog)).toBe(true);
@@ -224,34 +224,34 @@ describe('E1.07-D1 permission catalog', () => {
   });
 
   it('D09 rejects duplicated codes when creating or extending a catalog', () => {
-    expectContractError(() => createPermissionCatalog(1, [definition(), definition()]), 'duplicate-permission');
+    expectContractError(() => createExperimentalPermissionCatalog(1, [definition(), definition()]), 'duplicate-permission');
     expectContractError(
-      () => extendPermissionCatalog(INITIAL_PERMISSION_CATALOG, 2, [definition({ code: 'company.read' })]),
+      () => extendExperimentalPermissionCatalog(OFFICIAL_PERMISSION_CATALOG, 2, [definition({ code: 'company.read' })]),
       'duplicate-permission',
     );
   });
 
   it('D10 distinguishes a valid code from a registered, available permission', () => {
     const unregistered = parsePermissionCode('reports.export');
-    expect(INITIAL_PERMISSION_CATALOG.find(unregistered)).toBeUndefined();
-    expect(INITIAL_PERMISSION_CATALOG.isRegistered(unregistered)).toBe(false);
-    expectContractError(() => requireRegisteredPermission(INITIAL_PERMISSION_CATALOG, unregistered), 'unknown-permission');
-    const withdrawn = createPermissionCatalog(1, [definition({ status: 'WITHDRAWN' })]);
+    expect(OFFICIAL_PERMISSION_CATALOG.find(unregistered)).toBeUndefined();
+    expect(OFFICIAL_PERMISSION_CATALOG.isRegistered(unregistered)).toBe(false);
+    expectContractError(() => requireRegisteredPermission(OFFICIAL_PERMISSION_CATALOG, unregistered), 'unknown-permission');
+    const withdrawn = createExperimentalPermissionCatalog(1, [definition({ status: 'WITHDRAWN' })]);
     expectContractError(() => requireRegisteredPermission(withdrawn, parsePermissionCode('reports.read')), 'permission-unavailable');
-    expect(requireRegisteredPermission(INITIAL_PERMISSION_CATALOG, parsePermissionCode('roles.read')).code).toBe('roles.read');
+    expect(requireRegisteredPermission(OFFICIAL_PERMISSION_CATALOG, parsePermissionCode('roles.read')).code).toBe('roles.read');
   });
 
   it('D11 extends the catalog in a higher version without changing the base', () => {
-    const before = INITIAL_PERMISSION_CATALOG.permissions.length;
-    const extended = extendPermissionCatalog(INITIAL_PERMISSION_CATALOG, 2, [definition()]);
+    const before = OFFICIAL_PERMISSION_CATALOG.permissions.length;
+    const extended = extendExperimentalPermissionCatalog(OFFICIAL_PERMISSION_CATALOG, 2, [definition()]);
     expect(extended.version).toBe(2);
     expect(extended.permissions).toHaveLength(before + 1);
-    expect(INITIAL_PERMISSION_CATALOG.permissions).toHaveLength(before);
-    expect(INITIAL_PERMISSION_CATALOG.isRegistered(parsePermissionCode('reports.read'))).toBe(false);
+    expect(OFFICIAL_PERMISSION_CATALOG.permissions).toHaveLength(before);
+    expect(OFFICIAL_PERMISSION_CATALOG.isRegistered(parsePermissionCode('reports.read'))).toBe(false);
     for (const version of [1, 0, -1, 1.5, Number.NaN]) {
-      expectContractError(() => extendPermissionCatalog(INITIAL_PERMISSION_CATALOG, version, [definition()]), 'invalid-catalog-version');
+      expectContractError(() => extendExperimentalPermissionCatalog(OFFICIAL_PERMISSION_CATALOG, version, [definition()]), 'invalid-catalog-version');
     }
-    expectContractError(() => createPermissionCatalog(0, []), 'invalid-catalog-version');
+    expectContractError(() => createExperimentalPermissionCatalog(0, []), 'invalid-catalog-version');
   });
 
   it('D12 binds each permission to one authority and keeps the installation free of commercial operations', () => {
@@ -265,7 +265,7 @@ describe('E1.07-D1 permission catalog', () => {
     );
     expectValidationError(() => createPermission(definition({ authorityScope: 'GLOBAL' })), 'authorityScope');
     expectValidationError(() => createPermission(definition({ status: 'DENIED' })), 'status');
-    for (const permission of INITIAL_PERMISSION_CATALOG.permissions) {
+    for (const permission of OFFICIAL_PERMISSION_CATALOG.permissions) {
       expect(permission.code.startsWith('installation.')).toBe(permission.authorityScope === 'INSTALLATION');
     }
   });
@@ -273,7 +273,7 @@ describe('E1.07-D1 permission catalog', () => {
   it('D13 derives resource and action from the code and records the required scope', () => {
     const permission = createPermission(definition({ code: 'roles.permissions.grant' }));
     expect(permission).toMatchObject({ resource: 'roles.permissions', action: 'grant', authorityScope: 'COMPANY' });
-    const find = (code: string) => INITIAL_PERMISSION_CATALOG.find(parsePermissionCode(code));
+    const find = (code: string) => OFFICIAL_PERMISSION_CATALOG.find(parsePermissionCode(code));
     expect(find('branches.read')?.authorityScope).toBe('BRANCH');
     expect(find('company.update')?.authorityScope).toBe('COMPANY');
     expect(find('branches.update')?.authorityScope).toBe('COMPANY');
@@ -374,7 +374,7 @@ describe('E1.07-D1 roles', () => {
       expectContractError(() => assertRolePermissionAllowed(role, grantTo(role, code), TEST_CATALOG), 'permission-authority-incompatible');
     }
     expectContractError(() => assertRolePermissionAllowed(role, grantTo(role, 'reports.export'), TEST_CATALOG), 'unknown-permission');
-    const withdrawn = extendPermissionCatalog(TEST_CATALOG, 3, [definition({ status: 'WITHDRAWN' })]);
+    const withdrawn = extendExperimentalPermissionCatalog(TEST_CATALOG, 3, [definition({ status: 'WITHDRAWN' })]);
     expectContractError(() => assertRolePermissionAllowed(role, grantTo(role, 'reports.read'), withdrawn), 'permission-unavailable');
     expectValidationError(() => grantTo(role, 'roles.*'), 'permissionCode');
     expectValidationError(() => assertRolePermissionAllowed(newRole(company), grantTo(role, 'roles.read'), TEST_CATALOG), 'roleId');

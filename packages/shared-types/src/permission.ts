@@ -21,9 +21,10 @@ export const PERMISSION_MIN_SEGMENTS = 2;
 export const PERMISSION_MAX_SEGMENTS = 4;
 /**
  * Segmentos que sugerem coberturas genéricas (“todas as operações”); recusados para que nenhum
- * código funcione como *wildcard* semântico.
+ * código funcione como *wildcard* semântico. Congelado: uma alteração externa não pode retirar
+ * segmentos reservados (E1.07-D1-R1).
  */
-export const RESERVED_PERMISSION_SEGMENTS = ['all', 'any'] as const;
+export const RESERVED_PERMISSION_SEGMENTS = Object.freeze(['all', 'any'] as const);
 /** Prefixo reservado à autoridade da instalação; nenhuma outra permissão o pode usar. */
 export const INSTALLATION_PERMISSION_PREFIX = 'installation';
 /** Prefixo reservado à autoridade da plataforma KIL, que não tem permissões neste catálogo (D-083). */
@@ -97,8 +98,11 @@ export const parsePermissionCode = (value: unknown, field = 'permissionCode'): P
  *   acesso a dados comerciais. A autoridade efectiva do administrador inicial é de E1.07-D3.
  * - `COMPANY`: limitada a um tenant e à respectiva empresa, sempre através de associações activas.
  * Nenhuma autoridade implica outra.
+ *
+ * As listas de valores permitidos deste módulo estão congeladas (E1.07-D1-R1): `parseOneOf` usa-as
+ * para validar, e uma lista alterável permitiria, por exemplo, criar permissões com âmbito `GLOBAL`.
  */
-export const AUTHORITIES = ['PLATFORM', 'INSTALLATION', 'COMPANY'] as const;
+export const AUTHORITIES = Object.freeze(['PLATFORM', 'INSTALLATION', 'COMPANY'] as const);
 
 export type Authority = (typeof AUTHORITIES)[number];
 
@@ -108,7 +112,7 @@ export type Authority = (typeof AUTHORITIES)[number];
  * - `COMPANY`: a empresa como um todo (operações empresariais globais);
  * - `BRANCH`: um estabelecimento concreto da empresa.
  */
-export const PERMISSION_SCOPES = ['INSTALLATION', 'COMPANY', 'BRANCH'] as const;
+export const PERMISSION_SCOPES = Object.freeze(['INSTALLATION', 'COMPANY', 'BRANCH'] as const);
 
 export type PermissionScope = (typeof PERMISSION_SCOPES)[number];
 
@@ -120,12 +124,12 @@ export const authorityOfPermissionScope = (scope: PermissionScope): Exclude<Auth
  * `ADMINISTRATION`: administração da instalação ou da empresa. `OPERATION`: operação comercial,
  * só aplicável a empresas operacionais (`ACTIVE`, D-088). O catálogo inicial só tem administração.
  */
-export const PERMISSION_CATEGORIES = ['ADMINISTRATION', 'OPERATION'] as const;
+export const PERMISSION_CATEGORIES = Object.freeze(['ADMINISTRATION', 'OPERATION'] as const);
 
 export type PermissionCategory = (typeof PERMISSION_CATEGORIES)[number];
 
 /** `WITHDRAWN`: mantida para reconhecer registos antigos, mas sem conceder nada nem aceitar concessões novas. */
-export const PERMISSION_STATUSES = ['AVAILABLE', 'WITHDRAWN'] as const;
+export const PERMISSION_STATUSES = Object.freeze(['AVAILABLE', 'WITHDRAWN'] as const);
 
 export type PermissionStatus = (typeof PERMISSION_STATUSES)[number];
 
@@ -181,20 +185,76 @@ export const createPermission = (definition: PermissionDefinition): Permission =
   });
 };
 
+// Marca só de compilação: impede que um literal estrutural seja aceite como catálogo sem uma
+// asserção de tipo explícita. NÃO é a garantia: a proveniência é verificada em execução (abaixo).
+declare const permissionCatalogBrand: unique symbol;
+
 /**
  * Catálogo tipado, versionado e imutável das operações reconhecidas pelo sistema. É definido em
  * código e alterado só por uma nova versão do software (nunca por perfis, utilizadores ou dados):
  * a gestão do catálogo é distinta da concessão de permissões.
+ *
+ * A forma deste contrato não prova a origem do catálogo (E1.07-D1-R1, PD-63): só os catálogos
+ * construídos por este módulo têm proveniência (`permissionCatalogProvenance`).
  */
 export interface PermissionCatalog {
-  /** Inteiro positivo; cada extensão tem uma versão superior à da base. */
+  /** Inteiro positivo; cada extensão tem uma versão superior à da base. Informação de evolução, nunca prova de origem. */
   readonly version: number;
   /** Ordenadas pelo código. */
   readonly permissions: readonly Permission[];
   /** Permissão registada com o código, ou `undefined` (um código válido pode não estar registado). */
   find(code: PermissionCode): Permission | undefined;
   isRegistered(code: PermissionCode): boolean;
+  readonly [permissionCatalogBrand]: true;
 }
+
+/**
+ * Proveniência de um catálogo, verificada em execução (E1.07-D1-R1, PD-63):
+ * - `OFFICIAL`: o catálogo operacional oficial (`OFFICIAL_PERMISSION_CATALOG`), único, construído
+ *   neste módulo a partir das definições em código;
+ * - `EXPERIMENTAL`: criado ou estendido por `createExperimentalPermissionCatalog` ou
+ *   `extendExperimentalPermissionCatalog`, para modelação e testes isolados (pode conter códigos
+ *   fictícios); nunca é autoridade operacional;
+ * - `UNKNOWN`: qualquer outro valor, incluindo objectos estruturalmente iguais, cópias e clones de
+ *   catálogos reconhecidos, ou catálogos com as mesmas definições ou versão do oficial.
+ */
+export const PERMISSION_CATALOG_PROVENANCES = Object.freeze(['OFFICIAL', 'EXPERIMENTAL', 'UNKNOWN'] as const);
+
+export type PermissionCatalogProvenance = (typeof PERMISSION_CATALOG_PROVENANCES)[number];
+
+// Registo privado do módulo: a proveniência pertence à identidade do objecto construído aqui e não
+// é transferida por cópia, clonagem, serialização, coincidência de definições ou de versão. Só o
+// catálogo oficial é registado como `OFFICIAL` (uma única chamada, abaixo).
+const catalogProvenance = new WeakMap<object, Exclude<PermissionCatalogProvenance, 'UNKNOWN'>>();
+
+/** Proveniência de um valor como catálogo; `UNKNOWN` para tudo o que não foi construído por este módulo. */
+export const permissionCatalogProvenance = (value: unknown): PermissionCatalogProvenance =>
+  (typeof value === 'object' && value !== null ? catalogProvenance.get(value) : undefined) ?? 'UNKNOWN';
+
+/** Verdadeiro só para o catálogo operacional oficial. */
+export const isOfficialPermissionCatalog = (value: unknown): value is PermissionCatalog =>
+  permissionCatalogProvenance(value) === 'OFFICIAL';
+
+/**
+ * Exige um catálogo construído por este módulo, oficial ou experimental (`untrusted-catalog`).
+ * Usado pelas regras puras, que continuam a admitir catálogos experimentais em testes.
+ */
+export const requireRecognizedPermissionCatalog = (value: unknown): PermissionCatalog => {
+  if (permissionCatalogProvenance(value) === 'UNKNOWN') throw new AuthorizationContractError('untrusted-catalog');
+  return value as PermissionCatalog;
+};
+
+/**
+ * Exige o catálogo operacional oficial: recusa catálogos desconhecidos (`untrusted-catalog`) e
+ * experimentais (`catalog-not-official`). É o único catálogo admissível no futuro caminho
+ * operacional sobre concessões persistidas (E1.07-D2); nenhum pedido, DTO ou adaptador o fornece.
+ */
+export const requireOfficialPermissionCatalog = (value: unknown): PermissionCatalog => {
+  const provenance = permissionCatalogProvenance(value);
+  if (provenance === 'UNKNOWN') throw new AuthorizationContractError('untrusted-catalog');
+  if (provenance !== 'OFFICIAL') throw new AuthorizationContractError('catalog-not-official');
+  return value as PermissionCatalog;
+};
 
 const parseCatalogVersion = (version: unknown): number => {
   if (typeof version !== 'number' || !Number.isSafeInteger(version) || version < 1) {
@@ -203,77 +263,83 @@ const parseCatalogVersion = (version: unknown): number => {
   return version;
 };
 
-const buildCatalog = (version: number, permissions: readonly Permission[]): PermissionCatalog => {
+const buildCatalog = (
+  version: number,
+  permissions: readonly Permission[],
+  provenance: Exclude<PermissionCatalogProvenance, 'UNKNOWN'>,
+): PermissionCatalog => {
+  // O índice privado é a única colecção consultada por `find`; não é exposto aos consumidores.
   const byCode = new Map<string, Permission>();
   for (const permission of permissions) {
     if (byCode.has(permission.code)) throw new AuthorizationContractError('duplicate-permission');
     byCode.set(permission.code, permission);
   }
   const ordered = Object.freeze([...byCode.values()].sort((left, right) => left.code.localeCompare(right.code)));
-  return Object.freeze({
+  const catalog = Object.freeze({
     version,
     permissions: ordered,
-    find: (code: PermissionCode): Permission | undefined => byCode.get(code),
-    isRegistered: (code: PermissionCode): boolean => byCode.has(code),
-  });
+    find: Object.freeze((code: PermissionCode): Permission | undefined => byCode.get(code)),
+    isRegistered: Object.freeze((code: PermissionCode): boolean => byCode.has(code)),
+  }) as unknown as PermissionCatalog;
+  catalogProvenance.set(catalog, provenance);
+  return catalog;
 };
 
-/** Recusa códigos duplicados (`duplicate-permission`) e versões inválidas (`invalid-catalog-version`). */
-export const createPermissionCatalog = (
+/**
+ * Catálogo EXPERIMENTAL, para modelação e testes isolados (admite códigos fictícios). Recusa
+ * códigos duplicados (`duplicate-permission`) e versões inválidas (`invalid-catalog-version`).
+ * Nunca é oficial, mesmo com as definições e a versão do catálogo oficial.
+ */
+export const createExperimentalPermissionCatalog = (
   version: number,
   definitions: readonly PermissionDefinition[],
-): PermissionCatalog => buildCatalog(parseCatalogVersion(version), definitions.map(createPermission));
+): PermissionCatalog => buildCatalog(parseCatalogVersion(version), definitions.map(createPermission), 'EXPERIMENTAL');
 
 /**
- * Extensão futura (ex.: módulos sectoriais) sem reconstruir o motor: devolve um catálogo novo com
- * as permissões da base e as adições, numa versão superior. A base não é alterada.
+ * Estende um catálogo reconhecido (`untrusted-catalog` caso contrário) numa versão superior, sem
+ * alterar a base. O resultado é sempre EXPERIMENTAL, mesmo a partir do oficial: a extensão do
+ * catálogo oficial faz-se por alteração controlada das definições em código, numa versão nova do
+ * software (D-149), e não por composição em execução.
  */
-export const extendPermissionCatalog = (
+export const extendExperimentalPermissionCatalog = (
   base: PermissionCatalog,
   version: number,
   additions: readonly PermissionDefinition[],
 ): PermissionCatalog => {
+  const recognized = requireRecognizedPermissionCatalog(base);
   const next = parseCatalogVersion(version);
-  if (next <= base.version) throw new AuthorizationContractError('invalid-catalog-version');
-  return buildCatalog(next, [...base.permissions, ...additions.map(createPermission)]);
+  if (next <= recognized.version) throw new AuthorizationContractError('invalid-catalog-version');
+  return buildCatalog(next, [...recognized.permissions, ...additions.map(createPermission)], 'EXPERIMENTAL');
 };
 
 /**
- * Exige uma permissão registada (`unknown-permission`) e disponível (`permission-unavailable`).
+ * Exige um catálogo reconhecido (`untrusted-catalog`), e nele uma permissão registada
+ * (`unknown-permission`) e disponível (`permission-unavailable`).
  */
 export const requireRegisteredPermission = (catalog: PermissionCatalog, code: PermissionCode): Permission => {
-  const permission = catalog.find(code);
+  const permission = requireRecognizedPermissionCatalog(catalog).find(code);
   if (permission === undefined) throw new AuthorizationContractError('unknown-permission');
   if (permission.status !== 'AVAILABLE') throw new AuthorizationContractError('permission-unavailable');
   return permission;
 };
 
-const installation = (code: string, description: string): PermissionDefinition => ({
-  authorityScope: 'INSTALLATION',
-  category: 'ADMINISTRATION',
-  code,
-  description,
-});
+// Cada definição é congelada individualmente (E1.07-D1-R1, RV-D1-M-03); os campos são texto.
+const installation = (code: string, description: string): PermissionDefinition =>
+  Object.freeze({ authorityScope: 'INSTALLATION', category: 'ADMINISTRATION', code, description });
 
-const company = (code: string, description: string): PermissionDefinition => ({
-  authorityScope: 'COMPANY',
-  category: 'ADMINISTRATION',
-  code,
-  description,
-});
+const company = (code: string, description: string): PermissionDefinition =>
+  Object.freeze({ authorityScope: 'COMPANY', category: 'ADMINISTRATION', code, description });
 
-const branch = (code: string, description: string): PermissionDefinition => ({
-  authorityScope: 'BRANCH',
-  category: 'ADMINISTRATION',
-  code,
-  description,
-});
+const branch = (code: string, description: string): PermissionDefinition =>
+  Object.freeze({ authorityScope: 'BRANCH', category: 'ADMINISTRATION', code, description });
 
 export const INITIAL_PERMISSION_CATALOG_VERSION = 1;
 
 /**
- * Catálogo inicial (E1.07-D1): só a fundação da administração da instalação e da empresa. Sem
- * vendas, compras, POS, stock, contabilidade nem módulos sectoriais.
+ * Definições do catálogo oficial na versão 1 (E1.07-D1): só a fundação da administração da
+ * instalação e da empresa. Sem vendas, compras, POS, stock, contabilidade nem módulos sectoriais.
+ * O array e cada definição estão congelados. Reutilizá-las noutro catálogo não lhe dá proveniência
+ * oficial.
  */
 export const INITIAL_PERMISSION_DEFINITIONS: readonly PermissionDefinition[] = Object.freeze([
   installation('installation.settings.read', 'Consultar a configuração técnica da instalação'),
@@ -302,7 +368,14 @@ export const INITIAL_PERMISSION_DEFINITIONS: readonly PermissionDefinition[] = O
   company('roles.unassign', 'Desactivar atribuições de perfis'),
 ]);
 
-export const INITIAL_PERMISSION_CATALOG: PermissionCatalog = createPermissionCatalog(
-  INITIAL_PERMISSION_CATALOG_VERSION,
-  INITIAL_PERMISSION_DEFINITIONS,
+/**
+ * Catálogo operacional OFICIAL: o único objecto com proveniência `OFFICIAL`, construído uma vez
+ * neste módulo. Novos módulos entram por alteração controlada das definições oficiais em código,
+ * numa versão superior, nunca por injecção em execução. Não é uma autorização: só define o que
+ * existe.
+ */
+export const OFFICIAL_PERMISSION_CATALOG: PermissionCatalog = buildCatalog(
+  parseCatalogVersion(INITIAL_PERMISSION_CATALOG_VERSION),
+  INITIAL_PERMISSION_DEFINITIONS.map(createPermission),
+  'OFFICIAL',
 );

@@ -18,8 +18,10 @@ import {
 import {
   authorityOfPermissionScope,
   parsePermissionCode,
+  permissionCatalogProvenance,
   type Permission,
   type PermissionCatalog,
+  type PermissionCatalogProvenance,
   type PermissionCode,
 } from './permission.js';
 import type { Role, RolePermission } from './role.js';
@@ -28,7 +30,7 @@ import { parseCompanyScope } from './scoped-record.js';
 import { isUserEligible, type User } from './user.js';
 
 /*
- * Contratos e regras PURAS de avaliação de concessões (E1.07-D1).
+ * Contratos e regras PURAS de avaliação de concessões (E1.07-D1, corrigidas em E1.07-D1-R1).
  *
  * NÃO são uma fronteira de segurança efectiva. Estas funções avaliam apenas os factos explícitos que
  * recebem: não consultam SQLite nem sessões, não emitem `TenantContext` e não garantem que os factos
@@ -36,6 +38,19 @@ import { isUserEligible, type User } from './user.js';
  * consumidor não é prova de sessão, de autoridade nem de contexto confiável, e nenhum componente a
  * aceita como tal. A autoridade dos factos (concessões persistidas, sessão validada, revalidação em
  * cada operação) é garantida em E1.07-D2 a E1.07-D4.
+ *
+ * Quatro categorias distintas (E1.07-D1-R1):
+ * 1. pedido de avaliação (`AuthorizationRequest`), fornecido pelo consumidor;
+ * 2. decisão de domínio genuína, emitida por `evaluateAuthorizationFacts` e reconhecida por
+ *    `inspectDomainDecision` pela identidade do objecto (registo privado deste módulo);
+ * 3. valor fabricado, clonado, serializado ou desconhecido: nunca reconhecido, sempre recusa;
+ * 4. autorização operacional (sessão, recurso real, associação persistida, execução controlada):
+ *    NÃO existe nesta etapa (E1.07-D4) e nenhuma decisão de domínio a substitui.
+ *
+ * Fronteira de confiança: o registo privado impede a fabricação e a confusão de autoridade através
+ * das interfaces suportadas. Não protege contra código arbitrário com controlo total do mesmo
+ * processo, e não é reconhecido entre instâncias distintas do módulo (outro processo, outro *realm*
+ * ou outra cópia carregada do pacote): nesses casos a decisão não é reconhecida (falha fechada).
  */
 
 /** Recurso sobre o qual a operação será executada. Só identifica o alvo; não prova acesso a ele. */
@@ -112,7 +127,8 @@ export type PermissionGrant =
   | { readonly source: 'INSTALLATION_AUTHORITY'; readonly permissionCode: PermissionCode };
 
 /** Motivos internos de recusa, para diagnóstico e auditoria futura; nunca devolvidos a consumidores externos. */
-export const AUTHORIZATION_DENIAL_REASONS = [
+export const AUTHORIZATION_DENIAL_REASONS = Object.freeze([
+  'untrusted-catalog',
   'unknown-permission',
   'permission-unavailable',
   'scope-mismatch',
@@ -124,40 +140,110 @@ export const AUTHORIZATION_DENIAL_REASONS = [
   'company-not-operational',
   'branch-out-of-scope',
   'permission-not-granted',
-] as const;
+] as const);
 
 export type AuthorizationDenialReason = (typeof AUTHORIZATION_DENIAL_REASONS)[number];
 
-/** Decisão explícita, imutável; a recusa é o resultado por omissão. Não contém `TenantContext`. */
-export type AuthorizationDecision =
+// Marca só de compilação: um literal estrutural não é aceite como decisão sem asserção de tipo
+// explícita. NÃO é a garantia: o reconhecimento é feito em execução pelo registo privado abaixo.
+declare const domainDecisionBrand: unique symbol;
+
+/**
+ * Decisão de DOMÍNIO emitida pelo avaliador puro (`evaluateAuthorizationFacts`): explícita,
+ * profundamente imutável, recusa por omissão, sem `TenantContext`.
+ *
+ * Proveniência (E1.07-D1-R1, PD-62): só os objectos emitidos por este módulo, neste processo, são
+ * reconhecidos (`inspectDomainDecision`). Objectos fabricados, convertidos por asserção de tipo,
+ * clonados, copiados, desserializados ou embrulhados num `Proxy` não são decisões, mesmo com a forma
+ * exacta de uma decisão genuína. Uma decisão genuína NÃO prova sessão, identidade efectiva, origem
+ * confiável dos factos, autoridade empresarial persistida nem autorização para executar uma operação
+ * real: só que estas regras, aplicadas aos factos recebidos, produziram este resultado.
+ */
+export type AuthorizationDecision = (
   | {
       readonly outcome: 'GRANTED';
       readonly permissionCode: PermissionCode;
       readonly grants: readonly PermissionGrant[];
     }
-  | { readonly outcome: 'DENIED'; readonly reason: AuthorizationDenialReason };
+  | { readonly outcome: 'DENIED'; readonly reason: AuthorizationDenialReason }
+) & { readonly [domainDecisionBrand]: true };
 
-export const denyAuthorization = (reason: AuthorizationDenialReason): AuthorizationDecision =>
-  Object.freeze({ outcome: 'DENIED', reason });
+/**
+ * Resultado da inspecção de um valor como decisão de domínio:
+ * - `recognized: false`: pedido, estrutura fabricada, clone, cópia, valor serializado ou
+ *   desconhecido (inclui `null` e `undefined`);
+ * - `recognized: true`: decisão emitida pelo avaliador puro, com o resultado REGISTADO na emissão
+ *   (não lido das propriedades do objecto) e a proveniência do catálogo usado.
+ */
+export type DomainDecisionInspection =
+  | { readonly recognized: false }
+  | {
+      readonly recognized: true;
+      readonly outcome: AuthorizationDecision['outcome'];
+      readonly catalog: PermissionCatalogProvenance;
+    };
 
-/** Só uma decisão `GRANTED` explícita conta; qualquer outro valor é recusa. */
-export const isAuthorizationGranted = (decision: unknown): boolean =>
-  typeof decision === 'object' && decision !== null && 'outcome' in decision && decision.outcome === 'GRANTED';
+type RecognizedDecision = Extract<DomainDecisionInspection, { readonly recognized: true }>;
 
-/** Resposta externa genérica: idêntica para todas as recusas, sem motivos nem identificadores. */
-export type ExternalAuthorizationResponse =
+// Registo privado do módulo: chave = identidade do objecto emitido; valor = resultado e proveniência
+// do catálogo, fixados na emissão. Nenhuma função pública acrescenta entradas sem passar pelo
+// avaliador, e nenhuma propriedade, versão ou marca do objecto substitui esta verificação.
+const issuedDecisions = new WeakMap<object, RecognizedDecision>();
+
+const NOT_RECOGNIZED: DomainDecisionInspection = Object.freeze({ recognized: false });
+
+const issue = (
+  body:
+    | { readonly outcome: 'GRANTED'; readonly permissionCode: PermissionCode; readonly grants: readonly PermissionGrant[] }
+    | { readonly outcome: 'DENIED'; readonly reason: AuthorizationDenialReason },
+  catalog: PermissionCatalogProvenance,
+): AuthorizationDecision => {
+  const decision = Object.freeze({ ...body }) as AuthorizationDecision;
+  issuedDecisions.set(decision, Object.freeze({ recognized: true, outcome: body.outcome, catalog }));
+  return decision;
+};
+
+const denied = (reason: AuthorizationDenialReason, catalog: PermissionCatalogProvenance): AuthorizationDecision =>
+  issue({ outcome: 'DENIED', reason }, catalog);
+
+/** Inspecção da proveniência; nunca lança excepções, para qualquer valor. */
+export const inspectDomainDecision = (value: unknown): DomainDecisionInspection =>
+  (typeof value === 'object' && value !== null ? issuedDecisions.get(value) : undefined) ?? NOT_RECOGNIZED;
+
+/** Verdadeiro só para decisões emitidas pelo avaliador puro (qualquer resultado). */
+export const isDomainAuthorizationDecision = (value: unknown): value is AuthorizationDecision =>
+  inspectDomainDecision(value).recognized;
+
+/**
+ * Verdadeiro só para uma decisão genuína com resultado registado `GRANTED`, avaliada sobre o
+ * catálogo OFICIAL. Concessões sobre catálogos experimentais não contam. Continua a ser apenas uma
+ * avaliação de domínio: não é autorização operacional (E1.07-D4).
+ */
+export const isOfficialDomainGrant = (value: unknown): boolean => {
+  const inspection = inspectDomainDecision(value);
+  return inspection.recognized && inspection.outcome === 'GRANTED' && inspection.catalog === 'OFFICIAL';
+};
+
+/**
+ * Resposta externa ILUSTRATIVA de uma avaliação de domínio: idêntica para todas as recusas, sem
+ * motivos nem identificadores. `allowed: true` NÃO é autorização efectiva de acesso; a resposta
+ * operacional, vinculada a sessão, recurso e operação, é de E1.07-D4.
+ */
+export type ExternalDomainEvaluationResponse =
   | { readonly allowed: true }
   | { readonly allowed: false; readonly error: 'access-denied' };
 
-const EXTERNAL_ALLOWED: ExternalAuthorizationResponse = Object.freeze({ allowed: true });
-const EXTERNAL_DENIED: ExternalAuthorizationResponse = Object.freeze({ allowed: false, error: 'access-denied' });
+const EXTERNAL_ALLOWED: ExternalDomainEvaluationResponse = Object.freeze({ allowed: true });
+const EXTERNAL_DENIED: ExternalDomainEvaluationResponse = Object.freeze({ allowed: false, error: 'access-denied' });
 
 /**
- * Converte a decisão interna na resposta externa genérica. Uma recusa nunca indica se a identidade,
- * a empresa, o estabelecimento, o perfil ou a permissão existem.
+ * Converte um valor na resposta externa ilustrativa. Só `isOfficialDomainGrant` produz
+ * `allowed: true`; qualquer outro valor (recusa genuína, concessão sobre catálogo experimental,
+ * estrutura fabricada, clone, valor serializado, `null`, `undefined`) produz a mesma recusa genérica,
+ * que nunca indica se a identidade, a empresa, o estabelecimento, o perfil ou a permissão existem.
  */
-export const toExternalAuthorizationResponse = (decision: AuthorizationDecision): ExternalAuthorizationResponse =>
-  isAuthorizationGranted(decision) ? EXTERNAL_ALLOWED : EXTERNAL_DENIED;
+export const toExternalDomainEvaluationResponse = (value: unknown): ExternalDomainEvaluationResponse =>
+  isOfficialDomainGrant(value) ? EXTERNAL_ALLOWED : EXTERNAL_DENIED;
 
 /** Factos da autoridade empresarial numa empresa: elegibilidade (D-088) e concessões explícitas. */
 export interface CompanyAuthorizationFacts {
@@ -174,6 +260,11 @@ export interface InstallationAuthorizationFacts {
 }
 
 export interface AuthorizationFacts {
+  /**
+   * Catálogo construído por `permission.ts` (oficial ou experimental); qualquer outro objecto recusa
+   * (`untrusted-catalog`). O futuro caminho operacional (E1.07-D2) usa só o catálogo oficial e não
+   * o recebe de pedidos, DTOs nem adaptadores.
+   */
   readonly catalog: PermissionCatalog;
   readonly request: AuthorizationRequest;
   /** Factos da empresa do âmbito pedido; ausentes, nenhuma permissão empresarial é aplicável. */
@@ -281,8 +372,9 @@ const resolveCompanyGrants = (
 
 /**
  * União das permissões empresariais aplicáveis a um alvo `COMPANY` ou `BRANCH`, ordenada e sem
- * repetições. Vazia em qualquer recusa (por omissão). Não é uma lista “global” do utilizador: as
- * concessões de um estabelecimento nunca contam noutro.
+ * repetições. Vazia em qualquer recusa (por omissão), incluindo um catálogo sem proveniência
+ * reconhecida. Não é uma lista “global” do utilizador: as concessões de um estabelecimento nunca
+ * contam noutro. Não é uma decisão nem uma autorização.
  */
 export const listApplicablePermissionCodes = (input: {
   readonly catalog: PermissionCatalog;
@@ -290,9 +382,10 @@ export const listApplicablePermissionCodes = (input: {
   readonly scope: AuthorizationScope;
   readonly company: CompanyAuthorizationFacts;
 }): readonly PermissionCode[] => {
-  if (input.scope.kind === 'INSTALLATION') return Object.freeze([]);
   try {
-    const resolution = resolveCompanyGrants(input.catalog, input.userId, input.scope, input.company);
+    const { catalog, scope } = input;
+    if (permissionCatalogProvenance(catalog) === 'UNKNOWN' || scope.kind === 'INSTALLATION') return Object.freeze([]);
+    const resolution = resolveCompanyGrants(catalog, input.userId, scope, input.company);
     if (!resolution.ok) return Object.freeze([]);
     return Object.freeze([...new Set(resolution.grants.map((grant) => grant.permissionCode))].sort());
   } catch {
@@ -300,49 +393,71 @@ export const listApplicablePermissionCodes = (input: {
   }
 };
 
-const granted = (permissionCode: PermissionCode, grants: readonly PermissionGrant[]): AuthorizationDecision =>
-  Object.freeze({ outcome: 'GRANTED', permissionCode, grants: Object.freeze([...grants]) });
+/** Avaliação com a proveniência do catálogo já verificada (`OFFICIAL` ou `EXPERIMENTAL`). */
+interface Evaluation {
+  readonly catalog: PermissionCatalog;
+  readonly provenance: PermissionCatalogProvenance;
+  readonly request: AuthorizationRequest;
+}
+
+const granted = (
+  evaluation: Evaluation,
+  grants: readonly PermissionGrant[],
+): AuthorizationDecision =>
+  issue(
+    { outcome: 'GRANTED', permissionCode: evaluation.request.permissionCode, grants: Object.freeze([...grants]) },
+    evaluation.provenance,
+  );
 
 const evaluateInstallation = (
-  request: AuthorizationRequest,
+  evaluation: Evaluation,
   facts: InstallationAuthorizationFacts | undefined,
 ): AuthorizationDecision => {
-  if (facts === undefined) return denyAuthorization('no-installation-authority');
+  const { provenance, request } = evaluation;
+  if (facts === undefined) return denied('no-installation-authority', provenance);
   if (facts.user.id !== request.userId || facts.grants.some((grant) => grant.userId !== request.userId)) {
-    return denyAuthorization('inconsistent-facts');
+    return denied('inconsistent-facts', provenance);
   }
-  if (!isUserEligible(facts.user)) return denyAuthorization('user-not-active');
+  if (!isUserEligible(facts.user)) return denied('user-not-active', provenance);
   const matching = facts.grants.filter((grant) => grant.permissionCode === request.permissionCode);
-  if (matching.length === 0) return denyAuthorization('permission-not-granted');
+  if (matching.length === 0) return denied('permission-not-granted', provenance);
   return granted(
-    request.permissionCode,
+    evaluation,
     matching.map((grant) => Object.freeze({ source: 'INSTALLATION_AUTHORITY', permissionCode: grant.permissionCode })),
   );
 };
 
 const evaluate = (facts: AuthorizationFacts): AuthorizationDecision => {
   const { catalog, request } = facts;
+  // O catálogo é lido uma vez e a sua proveniência verificada antes de qualquer consulta: uma
+  // estrutura fabricada, copiada ou clonada nunca é consultada.
+  const provenance = permissionCatalogProvenance(catalog);
+  if (provenance === 'UNKNOWN') return denied('untrusted-catalog', provenance);
+  const evaluation: Evaluation = { catalog, provenance, request };
   const permission = catalog.find(request.permissionCode);
-  if (permission === undefined) return denyAuthorization('unknown-permission');
-  if (permission.status !== 'AVAILABLE') return denyAuthorization('permission-unavailable');
-  if (permission.authorityScope !== request.scope.kind) return denyAuthorization('scope-mismatch');
-  if (request.scope.kind === 'INSTALLATION') return evaluateInstallation(request, facts.installation);
+  if (permission === undefined) return denied('unknown-permission', provenance);
+  if (permission.status !== 'AVAILABLE') return denied('permission-unavailable', provenance);
+  if (permission.authorityScope !== request.scope.kind) return denied('scope-mismatch', provenance);
+  if (request.scope.kind === 'INSTALLATION') return evaluateInstallation(evaluation, facts.installation);
 
   // Pedido empresarial: a autoridade da instalação é ignorada (não concede acesso comercial).
-  if (facts.company === undefined) return denyAuthorization('no-membership');
+  if (facts.company === undefined) return denied('no-membership', provenance);
   const resolution = resolveCompanyGrants(catalog, request.userId, request.scope, facts.company);
-  if (!resolution.ok) return denyAuthorization(resolution.reason);
+  if (!resolution.ok) return denied(resolution.reason, provenance);
   if (permission.category === 'OPERATION' && !resolution.eligibility.companyOperational) {
-    return denyAuthorization('company-not-operational');
+    return denied('company-not-operational', provenance);
   }
   const matching = resolution.grants.filter((grant) => grant.permissionCode === request.permissionCode);
-  if (matching.length === 0) return denyAuthorization('permission-not-granted');
-  return granted(request.permissionCode, matching);
+  if (matching.length === 0) return denied('permission-not-granted', provenance);
+  return granted(evaluation, matching);
 };
 
 /**
- * Avaliação pura de um pedido sobre factos explícitos; recusa por omissão. Qualquer excepção na
- * avaliação (factos malformados) resulta em recusa (`inconsistent-facts`).
+ * Avaliação pura de um pedido sobre factos explícitos; recusa por omissão. Única fonte de decisões
+ * reconhecidas (`inspectDomainDecision`). Um catálogo sem proveniência reconhecida recusa
+ * (`untrusted-catalog`); qualquer excepção na avaliação (factos malformados) resulta em recusa
+ * (`inconsistent-facts`). Admite catálogos experimentais (testes isolados), mas as concessões assim
+ * obtidas ficam registadas como experimentais e nunca produzem `allowed: true` externamente.
  *
  * Só para modelação e testes até E1.07-D4: não é autorização integrada e o resultado não deve ser
  * usado para autorizar operações enquanto os factos não vierem de fontes confiáveis (E1.07-D2/D4).
@@ -351,6 +466,6 @@ export const evaluateAuthorizationFacts = (facts: AuthorizationFacts): Authoriza
   try {
     return evaluate(facts);
   } catch {
-    return denyAuthorization('inconsistent-facts');
+    return denied('inconsistent-facts', 'UNKNOWN');
   }
 };

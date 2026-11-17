@@ -1,5 +1,5 @@
 import type { CompanyId, CompanyMembershipId, RoleAssignmentId, RoleId } from './identifiers.js';
-import type { PermissionCatalog, PermissionCode } from './permission.js';
+import type { PermissionCode } from './permission.js';
 import type { Role, RolePermission } from './role.js';
 import type { RoleAssignment } from './role-assignment.js';
 import type { TenantContext } from './tenant-context.js';
@@ -63,11 +63,10 @@ export interface RoleAssignmentRepository {
   update(context: TenantContext, assignment: RoleAssignment): Promise<void>;
 }
 
-/**
- * O catálogo é definido em código e versionado; não existe repositório de escrita de permissões.
- * E1.07-D2 decide se a versão vigente é registada na base (por exemplo, para recusar uma base
- * criada por um catálogo mais recente).
+/*
+ * O catálogo é definido em código e versionado; não existe repositório de escrita de permissões nem
+ * fornecedor injectável de catálogos (E1.07-D1-R1 retirou `PermissionCatalogProvider`, que admitia
+ * qualquer objecto estrutural). O caminho operacional de E1.07-D2 usa `OFFICIAL_PERMISSION_CATALOG`
+ * (ou valida com `requireOfficialPermissionCatalog`) e decide se a versão vigente é registada na base
+ * (por exemplo, para recusar uma base criada por um catálogo mais recente).
  */
-export interface PermissionCatalogProvider {
-  current(): PermissionCatalog;
-}

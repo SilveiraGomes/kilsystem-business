@@ -15,13 +15,18 @@ import {
   deactivateCompanyMembership,
   deactivateRole,
   deactivateRoleAssignment,
+  createExperimentalPermissionCatalog,
   evaluateAuthorizationFacts,
-  isAuthorizationGranted,
+  INITIAL_PERMISSION_CATALOG_VERSION,
+  INITIAL_PERMISSION_DEFINITIONS,
+  inspectDomainDecision,
+  isOfficialDomainGrant,
   listApplicablePermissionCodes,
   parsePermissionCode,
-  toExternalAuthorizationResponse,
+  toExternalDomainEvaluationResponse,
   type AuthorizationDecision,
   type AuthorizationFacts,
+  type AuthorizationRequest,
   type InstallationAuthorityGrant,
   type PermissionCatalog,
 } from '../packages/shared-types/src/index';
@@ -35,6 +40,7 @@ import {
   factsFor,
   grantTo,
   newRole,
+  officialFactsFor,
   requestFor,
   TEST_CATALOG,
   tenantScenario,
@@ -51,7 +57,8 @@ const SHARED_TYPES_SOURCES = path.join(REPOSITORY_ROOT, 'packages', 'shared-type
 const AUTHORIZATION_SOURCES = ['authorization.ts', 'authorization-repositories.ts', 'permission.ts', 'role.ts', 'role-assignment.ts', 'scoped-record.ts'].map(
   (file) => path.join(SHARED_TYPES_SOURCES, file),
 );
-const RBAC_SYMBOLS = /evaluateAuthorizationFacts|listApplicablePermissionCodes|PermissionCatalog|INITIAL_PERMISSION_CATALOG|RoleAssignment|RolePermission|RoleRepository|createRole\b|AuthorizationDecision|InstallationAuthorityGrant/;
+// E1.07-D1-R1: inclui os nomes novos (catálogo oficial e decisões de domínio) para manter a guarda.
+const RBAC_SYMBOLS = /evaluateAuthorizationFacts|listApplicablePermissionCodes|PermissionCatalog|OFFICIAL_PERMISSION_CATALOG|INITIAL_PERMISSION|RoleAssignment|RolePermission|RoleRepository|createRole\b|AuthorizationDecision|DomainDecision|DomainEvaluation|DomainGrant|InstallationAuthorityGrant/;
 
 const sources = (directory: string): readonly string[] =>
   readdirSync(directory, { recursive: true, withFileTypes: true })
@@ -60,14 +67,23 @@ const sources = (directory: string): readonly string[] =>
 
 const evaluate = (facts: AuthorizationFacts): AuthorizationDecision => evaluateAuthorizationFacts(facts);
 
+// E1.07-D1-R1: o reconhecimento passa pela proveniência registada (`inspectDomainDecision`), não pela
+// propriedade `outcome`; os cenários usam o catálogo experimental, cujas concessões não são oficiais.
+const isGrantedEvaluation = (decision: unknown): boolean => {
+  const inspection = inspectDomainDecision(decision);
+  return inspection.recognized && inspection.outcome === 'GRANTED';
+};
+
 const expectDenied = (decision: AuthorizationDecision, reason: string): void => {
   expect(decision).toEqual({ outcome: 'DENIED', reason });
-  expect(isAuthorizationGranted(decision)).toBe(false);
+  expect(inspectDomainDecision(decision)).toMatchObject({ recognized: true, outcome: 'DENIED' });
+  expect(isGrantedEvaluation(decision)).toBe(false);
+  expect(isOfficialDomainGrant(decision)).toBe(false);
 };
 
 const expectGranted = (decision: AuthorizationDecision): void => {
   expect(decision.outcome).toBe('GRANTED');
-  expect(isAuthorizationGranted(decision)).toBe(true);
+  expect(isGrantedEvaluation(decision)).toBe(true);
 };
 
 /** Cenário com uma associação `COMPANY_WIDE`, um perfil activo e uma atribuição empresarial. */
@@ -90,7 +106,8 @@ describe('E1.07-D1 pure evaluation', () => {
     const role = newRole(scenario.company);
     expectDenied(evaluate(factsFor(own, companyFacts(scenario, { roles: [role], rolePermissions: [grantTo(role, 'company.read')] }))), 'permission-not-granted');
     for (const value of [undefined, null, {}, { outcome: 'granted' }, { outcome: true }, 'GRANTED', { allowed: true }]) {
-      expect(isAuthorizationGranted(value)).toBe(false);
+      expect(isGrantedEvaluation(value)).toBe(false);
+      expect(isOfficialDomainGrant(value)).toBe(false);
     }
   });
 
@@ -149,13 +166,12 @@ describe('E1.07-D1 pure evaluation', () => {
     const { company, facts, role, user } = companyWideGrant(['company.read']);
     const unknown = { ...facts, rolePermissions: [...facts.rolePermissions, grantTo(role, 'reports.export')] };
     expectDenied(evaluate(factsFor(requestFor(user, 'reports.export', companyTarget(company)), unknown)), 'unknown-permission');
-    const withdrawn: PermissionCatalog = {
-      ...TEST_CATALOG,
-      find: (code) => {
-        const permission = TEST_CATALOG.find(code);
-        return permission === undefined ? undefined : { ...permission, status: 'WITHDRAWN' };
-      },
-    };
+    // E1.07-D1-R1: um catálogo fabricado por cópia seria recusado como `untrusted-catalog`; a retirada
+    // é exercitada com um catálogo experimental reconhecido em que `company.read` está `WITHDRAWN`.
+    const withdrawn: PermissionCatalog = createExperimentalPermissionCatalog(
+      INITIAL_PERMISSION_CATALOG_VERSION,
+      INITIAL_PERMISSION_DEFINITIONS.map((definition) => (definition.code === 'company.read' ? { ...definition, status: 'WITHDRAWN' } : definition)),
+    );
     expectDenied(evaluate(factsFor(requestFor(user, 'company.read', companyTarget(company)), facts, { catalog: withdrawn })), 'permission-unavailable');
   });
 
@@ -301,7 +317,7 @@ describe('E1.07-D1 pure evaluation', () => {
       expect(decision.outcome).toBe('DENIED');
       expect(Object.keys(decision).sort()).toEqual(['outcome', 'reason']);
       expect(AUTHORIZATION_DENIAL_REASONS).toContain((decision as { reason: string }).reason);
-      const external = toExternalAuthorizationResponse(decision);
+      const external = toExternalDomainEvaluationResponse(decision);
       expect(external).toEqual({ allowed: false, error: 'access-denied' });
       const serialized = JSON.stringify(external);
       for (const secret of [user.id, user.username, company.id, company.tenantId, other.company.tenantId, role.id, role.code, 'reason']) {
@@ -309,7 +325,10 @@ describe('E1.07-D1 pure evaluation', () => {
       }
     }
     expect(JSON.stringify(decisions)).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-/);
-    expect(toExternalAuthorizationResponse(evaluate(factsFor(requestFor(user, 'company.read', companyTarget(company)), facts)))).toEqual({ allowed: true });
+    // E1.07-D1-R1: só uma concessão genuína sobre o catálogo OFICIAL produz `allowed: true`; a mesma
+    // concessão sobre o catálogo experimental dos testes produz a recusa genérica.
+    expect(toExternalDomainEvaluationResponse(evaluate(officialFactsFor(requestFor(user, 'company.read', companyTarget(company)), facts)))).toEqual({ allowed: true });
+    expect(toExternalDomainEvaluationResponse(evaluate(factsFor(requestFor(user, 'company.read', companyTarget(company)), facts)))).toEqual({ allowed: false, error: 'access-denied' });
   });
 
   it('D54 revalidates identity, membership and branch status in each evaluation', () => {
@@ -339,8 +358,14 @@ describe('E1.07-D1 pure evaluation', () => {
   it('D56 fails closed on malformed facts', () => {
     const { company, facts, user } = companyWideGrant(['company.read']);
     const request = requestFor(user, 'company.read', companyTarget(company));
-    const throwing: PermissionCatalog = { ...TEST_CATALOG, find: () => { throw new Error('falha simulada'); } };
-    expectDenied(evaluate(factsFor(request, facts, { catalog: throwing })), 'inconsistent-facts');
+    // E1.07-D1-R1: um catálogo fabricado já não é consultado (recusa `untrusted-catalog` antes de
+    // `find`); a falha fechada perante uma excepção é exercitada com um pedido malformado.
+    let consulted = false;
+    const throwing = { ...TEST_CATALOG, find: () => { consulted = true; throw new Error('falha simulada'); } } as PermissionCatalog;
+    expectDenied(evaluate(factsFor(request, facts, { catalog: throwing })), 'untrusted-catalog');
+    expect(consulted).toBe(false);
+    const malformed = { userId: request.userId, permissionCode: request.permissionCode, get scope(): never { throw new Error('falha simulada'); } } as AuthorizationRequest;
+    expectDenied(evaluate(factsFor(malformed, facts)), 'inconsistent-facts');
     expectDenied(evaluate(factsFor(request, { ...facts, roles: undefined as never })), 'inconsistent-facts');
     expectDenied(evaluate(factsFor(request, { ...facts, membership: { ...facts.membership, user: tenantScenario().user } })), 'inconsistent-facts');
   });
@@ -412,19 +437,22 @@ describe('E1.07-D1 boundaries', () => {
           : permission.authorityScope === 'COMPANY'
             ? companyTarget(scenario.company)
             : branchTarget(scenario.company, scenario.branchA);
-      expect(isAuthorizationGranted(evaluate(factsFor(requestFor(scenario.user, permission.code, target), facts))), permission.code).toBe(false);
+      expect(isGrantedEvaluation(evaluate(factsFor(requestFor(scenario.user, permission.code, target), facts))), permission.code).toBe(false);
     }
     const request = requestFor(scenario.user, 'company.read', companyTarget(scenario.company));
     expect(listApplicablePermissionCodes({ catalog: TEST_CATALOG, userId: scenario.user.id, scope: request.scope, company: facts })).toEqual([]);
   });
 
   it('D64 emits no authenticated context from arbitrary data and is not wired into the service', () => {
-    const exported = readFileSync(path.join(SHARED_TYPES_SOURCES, 'authorization.ts'), 'utf8');
-    expect(exported).not.toMatch(/createTenantContext|TenantContextInput|actorId|correlationId/);
+    for (const file of AUTHORIZATION_SOURCES) {
+      expect(readFileSync(file, 'utf8'), file).not.toMatch(/createTenantContext|TenantContextInput|actorId|correlationId/);
+    }
     const { company, facts, user } = companyWideGrant(['company.read']);
-    const decision = evaluate(factsFor(requestFor(user, 'company.read', companyTarget(company)), facts));
+    const decision = evaluate(officialFactsFor(requestFor(user, 'company.read', companyTarget(company)), facts));
+    expect(isOfficialDomainGrant(decision)).toBe(true);
     expect(() => assertTenantContext(decision)).toThrow();
-    expect(() => assertTenantContext(toExternalAuthorizationResponse(decision))).toThrow();
+    expect(() => assertTenantContext(toExternalDomainEvaluationResponse(decision))).toThrow();
+    expect(() => assertTenantContext(inspectDomainDecision(decision))).toThrow();
     const service = sources(path.join(REPOSITORY_ROOT, 'services', 'local-api', 'src'));
     for (const file of service) expect(readFileSync(file, 'utf8')).not.toMatch(/evaluateAuthorizationFacts|AuthorizationRequest/);
   });
