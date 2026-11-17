@@ -1,6 +1,6 @@
 # Estado do projecto
 
-Última verificação: 2026-11-17, em E1.07-D1-R1 (`main` local = `origin/main` = `f225366`, merge documental da revisão E1.07-D1-M; correcção na branch `feat/e107-d1-r1-authorization-integrity`, sem merge).
+Última verificação: 2026-11-17, em E1.07-D1-R2 (branch `feat/e107-d1-r1-authorization-integrity`; checkpoint técnico `0f1f9a6`; `origin/main` = merge PR #9 `1a69eb1`; `main` local permanece em `f225366`).
 
 Este documento é o ponto de retoma para qualquer agente ou pessoa. Contém apenas factos verificados no repositório ou por execução; o que não foi executado está marcado como tal.
 
@@ -32,18 +32,20 @@ Este documento é o ponto de retoma para qualquer agente ou pessoa. Contém apen
 | E1.07-X-M — Revisão independente da exclusividade | Concluída; **GO com ressalvas**, aprovado pelo responsável; integrada (PR #7) | `92b2cce`; merge `1872bdf`; `docs: record database exclusivity integration completion` | [tasks/E1.07-X-M.md](tasks/E1.07-X-M.md) |
 | E1.07-D1 — Contratos de autoridade, perfis e permissões RBAC | Integrada pelo responsável no PR #8 antes da revisão; RBAC não operacional | `c43cdaa`; merge `8f81d5f` | [tasks/E1.07-D1.md](tasks/E1.07-D1.md) |
 | E1.07-D1-M — Revisão independente dos contratos RBAC | Concluída; **NO-GO** até corrigir RV-D1-M-01/RV-D1-M-02 e repetir a revisão; registo integrado em `main` | `40d70cf`; merge `f225366` | [tasks/E1.07-D1-M.md](tasks/E1.07-D1-M.md) |
-| E1.07-D1-R1 — Integridade e proveniência dos contratos de autorização | Implementada e publicada na branch `feat/e107-d1-r1-authorization-integrity`; aguarda revisão independente E1.07-D1-R2; **sem merge** | `fix: harden authorization decision and permission catalog integrity` | [tasks/E1.07-D1-R1.md](tasks/E1.07-D1-R1.md) |
-| E1.07-D2 | **Suspensa, não autorizada** até E1.07-D1-R2 e aprovação (PD-62/PD-63) | — | [tasks/E1.07-D2.md](tasks/E1.07-D2.md) |
+| E1.07-D1-R1 — Integridade e proveniência dos contratos de autorização | Integrada pelo responsável no PR #9 antes da revisão; aprovada por E1.07-D1-R2 | `0f1f9a6`; merge `1a69eb1` | [tasks/E1.07-D1-R1.md](tasks/E1.07-D1-R1.md) |
+| E1.07-D1-R2 — Revisão independente final da integridade | Concluída; **GO para R1**; não autoriza D2 | `docs: record final authorization integrity review` | [tasks/E1.07-D1-R2.md](tasks/E1.07-D1-R2.md) |
+| E1.07-D1-H — Imutabilidade transversal (PD-64) | Especificação preliminar; **não iniciada e não autorizada** | — | [tasks/E1.07-D1-H.md](tasks/E1.07-D1-H.md) |
+| E1.07-D2 | **Suspensa, não autorizada** até D1-H e aprovação explícita | — | [tasks/E1.07-D2.md](tasks/E1.07-D2.md) |
 | E1.07-D3, E1.07-D4, E1.07-E, E1.07-F | Planeadas, não autorizadas | — | [tasks/E1.07-D.md](tasks/E1.07-D.md), [tasks/E1.07.md](tasks/E1.07.md) |
 | E1.08 a E1.10 | Planeadas, não autorizadas | — | [implementation-plan.md](implementation-plan.md) |
 
-Tarefa activa: **E1.07-D1-R1**, correcção autorizada dos bloqueios da revisão E1.07-D1-M. Antes da correcção, o registo documental do NO-GO (`40d70cf`) foi integrado em `main` no merge `f225366`, com autorização do responsável. Na branch `feat/e107-d1-r1-authorization-integrity`:
+Tarefa activa: **E1.07-D1-R2**, revisão independente final da correcção R1. O `fetch` revelou que o responsável já tinha integrado a correcção no PR #9 (`1a69eb1`) antes da sua conclusão; a árvore é idêntica ao checkpoint `0f1f9a6`. A revisão recomenda GO para R1:
 
 - **Decisões (PD-62):** só as emitidas pelo avaliador puro são reconhecidas, pela identidade do objecto num registo privado; estruturas fabricadas, clones e valores serializados são sempre recusados.
 - **Catálogo (PD-63):** proveniência `OFFICIAL`, `EXPERIMENTAL` ou `UNKNOWN` verificada em execução; só o catálogo oficial pode servir de autoridade.
 - **Imutabilidade:** definições e listas de valores congeladas.
 
-PD-62 e PD-63 ficam resolvidas na branch e são encerradas só depois da revisão independente **E1.07-D1-R2** e da integração. **O RBAC não está operacional**, nada está persistido nem ligado ao serviço, e o `TenantContext` continua construído pelo chamador. D2 está suspensa e não autorizada; D3/D4, E1.07-E/F e E1.08–E1.10 permanecem não autorizadas. E1.08 continua bloqueada por PD-27 e PD-28.
+PD-62 e PD-63 estão encerradas (D-168). PD-64 permanece aberta, baixa, para E1.07-D1-H antes de D2 (D-169). **O RBAC não está operacional**, nada está persistido nem ligado ao serviço, e o `TenantContext` continua construído pelo chamador. D1-H não foi iniciada; D2 está suspensa e não autorizada; D3/D4, E1.07-E/F e E1.08–E1.10 permanecem não autorizadas. E1.08 continua bloqueada por PD-27 e PD-28.
 
 Anterior: E1.07-X (exclusividade do serviço por base) foi revista em **E1.07-X-M** (GO com ressalvas, aprovado pelo responsável) e integrada em `main` pelo PR #7, no merge `1872bdf` (checkpoint documental `92b2cce`; técnico `cfd11fe`). PD-43 e PD-51 estão encerradas (D-140). E1.07-C, com E1.07-C-R1, está em `main` (PR #6, `136a442`), e o registo da revisão E1.07-C-R2 foi integrado em `030b101`.
 
@@ -61,7 +63,7 @@ A revisão independente final **E1.07-C-R2** (`d5f077e`) confirmou por execuçã
 - Tudo isto existe só na composição interna do serviço local, sem HTTP nem IPC.
 - Uma sessão comprova apenas a identidade autenticada; não é uma autorização empresarial (D-107, D-116).
 - O `TenantContext` continua a ser construído pelo chamador (PD-27, a encerrar em E1.07-D4).
-- Em `main`, desde o PR #8: contratos de autoridades, permissões, catálogo inicial, perfis, concessões, atribuições e regras puras de avaliação (D-146 a D-158), sem persistência nem integração. D-159 a D-162 registam a política aprovada na revisão. PD-62/PD-63 bloqueiam D2. A correcção E1.07-D1-R1 (D-163 a D-167) está só na branch da tarefa, por rever.
+- Em `origin/main`, desde o PR #9: a correcção E1.07-D1-R1 (D-163 a D-167) está integrada. E1.07-D1-R2 confirmou-a e encerrou PD-62/PD-63 (D-168). PD-64/D1-H permanece antes de D2 (D-169). Não há persistência nem integração operacional.
 
 ## Repositório remoto
 
@@ -117,6 +119,7 @@ A revisão independente final **E1.07-C-R2** (`d5f077e`) confirmou por execuçã
   - A `main` local avançou por *fast-forward* de `5db43c2` para `8f81d5f`. Sem `gh`, merge local sem *fast-forward* de `40d70cf` (como em `030b101` e `1872bdf`): `f2253665552e717297cc575158ae0ba86096ef52`, pais `8f81d5f` e `40d70cf`, árvore igual à de `40d70cf`.
   - Validado antes do *push* (`pnpm check` 682/682, 12/12) e publicado com `git push origin main` (`8f81d5f..f225366`, sem *force*); local = remoto. O PR #8 não foi revertido.
   - Branch `feat/e107-d1-r1-authorization-integrity` criada a partir de `f225366`. A confirmação do *push* (hash local igual ao remoto) consta do relatório de entrega. PR por abrir manualmente; descrição em [tasks/E1.07-D1-R1.md](tasks/E1.07-D1-R1.md#pull-request). Sem merge.
+- E1.07-D1-R2: `git fetch origin` revelou `origin/main` = `1a69eb1598ab7dce46f5d939bcc6f46e9c1d2c99`, merge do PR #9 com pais `f225366` e `0f1f9a6`. A árvore do merge e do checkpoint técnico é `0579371326e98081bcadd7563cbef6593ed1bcc8`. A `main` local permaneceu em `f225366`; a revisão não efectuou merge. O commit documental posterior na branch exige novo PR, porque o PR #9 já está integrado.
 
 ## Ambiente de referência
 
@@ -139,6 +142,20 @@ node -v   # v24.22.3
 Noutra máquina, instale o Node 24.22.3 (instalador oficial ou um gestor de versões que leia `.node-version`, como o fnm) e o pnpm 9.15.9. Com o Node 24 em Windows x64 não são necessárias ferramentas de compilação C++: o `better-sqlite3` descarrega um binário pré-compilado.
 
 ## Validação verificada
+
+### E1.07-D1-R2 (revisão independente final da integridade), 2026-11-17
+
+Executado com Node.js 24.22.3 e pnpm 9.15.9 sobre `0f1f9a6`/árvore integrada `1a69eb1`:
+
+- `lint`, `typecheck`, `test` (720/720), `build` (12/12), `check` (720/720 e 12/12), desktop (6/6), smoke Electron e `git diff --check`: aprovados.
+- Suite sem 13 directórios `dist`/`dist-electron`: 720/720; 13/13 repostos, com SHA-256 idêntico.
+- Duas cópias físicas do módulo: catálogo cruzado `UNKNOWN`, decisão cruzada não reconhecida e resposta `access-denied`.
+- Mutações independentes: 13/13 detectadas; os ficheiros foram repostos depois de cada mutação com SHA-256 confirmado.
+- Auditoria: 1 moderada conhecida em `minimatch` (PD-19; código 1); produção 0. Migrações 1–5, dependências e lockfile sem alterações.
+- A PD-57 não ocorreu. Instalação limpa não repetida (sem dependências novas).
+- Resultado: GO para R1; PD-62/PD-63 encerradas; PD-64 baixa para D1-H antes de D2; D2 não autorizada.
+
+Detalhe completo em [tasks/E1.07-D1-R2.md](tasks/E1.07-D1-R2.md).
 
 ### E1.07-D1-R1 (integridade e proveniência dos contratos de autorização), 2026-11-17
 
@@ -554,9 +571,9 @@ Notas sobre o arranque do Electron:
 | PD-59 | A autoridade sobre sessões e `cleanupSessions()` não tem permissão no catálogo inicial. | Administração de sessões continua interna e sem autorização própria. | Política decidida em D-160: separar logout próprio, gestão própria, revogação administrativa da instalação e revogação empresarial; esta última não termina sessões usadas noutras empresas. Implementação pendente em D3/D4/E. |
 | PD-60 | O catálogo inicial é técnico e conservador; sem perfis predefinidos, catálogo por sector ou segregação de funções normativa. | Operações futuras podem ficar sem correspondência explícita ou com permissões inadequadas. | Princípio decidido em D-161: toda operação protegida corresponde explicitamente a uma permissão; ocultar UI não autoriza. Validação funcional e normativa permanece pendente em D3 e módulos sectoriais. |
 | PD-61 | Uma concessão persistida pode referir código removido ou `WITHDRAWN`; persistência e versão do catálogo ainda não existem. | Concessões órfãs sem tratamento poderiam ser convertidas, eliminadas ou reutilizadas indevidamente. | Política decidida em D-162: não conceder, não converter/apagar silenciosamente, manter diagnóstico e não reutilizar significado sem migração revista. Implementação pendente em D2/D4. |
-| PD-62 | E1.07-D1-M (RV-D1-M-01): `isAuthorizationGranted(unknown)` aceita `{ outcome: 'GRANTED' }`, e `toExternalAuthorizationResponse` devolve `{ allowed: true }`. | Uma futura fronteira que aplique o predicado a dados não confiáveis pode contornar a autoridade e a recusa por omissão. Hoje não há integração operacional. | Aberta, bloqueante para encerrar D1 e iniciar D2. Corrigir a proveniência da decisão, adicionar regressão exacta e repetir revisão. D4 nunca aceita decisões do transporte. **Resolvida na branch** `feat/e107-d1-r1-authorization-integrity` (E1.07-D1-R1, D-163, D-164): registo privado por identidade do objecto, com o resultado fixado na emissão; `isAuthorizationGranted` e `denyAuthorization` retirados; `toExternalDomainEvaluationResponse` só devolve `allowed: true` para uma concessão genuína sobre o catálogo oficial. I01–I14; mutações N01–N04 e N10 detectadas. Encerramento formal depois da revisão E1.07-D1-R2 e da integração. |
-| PD-63 | E1.07-D1-M (RV-D1-M-02/03): catálogos operacionais, de teste e fabricados partilham `PermissionCatalog` estrutural; as definições iniciais exportadas têm elementos não congelados. | Um motor futuro pode receber catálogo não confiável; as definições podem ser alteradas inadvertidamente, embora o catálogo vivo esteja congelado e não seja afectado. | Aberta; proveniência confiável/opaca do catálogo antes de D2, teste da composição operacional e congelamento/encapsulamento das definições. Bloqueante para D2 quanto à proveniência; mutabilidade das definições é baixa. **Resolvida na branch** (E1.07-D1-R1, D-165, D-166): proveniência `OFFICIAL`/`EXPERIMENTAL`/`UNKNOWN` em execução, `UNKNOWN` recusado por todas as funções, `PermissionCatalogProvider` retirada, definições e listas de valores congeladas. I15–I30; mutações N05–N09 detectadas. A composição operacional com o catálogo oficial é verificada em D2 (D-167). Encerramento formal depois de E1.07-D1-R2 e da integração. |
-| PD-64 | E1.07-D1-R1: as listas de valores permitidos de outros módulos de `shared-types` (`MEMBERSHIP_SCOPES`, `MEMBERSHIP_STATUSES`, `USER_STATUSES`, `COMPANY_STATUSES`, `BRANCH_STATUSES`, `SECTOR_TYPES` e a lista de `session.ts`) não estão congeladas em execução (`as const` só protege em compilação). `parseOneOf` consulta-as, pelo que uma alteração externa no mesmo processo amplia os valores aceites. Os contratos de autorização foram corrigidos (D-166); estes módulos estão fora do âmbito autorizado. | Baixo: exige código no mesmo processo; os valores acrescentados não coincidem com `ACTIVE`/`COMPANY_WIDE`, que são as condições verificadas pela elegibilidade. Defesa em profundidade incompleta. | Aberta, baixa. Proposta, por aprovar: congelar estas listas numa tarefa controlada (por exemplo, antes ou durante E1.07-D2), com testes de alteração em execução. |
+| PD-62 | E1.07-D1-M (RV-D1-M-01): decisões `GRANTED` eram estruturalmente forjáveis. | Uma futura fronteira poderia aceitar uma decisão construída pelo consumidor. | **Encerrada em E1.07-D1-R2 (D-168).** R1 usa identidade e resultado registados num `WeakMap`; a revisão repetiu fabricação, clones, resposta externa e mutações. D4 continua proibida de aceitar decisões do transporte. |
+| PD-63 | E1.07-D1-M (RV-D1-M-02/03): catálogo sem proveniência e definições superficialmente congeladas. | Um motor futuro poderia receber catálogo não confiável; definições públicas eram alteráveis. | **Encerrada em E1.07-D1-R2 (D-168).** Proveniência `OFFICIAL`/`EXPERIMENTAL`/`UNKNOWN`, definições e listas congeladas, sem fornecedor injectável; duas instâncias falham fechadas. D2 continua obrigado a usar uma única instância e só o catálogo oficial (D-167). |
+| PD-64 | As listas `MEMBERSHIP_SCOPES`, `MEMBERSHIP_STATUSES`, `USER_STATUSES`, `COMPANY_STATUSES`, `BRANCH_STATUSES`, `SECTOR_TYPES` e `SESSION_REVOCATION_REASONS` não estão congeladas em execução. | Código no mesmo processo pode ampliar valores aceites em memória; as verificações por literais e as restrições SQLite impedem que o valor inventado adquira automaticamente semântica operacional. | **Aberta, baixa.** Tratar em E1.07-D1-H depois de R1 e antes de D2 (D-169). Especificação preliminar criada; implementação não iniciada nem autorizada. |
 
 As decisões arquitecturais ainda em aberto estão em [architecture.md](architecture.md#decisões-pendentes).
 
@@ -571,7 +588,7 @@ As decisões arquitecturais ainda em aberto estão em [architecture.md](architec
    git -c safe.directory=C:/KIL-BUSINESS status -sb         # sem "ahead"/"behind" inesperados
    git -c safe.directory=C:/KIL-BUSINESS log --oneline -n 10
    ```
-   O último checkpoint publicado em `main` verificado nesta sessão é o merge documental `f225366` (registo de E1.07-D1-M sobre o PR #8). A correcção E1.07-D1-R1 está na branch `feat/e107-d1-r1-authorization-integrity`, sem merge. Se não corresponder, ou se o remoto divergir, registar e comunicar antes de outro trabalho; nunca forçar.
+   O último checkpoint remoto de `main` verificado nesta sessão é `1a69eb1`, merge do PR #9, com árvore idêntica à correcção `0f1f9a6`. A `main` local permanece em `f225366`. Se não corresponder, ou se o remoto divergir, registar e comunicar antes de outro trabalho; nunca forçar.
 4. Executar `pnpm.cmd install --frozen-lockfile` (se `node_modules` não existir ou se a versão do Node mudou) e `pnpm.cmd check` para obter a linha de base. Registar qualquer falha antes de alterar código.
 5. Identificar a tarefa activa em `docs/tasks/`.
    - E1.06-S2 está integrada em `main` através do PR #2 (`d29a629`).
@@ -581,8 +598,8 @@ As decisões arquitecturais ainda em aberto estão em [architecture.md](architec
    - E1.07-C (com E1.07-C-R1) está integrada em `main` através do PR #6 (`136a442`) e revista em E1.07-C-M e E1.07-C-R2.
    - E1.07-X (exclusividade por base) está integrada em `main` através do PR #7 (`1872bdf`) e revista em E1.07-X-M; PD-43 e PD-51 estão encerradas (D-140). E1.08 continua bloqueada por PD-27 e PD-28.
    - E1.07-D1-M concluída com NO-GO; registo integrado em `main` (`f225366`). O PR #8 já estava integrado pelo responsável. O RBAC não está operacional.
-   - Tarefa activa: E1.07-D1-R1, correcção de PD-62/PD-63 publicada na branch `feat/e107-d1-r1-authorization-integrity`. Próximo passo: revisão independente E1.07-D1-R2; sem merge até à aprovação explícita.
-   - E1.07-D2 está **suspensa e não autorizada** até E1.07-D1-R2 e aprovação. E1.07-D3/D4, E1.07-E/F e E1.08–E1.10 continuam planeadas mas não autorizadas.
+   - E1.07-D1-R2 concluiu a revisão com GO para R1 e encerrou PD-62/PD-63. O registo documental fica na branch `feat/e107-d1-r1-authorization-integrity` e exige novo PR; não efectuar merge sem aprovação explícita.
+   - Próxima tarefa proposta: E1.07-D1-H para PD-64, não iniciada nem autorizada. E1.07-D2 está **suspensa e não autorizada** até D1-H e aprovação. E1.07-D3/D4, E1.07-E/F e E1.08–E1.10 continuam planeadas mas não autorizadas.
    - Contratos de autorização (D-163 a D-167): decisões só se reconhecem com `inspectDomainDecision`; nunca usar `outcome` estrutural. O caminho operacional usa só `OFFICIAL_PERMISSION_CATALOG` (ou `requireOfficialPermissionCatalog`); catálogos experimentais são só para testes.
    - E1.06-S1 está integrada em `main` através do PR #1.
 6. Trabalhar apenas no âmbito da tarefa. Regras a manter:
