@@ -91,9 +91,9 @@ autorização operacional**: nada é persistido nem ligado ao serviço até E1.0
 A correcção de proveniência e imutabilidade E1.07-D1-R1 foi integrada pelo responsável
 no PR #9 e aprovada pela revisão [E1.07-D1-R2](docs/tasks/E1.07-D1-R2.md), integrada no
 PR #10: os bloqueios PD-62 e PD-63 da revisão D1-M estão resolvidos e encerrados.
-A imutabilidade transversal dos restantes contratos de domínio (PD-64) foi implementada em
-[E1.07-D1-H](docs/tasks/E1.07-D1-H.md), na sua branch, e aguarda revisão independente; por
-isso E1.07-D1 ainda não está encerrada. D2 continua suspensa e não autorizada; o RBAC
-continua não operacional.
+A imutabilidade transversal dos restantes contratos de domínio (PD-64) foi integrada no PR #11,
+mas a revisão [E1.07-D1-H-M](docs/tasks/E1.07-D1-H-M.md) recomendou NO-GO: a política fiscal
+conserva o objecto original mutável como receptor da função de validação (RV-D1-H-M-01).
+PD-64 continua aberta, D2 continua suspensa e não autorizada, e o RBAC continua não operacional.
 
 Consulte [docs/architecture.md](docs/architecture.md) e [AGENTS.md](AGENTS.md) antes de contribuir. Para retomar o trabalho noutra sessão ou com outro agente, comece por [docs/project-status.md](docs/project-status.md).
