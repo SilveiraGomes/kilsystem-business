@@ -1,6 +1,6 @@
 # Estado do projecto
 
-Última verificação: 2026-11-20, em E1.07-D1-H-M (branch `feat/e107-d1-h-domain-immutability`; checkpoint técnico `3d6358b`; `origin/main` observado em `7076d1f`, merge antecipado do PR #11).
+Última verificação: 2026-11-21, em E1.07-D1-H-R1 (branch `feat/e107-d1-h-domain-immutability`; checkpoint inicial `1ccb997`; `origin/main` observado em `7076d1f`, merge antecipado do PR #11, árvore igual a `3d6358b`).
 
 Este documento é o ponto de retoma para qualquer agente ou pessoa. Contém apenas factos verificados no repositório ou por execução; o que não foi executado está marcado como tal.
 
@@ -34,22 +34,23 @@ Este documento é o ponto de retoma para qualquer agente ou pessoa. Contém apen
 | E1.07-D1-M — Revisão independente dos contratos RBAC | Concluída; **NO-GO** até corrigir RV-D1-M-01/RV-D1-M-02 e repetir a revisão; registo integrado em `main` | `40d70cf`; merge `f225366` | [tasks/E1.07-D1-M.md](tasks/E1.07-D1-M.md) |
 | E1.07-D1-R1 — Integridade e proveniência dos contratos de autorização | Integrada pelo responsável no PR #9 antes da revisão; aprovada por E1.07-D1-R2 | `0f1f9a6`; merge `1a69eb1` | [tasks/E1.07-D1-R1.md](tasks/E1.07-D1-R1.md) |
 | E1.07-D1-R2 — Revisão independente final da integridade | Concluída; **GO para R1**; não autoriza D2; registo integrado pelo responsável (PR #10) | `cbe2ad5`; merge `0539b15` | [tasks/E1.07-D1-R2.md](tasks/E1.07-D1-R2.md) |
-| E1.07-D1-H — Imutabilidade transversal dos contratos de domínio (PD-64) | Integrada antecipadamente no PR #11; revisão H-M recomendou **NO-GO**; correcção pendente | `3d6358b`; merge `7076d1f` | [tasks/E1.07-D1-H.md](tasks/E1.07-D1-H.md) |
-| E1.07-D1-H-M — Revisão independente da imutabilidade | Concluída; **NO-GO** por RV-D1-H-M-01; PD-64 aberta | `docs: record independent domain immutability review` | [tasks/E1.07-D1-H-M.md](tasks/E1.07-D1-H-M.md) |
-| E1.07-D2 | **Suspensa, não autorizada** até corrigir RV-D1-H-M-01, repetir a revisão e obter aprovação explícita | — | [tasks/E1.07-D2.md](tasks/E1.07-D2.md) |
+| E1.07-D1-H — Imutabilidade transversal dos contratos de domínio (PD-64) | Integrada antecipadamente no PR #11; revisão H-M recomendou **NO-GO**; corrigida na branch por H-R1 | `3d6358b`; merge `7076d1f` | [tasks/E1.07-D1-H.md](tasks/E1.07-D1-H.md) |
+| E1.07-D1-H-M — Revisão independente da imutabilidade | Concluída; **NO-GO** por RV-D1-H-M-01; PD-64 aberta | `1ccb997` (`docs: record independent domain immutability review`) | [tasks/E1.07-D1-H-M.md](tasks/E1.07-D1-H-M.md) |
+| E1.07-D1-H-R1 — Isolamento da política fiscal (RV-D1-H-M-01) | Concluída e publicada na branch; **aguarda E1.07-D1-H-R2**; merge não autorizado | `fix: isolate tax policy validators from mutable inputs` | [tasks/E1.07-D1-H-R1.md](tasks/E1.07-D1-H-R1.md) |
+| E1.07-D2 | **Suspensa, não autorizada** até E1.07-D1-H-R2, encerramento de PD-64 e aprovação explícita | — | [tasks/E1.07-D2.md](tasks/E1.07-D2.md) |
 | E1.07-D3, E1.07-D4, E1.07-E, E1.07-F | Planeadas, não autorizadas | — | [tasks/E1.07-D.md](tasks/E1.07-D.md), [tasks/E1.07.md](tasks/E1.07.md) |
 | E1.08 a E1.10 | Planeadas, não autorizadas | — | [implementation-plan.md](implementation-plan.md) |
 
-Tarefa activa: **correcção de RV-D1-H-M-01 ainda não autorizada**. A revisão [E1.07-D1-H-M](tasks/E1.07-D1-H-M.md) do checkpoint `3d6358b` concluiu com **NO-GO**: `createTaxIdPolicy` devolve uma regra congelada, mas chama `isValid` com o objecto original mutável como receptor, permitindo que estado adicional alterado depois da criação mude a política (D-173). O responsável já tinha integrado o checkpoint técnico no PR #11 (`7076d1f`) antes da revisão; isto não encerra PD-64 nem autoriza D2.
+Tarefa activa: **[E1.07-D1-H-R1](tasks/E1.07-D1-H-R1.md) concluída na branch; próxima: revisão independente E1.07-D1-H-R2 (não iniciada).** A revisão [E1.07-D1-H-M](tasks/E1.07-D1-H-M.md) do checkpoint `3d6358b` concluiu com **NO-GO**: `createTaxIdPolicy` chamava `isValid` com o objecto original mutável como receptor (D-173). H-R1 corrigiu-o (D-176): receptor neutro e congelado via `Reflect.apply` capturado, leitura única e validação de cada propriedade, invólucro e `ruleFor` congelados, contrato `isValid: (this: void, nif) => boolean`; estado capturado por fechos da própria função fica explicitamente fora da garantia. Reprodução sobre `src` e `dist`, HR01–HR15, H13 reescrito, 17/17 mutações. A falha de memória do ESLint da revisão H-M foi reproduzida com dois worktrees dentro da raiz (D-177, PD-67), sem regressão de memória da D1-H. O responsável já tinha integrado o checkpoint técnico no PR #11 (`7076d1f`) antes da revisão; nada disto encerra PD-64 nem autoriza D2 antes de H-R2.
 
 - **Inventário** de todas as estruturas de nível de módulo de `packages`, `services` e `apps`, classificadas A/B/C/D.
 - **16 riscos reproduzidos** sobre o build da `main` (as sete listas da PD-64, regra fiscal exposta por `TaxIdPolicy.ruleFor`, extensões da base, arrays internos das transições do serviço, limites internos das credenciais e listas da configuração); nenhum acima de gravidade baixa.
-- **Protecção (D-171), com ressalva D-173:** `Object.freeze` em listas e em cada nível das estruturas aninhadas; a regra fiscal devolvida é congelada, mas conserva uma referência ao receptor original mutável (RV-D1-H-M-01).
-- **Testes e mutações:** H01–H20 (740 testes no total); 27/27 mutações detectadas, incluindo 5 de R1.
+- **Protecção (D-171), com ressalva D-173 corrigida na branch por D-176:** `Object.freeze` em listas e em cada nível das estruturas aninhadas; a regra fiscal devolvida conservava uma referência ao receptor original mutável (RV-D1-H-M-01), corrigido em H-R1.
+- **Testes e mutações:** H01–H20 (D1-H) e HR01–HR15 (H-R1), 755 testes no total; 27/27 mutações em D1-H e 17/17 em H-R1.
 
-PD-64 continua aberta. PD-65 foi reproduzida também na main e permanece para diagnóstico definitivo em E1.07-F (D-174). PD-66 foi encerrada porque o GitHub retirou o aviso em 2026-11-18 e o audit actual já não o reporta (D-175). **O RBAC não está operacional**, nada está persistido nem ligado ao serviço, e o `TenantContext` continua construído pelo chamador. D2 está suspensa e não autorizada; D3/D4, E1.07-E/F e E1.08–E1.10 permanecem não autorizadas.
+PD-64 continua aberta até H-R2. PD-65 foi reproduzida também na main e permanece para diagnóstico definitivo em E1.07-F (D-174). PD-66 foi encerrada porque o GitHub retirou o aviso em 2026-11-18 e o audit actual já não o reporta (D-175). **O RBAC não está operacional**, nada está persistido nem ligado ao serviço, e o `TenantContext` continua construído pelo chamador. D2 está suspensa e não autorizada; D3/D4, E1.07-E/F e E1.08–E1.10 permanecem não autorizadas.
 
-Validação final da revisão: `pnpm check` foi executado em 2026-11-20 com Node 24.22.3 e falhou durante `eslint .` por `JavaScript heap out of memory` (cerca de 4,1 GB; exit 134), antes de `typecheck`, testes e build. Não foi repetido nem contornado com aumento de heap. Nas execuções independentes anteriores, `pnpm lint`, `pnpm typecheck` e `pnpm build` (12/12) passaram; a suite permaneceu instável conforme PD-65. O resultado obrigatório não é declarado aprovado.
+Validação final da revisão H-M: `pnpm check` foi executado em 2026-11-20 com Node 24.22.3 e falhou durante `eslint .` por `JavaScript heap out of memory` (cerca de 4,1 GB; exit 134), antes de `typecheck`, testes e build. Não foi repetido nem contornado com aumento de heap. Nas execuções independentes anteriores, `pnpm lint`, `pnpm typecheck` e `pnpm build` (12/12) passaram; a suite permaneceu instável conforme PD-65. O resultado obrigatório não é declarado aprovado. H-R1 reproduziu essa falha com dois worktrees dentro da raiz e explicou-a (D-177); o resultado de `pnpm check` em H-R1 está na secção “Validação verificada”.
 
 Anterior: **E1.07-D1-R2** aprovou a correcção R1 (GO), integrada pelo responsável no PR #9 (`1a69eb1`) antes da conclusão da revisão, e encerrou PD-62 (proveniência das decisões) e PD-63 (proveniência e imutabilidade do catálogo) (D-168).
 
@@ -149,6 +150,18 @@ node -v   # v24.22.3
 Noutra máquina, instale o Node 24.22.3 (instalador oficial ou um gestor de versões que leia `.node-version`, como o fnm) e o pnpm 9.15.9. Com o Node 24 em Windows x64 não são necessárias ferramentas de compilação C++: o `better-sqlite3` descarrega um binário pré-compilado.
 
 ## Validação verificada
+
+### E1.07-D1-H-R1 (isolamento da política fiscal), 2026-11-20/21
+
+Executado com Node.js 24.22.3 e pnpm 9.15.9, cada comando sozinho, sem suites concorrentes:
+
+- Reprodução de RV-D1-H-M-01 antes da correcção, sobre `src` e `dist`: o mesmo resultado nos dois (P1–P8); depois da correcção e do `build`, `src` e `dist` voltaram a coincidir e P1–P6 deixaram de reproduzir; P7 (fecho) é o limite documentado (D-176).
+- `pnpm.cmd lint` aprovado; `pnpm.cmd typecheck` aprovado; `pnpm.cmd test` **755/755** (20 ficheiros, 50,3 s, sem *timeouts*); `pnpm.cmd build` 12/12; desktop 6/6; smoke `KIL_ELECTRON_SMOKE_OK`; `git diff --check` sem erros.
+- Suite sem `dist` num worktree isolado fora do repositório (`install --frozen-lockfile --offline`): **755/755**, 55,7 s.
+- Mutações: controlo 91/91; **17/17 detectadas** (MR00 = implementação anterior completa); SHA-256 reposto e confirmado depois de cada uma.
+- ESLint: pico ~2,46 GiB sem worktrees (duas execuções); base `0539b15` 2473 MiB vs branch + R1 2484 MiB; com dois worktrees dentro da raiz, exit 134 (*heap* ~4,1 GB, limite 4288 MiB) — reproduz a falha da H-M (D-177, PD-67).
+- `pnpm audit`: só `minimatch` moderada (PD-19); `audit --prod` 0; PD-66 confirmada encerrada. Migrações 1–5 (blob `9312348…`), dependências e lockfile sem alterações.
+- `pnpm.cmd check` final, depois da documentação: **aprovado** (lint, typecheck, 755/755, 12/12; 193,8 s), única execução. Detalhe em [tasks/E1.07-D1-H-R1.md](tasks/E1.07-D1-H-R1.md).
 
 ### E1.07-D1-H (imutabilidade transversal dos contratos de domínio), 2026-11-17
 
@@ -463,6 +476,7 @@ Requisitos: Node.js 24.22.3 (`.node-version`) e pnpm 9.15.9. Em PowerShell, usar
 | Testes da exclusividade por base, incluindo processos reais (E1.07-X) | `pnpm test database-exclusivity` | `package.json` (filtro do Vitest) |
 | Testes dos contratos e regras puras de autorização (E1.07-D1) | `pnpm test authorization` | `package.json` (filtro do Vitest) |
 | Testes da imutabilidade dos contratos de domínio (E1.07-D1-H) | `pnpm test domain-immutability` | `package.json` (filtro do Vitest) |
+| Testes do isolamento da política fiscal (E1.07-D1-H-R1) | `pnpm test tax-id-policy-isolation` | `package.json` (filtro do Vitest) |
 | Testes em modo observação | `pnpm test:watch` | `package.json` |
 | Auditoria de dependências | `pnpm audit` e `pnpm audit --prod` | pnpm |
 | Build de todos os projectos | `pnpm build` | `package.json` |
@@ -597,9 +611,10 @@ Notas sobre o arranque do Electron:
 | PD-61 | Uma concessão persistida pode referir código removido ou `WITHDRAWN`; persistência e versão do catálogo ainda não existem. | Concessões órfãs sem tratamento poderiam ser convertidas, eliminadas ou reutilizadas indevidamente. | Política decidida em D-162: não conceder, não converter/apagar silenciosamente, manter diagnóstico e não reutilizar significado sem migração revista. Implementação pendente em D2/D4. |
 | PD-62 | E1.07-D1-M (RV-D1-M-01): decisões `GRANTED` eram estruturalmente forjáveis. | Uma futura fronteira poderia aceitar uma decisão construída pelo consumidor. | **Encerrada em E1.07-D1-R2 (D-168)**; encerramento formalizado após a integração do registo no PR #10 (D-170). R1 usa identidade e resultado registados num `WeakMap`; a revisão repetiu fabricação, clones, resposta externa e mutações. D4 continua proibida de aceitar decisões do transporte. Garantias confirmadas de novo em E1.07-D1-H (R1-M01, R1-M05). |
 | PD-63 | E1.07-D1-M (RV-D1-M-02/03): catálogo sem proveniência e definições superficialmente congeladas. | Um motor futuro poderia receber catálogo não confiável; definições públicas eram alteráveis. | **Encerrada em E1.07-D1-R2 (D-168)**; encerramento formalizado após a integração do registo no PR #10 (D-170). Proveniência `OFFICIAL`/`EXPERIMENTAL`/`UNKNOWN`, definições e listas congeladas, sem fornecedor injectável; duas instâncias falham fechadas. D2 continua obrigado a usar uma única instância e só o catálogo oficial (D-167). Garantias confirmadas de novo em E1.07-D1-H (R1-M08, R1-M09, R1-CAT). |
-| PD-64 | Imutabilidade transversal dos contratos. As listas, limites, transições e configuração foram protegidos por D1-H, mas `TaxIdPolicy` conserva o objecto original mutável como receptor de `isValid` (RV-D1-H-M-01). | Estado adicional no objecto original pode mudar uma política já criada; não existe hoje regra fiscal real nem interface operacional que aceite regras externas. | **Aberta.** E1.07-D1-H-M recomendou NO-GO (D-173). Corrigir o receptor fiscal, acrescentar regressão e repetir revisão antes de D2. |
-| PD-65 | *Timeouts* de 5 s em Argon2id/SQLite/sessões e falhas de arranque de workers. A revisão reproduziu-os também em `0539b15`; grupos isolados variaram e H01–H20 não deixaram resíduos. | Falsos negativos intermitentes; causalidade com D1-H não demonstrada. | **Aberta** (D-174). Tratar em E1.07-F com PD-56/PD-57, medindo recursos e concorrência antes de alterar configuração. |
-| PD-66 | Aviso `GHSA-fc5q-39xc-vjpf` sobre `picomatch` 4.0.7, só na cadeia de desenvolvimento. | O GitHub retirou o aviso em 2026-11-18; o audit actual já não o reporta e produção permanece limpa. | **Encerrada** em E1.07-D1-H-M (D-175), sem alterações de dependências. Reabrir se o aviso for republicado. |
+| PD-64 | Imutabilidade transversal dos contratos. As listas, limites, transições e configuração foram protegidos por D1-H, mas `TaxIdPolicy` conserva o objecto original mutável como receptor de `isValid` (RV-D1-H-M-01). | Estado adicional no objecto original pode mudar uma política já criada; não existe hoje regra fiscal real nem interface operacional que aceite regras externas. | **Aberta; corrigida na branch.** E1.07-D1-H-M recomendou NO-GO (D-173); E1.07-D1-H-R1 corrigiu o receptor fiscal e acrescentou regressões (D-176). Encerramento só depois de E1.07-D1-H-R2, antes de D2. |
+| PD-65 | *Timeouts* de 5 s em Argon2id/SQLite/sessões e falhas de arranque de workers. A revisão reproduziu-os também em `0539b15`; grupos isolados variaram e H01–H20 não deixaram resíduos. | Falsos negativos intermitentes; causalidade com D1-H não demonstrada. | **Aberta** (D-174, D-177). Tratar em E1.07-F com PD-56/PD-57, medindo recursos e concorrência antes de alterar configuração. Em H-R1 nenhuma suite completa teve *timeouts* (755/755, com e sem `dist`). |
+| PD-66 | Aviso `GHSA-fc5q-39xc-vjpf` sobre `picomatch` 4.0.7, só na cadeia de desenvolvimento. | O GitHub retirou o aviso em 2026-11-18; o audit actual já não o reporta e produção permanece limpa. | **Encerrada** em E1.07-D1-H-M (D-175), sem alterações de dependências. Reabrir se o aviso for republicado. Confirmada em H-R1 (`audit` sem `picomatch`). |
+| PD-67 | `eslint .` analisa, com tipos, qualquer worktree ou cópia colocada dentro da raiz (as exclusões só cobrem `dist`, `dist-electron`, `node_modules`, `coverage`). Um worktree leva o pico a ~3,9 GiB; dois excedem o limite de *heap* por omissão (4288 MiB) e dão exit 134, como na H-M. | `pnpm check`/`pnpm lint` falham por falta de memória durante ensaios com worktrees; sem relação com o código (D-177). | **Aberta** (D-177). Proposta para E1.07-F, por aprovar: worktrees de ensaio fora da raiz e/ou exclusão explícita no ESLint. Sem aumento de *heap* nem alteração de configuração. |
 
 As decisões arquitecturais ainda em aberto estão em [architecture.md](architecture.md#decisões-pendentes).
 
@@ -614,7 +629,7 @@ As decisões arquitecturais ainda em aberto estão em [architecture.md](architec
    git -c safe.directory=C:/KIL-BUSINESS status -sb         # sem "ahead"/"behind" inesperados
    git -c safe.directory=C:/KIL-BUSINESS log --oneline -n 10
    ```
-   O último `origin/main` observado é `7076d1f`, merge do PR #11, e a branch de D1-H parte de `3d6358b`. Confirmar novamente por `fetch` antes de retomar; nunca forçar.
+   O último `origin/main` observado é `7076d1f`, merge do PR #11, e a branch de D1-H parte de `3d6358b` (contém também `1ccb997`, registo H-M, e o commit de H-R1). O directório canónico é `C:\xampp\htdocs\gestao_hoteleira\kilsystem-business`; `C:\KIL-BUSINESS` é outro clone, parado em `cbe2ad5`. Confirmar novamente por `fetch` antes de retomar; nunca forçar. Worktrees de ensaio ficam fora da raiz do repositório (PD-67).
 4. Executar `pnpm.cmd install --frozen-lockfile` (se `node_modules` não existir ou se a versão do Node mudou) e `pnpm.cmd check` para obter a linha de base. Registar qualquer falha antes de alterar código.
 5. Identificar a tarefa activa em `docs/tasks/`.
    - E1.06-S2 está integrada em `main` através do PR #2 (`d29a629`).
@@ -625,7 +640,8 @@ As decisões arquitecturais ainda em aberto estão em [architecture.md](architec
    - E1.07-X (exclusividade por base) está integrada em `main` através do PR #7 (`1872bdf`) e revista em E1.07-X-M; PD-43 e PD-51 estão encerradas (D-140). E1.08 continua bloqueada por PD-27 e PD-28.
    - E1.07-D1-M concluída com NO-GO; registo integrado em `main` (`f225366`). O PR #8 já estava integrado pelo responsável. O RBAC não está operacional.
    - E1.07-D1-R2 concluiu a revisão com GO para R1 e encerrou PD-62/PD-63; o registo foi integrado pelo responsável no PR #10 (`0539b15`, D-170).
-   - E1.07-D1-H foi integrada antecipadamente no PR #11, mas E1.07-D1-H-M recomendou NO-GO. A próxima acção técnica é uma correcção autorizada de RV-D1-H-M-01 seguida de revisão independente. E1.07-D2 continua **suspensa e não autorizada**. E1.07-D3/D4, E1.07-E/F e E1.08–E1.10 continuam planeadas mas não autorizadas.
+   - E1.07-D1-H foi integrada antecipadamente no PR #11, mas E1.07-D1-H-M recomendou NO-GO. E1.07-D1-H-R1 corrigiu RV-D1-H-M-01 na branch (D-176). A próxima acção é a revisão independente E1.07-D1-H-R2 e um novo PR em Draft (descrição em [tasks/E1.07-D1-H-R1.md](tasks/E1.07-D1-H-R1.md)); sem merge sem aprovação. E1.07-D2 continua **suspensa e não autorizada**.
+   - Regras ou validadores recebidos de consumidores (D-176): funções puras, invocadas sem o objecto do consumidor como receptor; propriedades lidas uma vez; estado de fechos fica fora da garantia. E1.07-D3/D4, E1.07-E/F e E1.08–E1.10 continuam planeadas mas não autorizadas.
    - Imutabilidade (D-171): novas listas de valores, limites ou definições exportadas usadas em validações são congeladas em execução (cada nível, se aninhadas) e testadas por comportamento; regras recebidas de consumidores são copiadas e congeladas na criação, sem congelar o objecto do consumidor.
    - Contratos de autorização (D-163 a D-167): decisões só se reconhecem com `inspectDomainDecision`; nunca usar `outcome` estrutural. O caminho operacional usa só `OFFICIAL_PERMISSION_CATALOG` (ou `requireOfficialPermissionCatalog`); catálogos experimentais são só para testes.
    - E1.06-S1 está integrada em `main` através do PR #1.

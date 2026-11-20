@@ -433,18 +433,23 @@ describe('Domain contract immutability (E1.07-D1-H, PD-64)', () => {
       expectRejected(() => activeWith('NIF-OUTRO', policy));
     });
 
-    it('H13 the snapshot keeps calling the rule with the original object as receiver', () => {
+    // Alterado em E1.07-D1-H-R1 (D-176): a versão anterior afirmava que o receptor era o objecto
+    // original, o que institucionalizava RV-D1-H-M-01. O contrato passa a excluir `this`.
+    it('H13 the snapshot never calls the rule with the original object as receiver', () => {
+      const receivers: unknown[] = [];
       const rule = {
-        isValid(this: { prefix: string }, nif: string): boolean {
-          return nif.startsWith(this.prefix);
+        isValid(nif: string): boolean {
+          receivers.push(this);
+          return nif.startsWith('H13-');
         },
         jurisdiction: parseJurisdiction('ZZ'),
-        prefix: 'H13-',
         source: 'Regra fictícia exclusiva para testes automatizados',
       };
       const policy = createTaxIdPolicy([rule]);
       expect(activeWith('H13-0001', policy)).toBe('ACTIVE');
       expectRejected(() => activeWith('X-0001', policy));
+      expect(receivers).toHaveLength(2);
+      for (const receiver of receivers) expect(receiver).not.toBe(rule);
     });
 
     it('H14 the empty policy stays frozen and fails closed', () => {
