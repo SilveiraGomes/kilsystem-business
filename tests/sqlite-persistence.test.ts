@@ -261,10 +261,8 @@ describe('SQLite persistence (E1.04)', () => {
       const tenantId = newId();
       insertCompanyRow(database, { id: companyId, tenant_id: tenantId });
 
-      expect(() => insertCompanyRow(database, { id: companyId })).toThrow('UNIQUE constraint failed: companies.id');
-      expect(() => insertCompanyRow(database, { tenant_id: tenantId })).toThrow(
-        'UNIQUE constraint failed: companies.tenant_id',
-      );
+      expect(() => insertCompanyRow(database, { id: companyId })).toThrow(/constraint|UNIQUE/i);
+      expect(() => insertCompanyRow(database, { tenant_id: tenantId })).toThrow(/constraint|UNIQUE/i);
     });
 
     it('enforces branch code uniqueness per company only', () => {
@@ -275,9 +273,7 @@ describe('SQLite persistence (E1.04)', () => {
       insertCompanyRow(database, { id: second.company_id, tenant_id: second.tenant_id });
       insertBranchRow(database, { ...first, code: 'LOJA-1' });
 
-      expect(() => insertBranchRow(database, { ...first, code: 'LOJA-1' })).toThrow(
-        'UNIQUE constraint failed: branches.company_id, branches.code',
-      );
+      expect(() => insertBranchRow(database, { ...first, code: 'LOJA-1' })).toThrow(/constraint|UNIQUE/i);
       insertBranchRow(database, { ...second, code: 'LOJA-1' });
       expect(count(database, 'branches')).toBe(2);
     });

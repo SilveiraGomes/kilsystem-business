@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { RolePermissionDiagnostics, SqliteDatabase } from '../../packages/database/src/index';
@@ -22,6 +24,7 @@ import {
   TenantMismatchError,
   toExternalDomainEvaluationResponse,
   type AuthorizationDecision,
+  type AuthorizationRequestInput,
   type AuthorizationScopeInput,
   type Branch,
   type Company,
@@ -603,6 +606,46 @@ export const describeAuthorizationRepositoryContract = (
         await harness.rolePermissions.add(s.contextB, grantTo(roleB, 'company.update'));
         await harness.roleAssignments.create(s.contextA, assignCompanyWide(roleA, s.aliceAtA));
         expect(deniedWith(await evaluate(s.alice, 'company.update', companyTarget(s.companyA)))).toBe('permission-not-granted');
+      });
+
+      it('[RE12] denies contradictory persisted SQLite facts instead of granting across companies', async () => {
+        const role = await roleWith(['company.read']);
+        harness.sql((database) => {
+          database.pragma('foreign_keys = OFF');
+          database.exec('DROP TRIGGER role_assignments_insert_requires_new_eligible_assignment');
+          database
+            .prepare(
+              `INSERT INTO role_assignments
+                 (id, tenant_id, company_id, role_id, company_membership_id, scope, branch_id, status, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, 'COMPANY_WIDE', NULL, 'ACTIVE', ?, ?)`,
+            )
+            .run(randomUUID(), s.companyA.tenantId, s.companyB.id, role.id, s.aliceAtA.id, CREATED_AT, CREATED_AT);
+        });
+
+        expect(deniedWith(await evaluate(s.alice, 'company.read', companyTarget(s.companyA)))).toBe('inconsistent-facts');
+      });
+
+      it('[RE13] snapshots mutable request properties exactly once before reading persisted facts', async () => {
+        const role = await roleWith(['company.read']);
+        await harness.roleAssignments.create(s.contextA, assignCompanyWide(role, s.aliceAtA));
+        const reads = { permissionCode: 0, scope: 0, userId: 0 };
+        const request = Object.defineProperties({}, {
+          permissionCode: {
+            enumerable: true,
+            get: () => (++reads.permissionCode === 1 ? 'company.read' : 'company.update'),
+          },
+          scope: {
+            enumerable: true,
+            get: () => (++reads.scope === 1 ? companyTarget(s.companyA) : companyTarget(s.companyB)),
+          },
+          userId: {
+            enumerable: true,
+            get: () => (++reads.userId === 1 ? s.alice.id : s.bob.id),
+          },
+        }) as AuthorizationRequestInput;
+
+        expect(isOfficialDomainGrant(await harness.evaluator.evaluate(request))).toBe(true);
+        expect(reads).toEqual({ permissionCode: 1, scope: 1, userId: 1 });
       });
     });
   });
