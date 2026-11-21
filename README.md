@@ -94,8 +94,8 @@ PR #10: os bloqueios PD-62 e PD-63 da revisão D1-M estão resolvidos e encerrad
 A imutabilidade transversal dos restantes contratos de domínio (PD-64) foi integrada no PR #11,
 mas a revisão [E1.07-D1-H-M](docs/tasks/E1.07-D1-H-M.md) recomendou NO-GO: a política fiscal
 conserva o objecto original mutável como receptor da função de validação (RV-D1-H-M-01).
-A correcção [E1.07-D1-H-R1](docs/tasks/E1.07-D1-H-R1.md) está na branch e aguarda a revisão
-independente E1.07-D1-H-R2. PD-64 continua aberta até essa revisão, D2 continua suspensa e não
-autorizada, e o RBAC continua não operacional.
+A correcção [E1.07-D1-H-R1](docs/tasks/E1.07-D1-H-R1.md) foi integrada no PR #12 e aprovada pela
+revisão [E1.07-D1-H-R2](docs/tasks/E1.07-D1-H-R2.md): PD-64 está encerrada. D2 continua suspensa e
+não autorizada até aprovação explícita, e o RBAC continua não operacional.
 
 Consulte [docs/architecture.md](docs/architecture.md) e [AGENTS.md](AGENTS.md) antes de contribuir. Para retomar o trabalho noutra sessão ou com outro agente, comece por [docs/project-status.md](docs/project-status.md).
