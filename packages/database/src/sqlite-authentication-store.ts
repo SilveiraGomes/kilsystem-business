@@ -62,8 +62,10 @@ export type InstallationAnchorFault =
   | 'administrator-credential-missing';
 
 /**
- * Verificação da âncora da instalação. `intact` só comprova que o registo aponta para a identidade
- * criada na inicialização; não autentica ninguém e não concede autoridade (E1.07-D3-G0).
+ * Verificação da âncora da instalação. `intact` comprova só consistência estrutural do registo
+ * (identidade existente, `created_at = completed_at`, credencial presente); face a um escritor SQL
+ * (actor E, D-209) não prova que a linha é a criada na inicialização e não avalia o estado (D-218).
+ * Não autentica ninguém e não concede autoridade (E1.07-D3-G0).
  */
 export type InstallationAnchor =
   | { readonly state: 'uninitialised' }

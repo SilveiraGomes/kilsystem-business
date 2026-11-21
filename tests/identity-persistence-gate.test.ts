@@ -10,6 +10,7 @@ import {
   createSqliteUserDirectory,
   findNonPositiveRowids,
   inspectMigrations,
+  type InstallationAnchorFault,
   MIGRATIONS,
   migrationChecksum,
   NonPositiveRowidError,
@@ -391,6 +392,85 @@ describe('E1.07-D3-G0 installation authority gate (PD-73, PD-75, PD-76)', () => 
         state: 'intact',
       });
     });
+
+    it('[G01b] refuses deleting, re-using or taking over the username of DEACTIVATED identities and local memberships', async () => {
+      // E1.07-D3-G0-R1 (PD-81, mutações P02, P03 e P04): “desactivadas, nunca eliminadas” vale para
+      // identidades e associações já desactivadas. Os alvos não têm linhas filhas, para que só os
+      // triggers da migração 8 possam recusar (nunca uma chave estrangeira por coincidência), e a
+      // mensagem confirma o trigger responsável em todas as configurações.
+      const { database } = fresh();
+      const s = await seedIdentities(database);
+      const directory = createSqliteUserDirectory(database);
+      const suspended = newUser();
+      await directory.create(suspended);
+      await directory.changeStatus(s.bare.id, 'INACTIVE', UPDATED_AT);
+      await directory.changeStatus(suspended.id, 'SUSPENDED', UPDATED_AT);
+      await createSqliteMembershipPersistence(database).branchMemberships.update(
+        contextFor(s.company.tenantId),
+        createBranchMembership({ ...s.local, status: 'INACTIVE', updatedAt: UPDATED_AT }),
+      );
+      // Nenhuma linha de nenhuma tabela que referencie estes alvos (lido do próprio esquema).
+      const dependents = (parent: string, id: string): number =>
+        (
+          database
+            .prepare(
+              `SELECT m.name AS child, f."from" AS col FROM sqlite_schema m, pragma_foreign_key_list(m.name) f
+               WHERE m.type = 'table' AND f."table" = ?`,
+            )
+            .all(parent) as { child: string; col: string }[]
+        ).reduce(
+          (total, { child, col }) => total + (database.prepare(`SELECT count(*) FROM ${child} WHERE ${col} = ?`).pluck().get(id) as number),
+          0,
+        );
+      for (const id of [s.bare.id, suspended.id]) expect(dependents('users', id)).toBe(0);
+      expect(dependents('users', s.other.id)).toBeGreaterThan(0);
+      expect(dependents('branch_memberships', s.local.id)).toBe(0);
+      applyPragmas(database, configuration);
+      const before = snapshot(database);
+
+      const NEVER_DELETED = /users are deactivated, never deleted/;
+      const LOCAL_NEVER_DELETED = /branch_memberships are deactivated, never deleted/;
+      const USERNAME_TAKEN = /users username belongs to another identity/;
+      const attempts: readonly (readonly [string, string, RegExp])[] = [
+        ['DELETE inactive identity', `DELETE FROM users WHERE id = '${s.bare.id}'`, NEVER_DELETED],
+        ['DELETE suspended identity', `DELETE FROM users WHERE id = '${suspended.id}'`, NEVER_DELETED],
+        [
+          'DELETE + INSERT inactive identity with the same id',
+          `DELETE FROM users WHERE id = '${s.bare.id}';
+           INSERT INTO users (id, username, display_name, status, created_at, updated_at, security_version)
+           VALUES ('${s.bare.id}', 'impostor.ficticio', 'Impostor', 'ACTIVE', '${UPDATED_AT}', '${UPDATED_AT}', 9)`,
+          NEVER_DELETED,
+        ],
+        [
+          'UPDATE OR REPLACE username takeover of an inactive identity',
+          `UPDATE OR REPLACE users SET username = '${s.bare.username}' WHERE id = '${s.other.id}'`,
+          USERNAME_TAKEN,
+        ],
+        [
+          'UPDATE OR REPLACE username takeover of a suspended identity',
+          `UPDATE OR REPLACE users SET username = '${suspended.username}' WHERE id = '${s.other.id}'`,
+          USERNAME_TAKEN,
+        ],
+        ['DELETE inactive branch membership', `DELETE FROM branch_memberships WHERE id = '${s.local.id}'`, LOCAL_NEVER_DELETED],
+        [
+          'DELETE + INSERT inactive branch membership with the same id at another branch',
+          `DELETE FROM branch_memberships WHERE id = '${s.local.id}';
+           INSERT INTO branch_memberships (id, company_membership_id, tenant_id, company_id, branch_id, status, created_at, updated_at)
+           VALUES ('${s.local.id}', '${s.local.companyMembershipId}', '${s.local.tenantId}', '${s.local.companyId}', '${s.south.id}',
+             'ACTIVE', '${CREATED_AT}', '${CREATED_AT}')`,
+          LOCAL_NEVER_DELETED,
+        ],
+      ];
+      for (const [label, sql, refusal] of attempts) {
+        expect(() => database.exec(sql), label).toThrow(refusal);
+        expect(snapshot(database), label).toEqual(before);
+      }
+      expect(database.prepare('SELECT status FROM users WHERE id IN (?, ?) ORDER BY status').pluck().all(s.bare.id, suspended.id)).toEqual([
+        'INACTIVE',
+        'SUSPENDED',
+      ]);
+      expect(database.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+    });
   });
 
   describe('legitimate repository operations under migration 8', () => {
@@ -470,6 +550,192 @@ describe('E1.07-D3-G0 installation authority gate (PD-73, PD-75, PD-76)', () => 
     });
   });
 
+  describe('initial administrator credential provisioning (PD-80, E1.07-D3-G0-R1)', () => {
+    const initialised = async (options: { readonly session?: boolean } = {}) => {
+      const harness = await startedService();
+      const input = { displayName: 'Administrador Fictício', id: newId(), username: uniqueUsername('admin') };
+      const { initialAdministratorId } = await harness.service.identityProvisioning.installation.initialise(input, TEST_PASSWORD);
+      const administrator = await harness.service.identityProvisioning.users.findById(initialAdministratorId);
+      if (administrator === undefined) throw new Error('Administrador esperado.');
+      const session = options.session === true ? await openSession(harness, administrator) : undefined;
+      return { administrator, harness, session };
+    };
+
+    /**
+     * Fora da fronteira D-209 (actor F): só quem controla o esquema elimina uma credencial, retirando
+     * o trigger da migração 4, que é reposto com o SQL original. Corre na ligação do serviço em `READY`.
+     */
+    const removeCredentialOutsideTheBoundary = (userId: string): void =>
+      inspect((database) => {
+        const trigger = database
+          .prepare("SELECT sql FROM sqlite_schema WHERE type = 'trigger' AND name = 'password_credentials_never_deleted'")
+          .pluck()
+          .get() as string;
+        database.exec('DROP TRIGGER password_credentials_never_deleted');
+        expect(database.prepare('DELETE FROM password_credentials WHERE user_id = ?').run(userId).changes).toBe(1);
+        database.exec(trigger);
+      });
+
+    const anchorOf = ({ service }: ServiceUnderTest) => service.identityProvisioning.installation.verifyAnchor();
+
+    /** Todas as operações comuns de credencial recusadas pela protecção, sem efeito persistido. */
+    const expectEveryCredentialOperationRefused = async (harness: ServiceUnderTest, administrator: User): Promise<void> => {
+      const { credentials } = harness.service.identityProvisioning;
+      const before = inspect(snapshot);
+      const anchorBefore = await anchorOf(harness);
+      const attempts: readonly (readonly [string, () => Promise<void>])[] = [
+        ['create', () => credentials.create(administrator.id, OTHER_TEST_PASSWORD)],
+        ['replace', () => credentials.replace(administrator.id, OTHER_TEST_PASSWORD)],
+        // A protecção vem antes de qualquer outra validação: a política de palavras-passe nem é avaliada.
+        ['create with a password the policy refuses', () => credentials.create(administrator.id, '')],
+        ['replace with a password the policy refuses', () => credentials.replace(administrator.id, '')],
+      ];
+      for (const [label, attempt] of attempts) {
+        await expect(attempt(), label).rejects.toBeInstanceOf(InitialAdministratorProtectedError);
+        expect(inspect(snapshot), label).toEqual(before);
+        await expect(anchorOf(harness), label).resolves.toEqual(anchorBefore);
+      }
+      await expect(harness.service.authentication.authenticate(administrator.username, OTHER_TEST_PASSWORD)).resolves.toMatchObject({
+        ok: false,
+      });
+    };
+
+    it('[G16] keeps the legitimate first installation and refuses a second one, also when the anchor is broken', async () => {
+      const harness = await startedService();
+      const { installation, credentials } = harness.service.identityProvisioning;
+      await expect(anchorOf(harness)).resolves.toEqual({ state: 'uninitialised' });
+      // Antes da inicialização, o provisionamento comum de credenciais funciona como sempre.
+      const earlier = await provision(harness);
+      const input = { displayName: 'Administrador Fictício', id: newId(), username: uniqueUsername('admin') };
+      const { initialAdministratorId } = await installation.initialise(input, TEST_PASSWORD);
+      expect(initialAdministratorId).toBe(input.id);
+      await expect(anchorOf(harness)).resolves.toMatchObject({ initialAdministratorId, state: 'intact' });
+      await expect(harness.service.authentication.authenticate(input.username, TEST_PASSWORD)).resolves.toMatchObject({ ok: true });
+      expect(
+        inspect((database) => database.prepare('SELECT credential_version FROM password_credentials WHERE user_id = ?').pluck().get(input.id)),
+      ).toBe(1);
+
+      const second = { displayName: 'Segundo Fictício', id: newId(), username: uniqueUsername('admin') };
+      const before = inspect(snapshot);
+      await expect(installation.initialise(second, TEST_PASSWORD)).rejects.toMatchObject({ reason: 'already-initialised' });
+      await expect(installation.initialise({ ...second, id: earlier.id, username: earlier.username }, TEST_PASSWORD)).rejects.toThrow();
+      expect(inspect(snapshot)).toEqual(before);
+
+      removeCredentialOutsideTheBoundary(initialAdministratorId);
+      await expect(anchorOf(harness)).resolves.toEqual({ fault: 'administrator-credential-missing', state: 'broken' });
+      const broken = inspect(snapshot);
+      await expect(installation.initialise(second, TEST_PASSWORD)).rejects.toMatchObject({ reason: 'already-initialised' });
+      await expect(credentials.create(initialAdministratorId, TEST_PASSWORD)).rejects.toBeInstanceOf(InitialAdministratorProtectedError);
+      expect(inspect(snapshot)).toEqual(broken);
+      await expect(anchorOf(harness)).resolves.toEqual({ fault: 'administrator-credential-missing', state: 'broken' });
+    });
+
+    it('[G17] refuses every credential operation on an initial administrator with a valid credential and an active session', async () => {
+      const { administrator, harness, session } = await initialised({ session: true });
+      await expectEveryCredentialOperationRefused(harness, administrator);
+      await expect(harness.service.sessions.validate(session?.token ?? '')).resolves.toMatchObject({ ok: true });
+      await expect(harness.service.authentication.authenticate(administrator.username, TEST_PASSWORD)).resolves.toMatchObject({ ok: true });
+      await expect(anchorOf(harness)).resolves.toMatchObject({ initialAdministratorId: administrator.id, state: 'intact' });
+    });
+
+    it.each([
+      { label: 'without any session (the migration-5 version guard cannot refuse)', session: false },
+      { label: 'with an earlier session', session: true },
+    ])('[G18] refuses provisioning a credential for an initial administrator whose credential is missing, $label', async ({ session }) => {
+      const { administrator, harness } = await initialised({ session });
+      removeCredentialOutsideTheBoundary(administrator.id);
+      const sessions = inspect((database) =>
+        database.prepare('SELECT count(*) FROM local_sessions WHERE user_id = ?').pluck().get(administrator.id),
+      );
+      expect(sessions).toBe(session ? 1 : 0);
+      await expect(anchorOf(harness)).resolves.toEqual({ fault: 'administrator-credential-missing', state: 'broken' });
+
+      await expectEveryCredentialOperationRefused(harness, administrator);
+      for (const password of [TEST_PASSWORD, OTHER_TEST_PASSWORD]) {
+        await expect(harness.service.authentication.authenticate(administrator.username, password)).resolves.toMatchObject({ ok: false });
+      }
+      const persisted = inspect(snapshot);
+      await harness.service.stop();
+
+      // Persistido: a base reaberta continua sem credencial e a âncora continua fechada noutro arranque.
+      const reopened = temporary.open();
+      expect(snapshot(reopened)).toEqual(persisted);
+      expect(reopened.prepare('SELECT count(*) FROM password_credentials WHERE user_id = ?').pluck().get(administrator.id)).toBe(0);
+      expect(reopened.prepare('PRAGMA integrity_check').pluck().get()).toBe('ok');
+      expect(reopened.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+      reopened.close();
+      const restarted = await startedService();
+      await expect(anchorOf(restarted)).resolves.toEqual({ fault: 'administrator-credential-missing', state: 'broken' });
+      await expectEveryCredentialOperationRefused(restarted, administrator);
+    });
+
+    it('[G19] refuses it also for a deactivated initial administrator without credential (status changed by SQL, D-209)', async () => {
+      const { administrator, harness } = await initialised();
+      inspect((database) => database.prepare("UPDATE users SET status = 'INACTIVE' WHERE id = ?").run(administrator.id));
+      removeCredentialOutsideTheBoundary(administrator.id);
+      await expectEveryCredentialOperationRefused(harness, administrator);
+      await expect(
+        harness.service.identityProvisioning.users.changeStatus(administrator.id, 'ACTIVE', clock.now().toISOString()),
+      ).rejects.toBeInstanceOf(InitialAdministratorProtectedError);
+      expect(inspect((database) => database.prepare('SELECT status FROM users WHERE id = ?').pluck().get(administrator.id))).toBe('INACTIVE');
+    });
+
+    it('[G20] offers no other credential path: no removal or re-creation operation, SQL deletion refused, identifier is no authority', async () => {
+      const { administrator, harness } = await initialised();
+      const provisioning = harness.service.identityProvisioning;
+      expect(Object.keys(provisioning).sort()).toEqual(['credentials', 'installation', 'sessions', 'users']);
+      expect(Object.keys(provisioning.credentials).sort()).toEqual(['create', 'replace']);
+      expect(Object.keys(provisioning.installation).sort()).toEqual(['initialise', 'status', 'verifyAnchor']);
+      expect(Object.keys(provisioning.users).sort()).toEqual(['changeStatus', 'create', 'findById']);
+      const before = inspect(snapshot);
+
+      // Remoção pela ligação normal: recusada pelo trigger da migração 4, com qualquer configuração de FK.
+      for (const configuration of CONFIGURATIONS) {
+        inspect((database) => {
+          applyPragmas(database, configuration);
+          expect(() => database.prepare('DELETE FROM password_credentials WHERE user_id = ?').run(administrator.id), configuration.label).toThrow(
+            /password_credentials are replaced, never deleted/,
+          );
+        });
+        expect(inspect(snapshot), configuration.label).toEqual(before);
+      }
+      // Conhecer o identificador ou o username não dá nenhuma autoridade sobre a identidade.
+      await expect(provisioning.users.create(newUser({ id: administrator.id }))).rejects.toMatchObject({ reason: 'duplicate-id' });
+      await expect(provisioning.users.create(newUser({ username: administrator.username }))).rejects.toMatchObject({
+        reason: 'duplicate-username',
+      });
+      expect(inspect(snapshot)).toEqual(before);
+      await expect(anchorOf(harness)).resolves.toMatchObject({ initialAdministratorId: administrator.id, state: 'intact' });
+    });
+
+    it('[G21] keeps ordinary identities administrable, including a deactivated one without credential', async () => {
+      const { administrator, harness } = await initialised();
+      const { credentials, users } = harness.service.identityProvisioning;
+      const administratorCredential = () =>
+        inspect((database) => database.prepare('SELECT * FROM password_credentials WHERE user_id = ?').get(administrator.id));
+      const adminBefore = administratorCredential();
+
+      const ordinary = newUser();
+      await users.create(ordinary);
+      await credentials.create(ordinary.id, TEST_PASSWORD);
+      await expect(harness.service.authentication.authenticate(ordinary.username, TEST_PASSWORD)).resolves.toMatchObject({ ok: true });
+      await expect(credentials.create(ordinary.id, OTHER_TEST_PASSWORD)).rejects.toMatchObject({ reason: 'duplicate-credential' });
+      await credentials.replace(ordinary.id, OTHER_TEST_PASSWORD);
+      await expect(harness.service.authentication.authenticate(ordinary.username, OTHER_TEST_PASSWORD)).resolves.toMatchObject({ ok: true });
+
+      // Comportamento comum inalterado: a credencial de uma identidade desactivada pode ser criada,
+      // mas não autentica enquanto a identidade não estiver activa.
+      const inactive = newUser();
+      await users.create(inactive);
+      await users.changeStatus(inactive.id, 'INACTIVE', clock.now().toISOString());
+      await credentials.create(inactive.id, TEST_PASSWORD);
+      await expect(harness.service.authentication.authenticate(inactive.username, TEST_PASSWORD)).resolves.toMatchObject({ ok: false });
+
+      expect(administratorCredential()).toEqual(adminBefore);
+      await expect(anchorOf(harness)).resolves.toMatchObject({ initialAdministratorId: administrator.id, state: 'intact' });
+    });
+  });
+
   describe('installation anchor (fail-closed reference)', () => {
     it('[G07] reports uninitialised, then intact for the identity created by the bootstrap only', async () => {
       const harness = await startedService();
@@ -509,6 +775,48 @@ describe('E1.07-D3-G0 installation authority gate (PD-73, PD-75, PD-76)', () => 
             DELETE FROM password_credentials WHERE user_id = '${s.administrator.id}'`),
         ),
       ).resolves.toEqual({ fault: 'administrator-credential-missing', state: 'broken' });
+    });
+
+    it('[G08b] the service verifyAnchor() fails closed on the same legacy databases and refuses credential provisioning for them', async () => {
+      // E1.07-D3-G0-R1 (PD-81, mutação K06): a âncora é verificada pelo SERVIÇO em `READY`, depois de
+      // ele próprio aplicar a migração 8, e não só directamente no armazenamento.
+      const tampers: readonly (readonly [InstallationAnchorFault, (database: SqliteDatabase, s: IdentitySeed) => void])[] = [
+        ['administrator-missing', (database, s) => database.exec(`DELETE FROM users WHERE id = '${s.administrator.id}'`)],
+        [
+          'administrator-mismatch',
+          (database, s) => database.exec(identityAttacks(s)['DELETE + INSERT initial administrator with the same id'] ?? ''),
+        ],
+        [
+          'administrator-credential-missing',
+          (database, s) =>
+            database.exec(`DROP TRIGGER password_credentials_never_deleted;
+              DELETE FROM password_credentials WHERE user_id = '${s.administrator.id}'`),
+        ],
+      ];
+      for (const [fault, tamper] of tampers) {
+        const { database, temporary: own } = fresh(MIGRATED_TO_7);
+        const s = await seedIdentities(database);
+        applyPragmas(database, CONFIGURATIONS[1]);
+        tamper(database, s);
+        database.close();
+
+        const harness = await startedService(own.filename);
+        expect(harness.service.startupReport, fault).toMatchObject({ appliedMigrations: [8], schemaVersion: 8 });
+        const { installation, credentials } = harness.service.identityProvisioning;
+        await expect(installation.verifyAnchor(), fault).resolves.toEqual({ fault, state: 'broken' });
+        // O registo descritivo continua a mostrar o identificador; não é prova de nada.
+        await expect(installation.status(), fault).resolves.toMatchObject({ initialAdministratorId: s.administrator.id, initialised: true });
+        const before = inspectDatabase(own.filename, () => own.open(), snapshot);
+        await expect(credentials.create(s.administrator.id, OTHER_TEST_PASSWORD), fault).rejects.toBeInstanceOf(
+          InitialAdministratorProtectedError,
+        );
+        await expect(credentials.replace(s.administrator.id, OTHER_TEST_PASSWORD), fault).rejects.toBeInstanceOf(
+          InitialAdministratorProtectedError,
+        );
+        expect(inspectDatabase(own.filename, () => own.open(), snapshot), fault).toEqual(before);
+        await expect(installation.verifyAnchor(), fault).resolves.toEqual({ fault, state: 'broken' });
+        await harness.service.stop();
+      }
     });
 
     it('[G09] grants no installation or company authority to the initial administrator, even with an intact anchor', async () => {
