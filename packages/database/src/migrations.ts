@@ -561,6 +561,175 @@ BEGIN
 END;
 `;
 
+// E1.07-D2-R1 (PD-69, PD-70): fecha os caminhos de substituicao por `rowid` e leva para o esquema
+// as identidades imutaveis que os repositorios ja aplicam. `REPLACE` pode eliminar implicitamente
+// a linha que colide por `rowid` sem executar triggers DELETE quando `recursive_triggers` esta
+// desligado; por isso as guardas correm antes do INSERT/UPDATE e nao dependem de foreign_keys nem
+// de recursive_triggers. As associacoes empresariais e locais tambem recusam reinsercao e mudanca
+// de titular/ligacoes, impedindo que atribuicoes existentes sejam transferidas para outra identidade,
+// empresa ou filial por SQL directo. So acrescenta triggers; nao altera dados nem as migracoes 1-6.
+// A fronteira de confianca mantem-se: quem controla o esquema ou o ficheiro pode remover triggers.
+const V7_HARDEN_RBAC_REPLACEMENT_AND_PARENT_BINDINGS = `
+CREATE TRIGGER companies_insert_requires_new_company
+BEFORE INSERT ON companies
+WHEN EXISTS (
+  SELECT 1 FROM companies WHERE rowid = NEW.rowid OR id = NEW.id OR tenant_id = NEW.tenant_id
+)
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: companies are never re-inserted');
+END;
+
+CREATE TRIGGER companies_identity_immutable
+BEFORE UPDATE ON companies
+WHEN NEW.rowid IS NOT OLD.rowid OR NEW.id IS NOT OLD.id OR NEW.tenant_id IS NOT OLD.tenant_id
+  OR NEW.created_at IS NOT OLD.created_at
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: companies rowid, id, tenant and creation are immutable');
+END;
+
+CREATE TRIGGER branches_insert_requires_new_branch
+BEFORE INSERT ON branches
+WHEN EXISTS (
+  SELECT 1 FROM branches
+  WHERE rowid = NEW.rowid OR id = NEW.id OR (company_id = NEW.company_id AND code = NEW.code)
+)
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: branches are never re-inserted');
+END;
+
+CREATE TRIGGER branches_identity_immutable
+BEFORE UPDATE ON branches
+WHEN NEW.rowid IS NOT OLD.rowid OR NEW.id IS NOT OLD.id OR NEW.tenant_id IS NOT OLD.tenant_id
+  OR NEW.company_id IS NOT OLD.company_id OR NEW.created_at IS NOT OLD.created_at
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: branches rowid, id, tenant, company and creation are immutable');
+END;
+
+CREATE TRIGGER users_rowid_insert_requires_new_identity
+BEFORE INSERT ON users
+WHEN EXISTS (SELECT 1 FROM users WHERE rowid = NEW.rowid)
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: users rowid is never re-used');
+END;
+
+CREATE TRIGGER users_rowid_immutable
+BEFORE UPDATE ON users
+WHEN NEW.rowid IS NOT OLD.rowid
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: users rowid is immutable');
+END;
+
+CREATE TRIGGER password_credentials_rowid_insert_requires_new_credential
+BEFORE INSERT ON password_credentials
+WHEN EXISTS (SELECT 1 FROM password_credentials WHERE rowid = NEW.rowid)
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: password_credentials rowid is never re-used');
+END;
+
+CREATE TRIGGER password_credentials_rowid_immutable
+BEFORE UPDATE ON password_credentials
+WHEN NEW.rowid IS NOT OLD.rowid
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: password_credentials rowid is immutable');
+END;
+
+CREATE TRIGGER local_sessions_rowid_insert_requires_new_session
+BEFORE INSERT ON local_sessions
+WHEN EXISTS (SELECT 1 FROM local_sessions WHERE rowid = NEW.rowid)
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: local_sessions rowid is never re-used');
+END;
+
+CREATE TRIGGER local_sessions_rowid_immutable
+BEFORE UPDATE ON local_sessions
+WHEN NEW.rowid IS NOT OLD.rowid
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: local_sessions rowid is immutable');
+END;
+
+CREATE TRIGGER company_memberships_insert_requires_new_membership
+BEFORE INSERT ON company_memberships
+WHEN EXISTS (
+  SELECT 1 FROM company_memberships
+  WHERE rowid = NEW.rowid OR id = NEW.id OR (user_id = NEW.user_id AND tenant_id = NEW.tenant_id)
+)
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: company_memberships are never re-inserted');
+END;
+
+CREATE TRIGGER company_memberships_binding_immutable
+BEFORE UPDATE ON company_memberships
+WHEN NEW.rowid IS NOT OLD.rowid OR NEW.id IS NOT OLD.id OR NEW.user_id IS NOT OLD.user_id
+  OR NEW.tenant_id IS NOT OLD.tenant_id OR NEW.company_id IS NOT OLD.company_id
+  OR NEW.created_at IS NOT OLD.created_at
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: company_memberships owner and references are immutable');
+END;
+
+CREATE TRIGGER branch_memberships_insert_requires_new_membership
+BEFORE INSERT ON branch_memberships
+WHEN EXISTS (
+  SELECT 1 FROM branch_memberships
+  WHERE rowid = NEW.rowid OR id = NEW.id
+    OR (company_membership_id = NEW.company_membership_id AND branch_id = NEW.branch_id)
+)
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: branch_memberships are never re-inserted');
+END;
+
+CREATE TRIGGER branch_memberships_binding_immutable
+BEFORE UPDATE ON branch_memberships
+WHEN NEW.rowid IS NOT OLD.rowid OR NEW.id IS NOT OLD.id
+  OR NEW.company_membership_id IS NOT OLD.company_membership_id OR NEW.tenant_id IS NOT OLD.tenant_id
+  OR NEW.company_id IS NOT OLD.company_id OR NEW.branch_id IS NOT OLD.branch_id
+  OR NEW.created_at IS NOT OLD.created_at
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: branch_memberships references are immutable');
+END;
+
+CREATE TRIGGER roles_rowid_insert_requires_new_role
+BEFORE INSERT ON roles
+WHEN EXISTS (SELECT 1 FROM roles WHERE rowid = NEW.rowid)
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: roles rowid is never re-used');
+END;
+
+CREATE TRIGGER roles_rowid_immutable
+BEFORE UPDATE ON roles
+WHEN NEW.rowid IS NOT OLD.rowid
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: roles rowid is immutable');
+END;
+
+CREATE TRIGGER role_permissions_rowid_insert_requires_new_grant
+BEFORE INSERT ON role_permissions
+WHEN EXISTS (SELECT 1 FROM role_permissions WHERE rowid = NEW.rowid)
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: role_permissions rowid is never re-used');
+END;
+
+CREATE TRIGGER role_permissions_rowid_immutable
+BEFORE UPDATE ON role_permissions
+WHEN NEW.rowid IS NOT OLD.rowid
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: role_permissions rowid is immutable');
+END;
+
+CREATE TRIGGER role_assignments_rowid_insert_requires_new_assignment
+BEFORE INSERT ON role_assignments
+WHEN EXISTS (SELECT 1 FROM role_assignments WHERE rowid = NEW.rowid)
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: role_assignments rowid is never re-used');
+END;
+
+CREATE TRIGGER role_assignments_rowid_immutable
+BEFORE UPDATE ON role_assignments
+WHEN NEW.rowid IS NOT OLD.rowid
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: role_assignments rowid is immutable');
+END;
+`;
+
 export const MIGRATIONS: readonly Migration[] = Object.freeze([
   Object.freeze({ name: 'create_companies_and_branches', sql: V1_COMPANIES_AND_BRANCHES, version: 1 }),
   Object.freeze({ name: 'create_users_and_memberships', sql: V2_USERS_AND_MEMBERSHIPS, version: 2 }),
@@ -568,6 +737,11 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
   Object.freeze({ name: 'create_sessions_and_security_versions', sql: V4_SESSIONS_AND_SECURITY_VERSIONS, version: 4 }),
   Object.freeze({ name: 'protect_security_versions_against_reinsertion', sql: V5_SECURITY_VERSION_REINSERTION, version: 5 }),
   Object.freeze({ name: 'create_rbac_roles_permissions_assignments', sql: V6_RBAC_ROLES_PERMISSIONS_ASSIGNMENTS, version: 6 }),
+  Object.freeze({
+    name: 'harden_rbac_replacement_and_parent_bindings',
+    sql: V7_HARDEN_RBAC_REPLACEMENT_AND_PARENT_BINDINGS,
+    version: 7,
+  }),
 ]);
 
 export const migrationChecksum = (migration: Migration): string =>

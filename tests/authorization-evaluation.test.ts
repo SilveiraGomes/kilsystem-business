@@ -166,6 +166,10 @@ describe('E1.07-D1 pure evaluation', () => {
     const { company, facts, role, user } = companyWideGrant(['company.read']);
     const unknown = { ...facts, rolePermissions: [...facts.rolePermissions, grantTo(role, 'reports.export')] };
     expectDenied(evaluate(factsFor(requestFor(user, 'reports.export', companyTarget(company)), unknown)), 'unknown-permission');
+    const companyRequest = requestFor(user, 'company.read', companyTarget(company));
+    expect(
+      listApplicablePermissionCodes({ catalog: TEST_CATALOG, userId: user.id, scope: companyRequest.scope, company: unknown }),
+    ).toEqual(['company.read']);
     // E1.07-D1-R1: um catálogo fabricado por cópia seria recusado como `untrusted-catalog`; a retirada
     // é exercitada com um catálogo experimental reconhecido em que `company.read` está `WITHDRAWN`.
     const withdrawn: PermissionCatalog = createExperimentalPermissionCatalog(
@@ -388,7 +392,7 @@ describe('E1.07-D1 boundaries', () => {
   // Actualizado em E1.07-D2: D1 não acrescentou migrações; a 6 (RBAC) é de D2. As migrações 1 a 5
   // mantêm as somas publicadas e continuam sem objectos RBAC.
   it('D60 keeps the checksums of migrations 1 to 5; RBAC tables only from migration 6 (E1.07-D2)', () => {
-    expect(MIGRATIONS.map((migration) => migration.version)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(MIGRATIONS.map((migration) => migration.version)).toEqual([1, 2, 3, 4, 5, 6, 7]);
     expect(MIGRATIONS.slice(0, 5).map(migrationChecksum)).toEqual([
       'c70164d253bed3637177a1a434282a3fb9e4d16c294134dd2f6ec61dbf734b61',
       'b05636332e82baa7250873473b7c91fd0a571ec07e2b90b7ee2d236fd9bfc2d0',
@@ -400,6 +404,10 @@ describe('E1.07-D1 boundaries', () => {
       expect(migration.sql).not.toMatch(/\b(roles?|permissions?|role_assignments)\b/i);
     }
     expect(MIGRATIONS[5]).toMatchObject({ name: 'create_rbac_roles_permissions_assignments', version: 6 });
+    expect(migrationChecksum(MIGRATIONS[5] as (typeof MIGRATIONS)[number])).toBe(
+      'f7bf395b5827dfb64a4b2c661416b77e3dfc168c0276d6509315d174f5b3d09f',
+    );
+    expect(MIGRATIONS[6]).toMatchObject({ name: 'harden_rbac_replacement_and_parent_bindings', version: 7 });
   });
 
   // Actualizado em E1.07-D2: a persistência RBAC e o motor interno existem só nos ficheiros

@@ -154,7 +154,7 @@ const CONFIGURATIONS = [
   { foreignKeys: false, label: 'foreign_keys OFF, recursive_triggers ON', recursiveTriggers: true },
 ] as const;
 
-describe('RBAC SQLite integrity (E1.07-D2, migration 6)', () => {
+describe('RBAC SQLite integrity (E1.07-D2/R1, migrations 6-7)', () => {
   let temporary: TemporaryDatabase;
   let database: SqliteDatabase;
   let authorization: SqliteAuthorizationPersistence;
@@ -177,7 +177,7 @@ describe('RBAC SQLite integrity (E1.07-D2, migration 6)', () => {
       const fresh = createTemporaryDatabase();
       try {
         const connection = fresh.open();
-        expect(runMigrations(connection)).toEqual({ applied: [1, 2, 3, 4, 5, 6], currentVersion: 6 });
+        expect(runMigrations(connection)).toEqual({ applied: [1, 2, 3, 4, 5, 6, 7], currentVersion: 7 });
         const tables = connection
           .prepare("SELECT name, strict FROM pragma_table_list WHERE name IN ('roles', 'role_permissions', 'role_assignments') ORDER BY name")
           .all();
@@ -267,16 +267,19 @@ describe('RBAC SQLite integrity (E1.07-D2, migration 6)', () => {
         const snapshot = () => Object.fromEntries(tables.map((table) => [table, connection.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()]));
         const before = snapshot();
 
-        expect(inspectMigrations(connection)).toMatchObject({ appliedVersions: [1, 2, 3, 4, 5], pendingVersions: [6] });
-        expect(runMigrations(connection)).toEqual({ applied: [6], currentVersion: 6 });
+        expect(inspectMigrations(connection)).toMatchObject({ appliedVersions: [1, 2, 3, 4, 5], pendingVersions: [6, 7] });
+        expect(runMigrations(connection)).toEqual({ applied: [6, 7], currentVersion: 7 });
         const after = snapshot();
         expect({ ...after, schema_migrations: after['schema_migrations']?.slice(0, 5) }).toEqual(before);
         expect(connection.prepare('SELECT checksum FROM schema_migrations WHERE version = 6').pluck().get()).toBe(
           migrationChecksum(MIGRATIONS[5] as (typeof MIGRATIONS)[number]),
         );
+        expect(connection.prepare('SELECT checksum FROM schema_migrations WHERE version = 7').pluck().get()).toBe(
+          migrationChecksum(MIGRATIONS[6] as (typeof MIGRATIONS)[number]),
+        );
         expect(connection.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
         expect(connection.prepare('PRAGMA integrity_check').pluck().get()).toBe('ok');
-        expect(runMigrations(connection)).toEqual({ applied: [], currentVersion: 6 });
+        expect(runMigrations(connection)).toEqual({ applied: [], currentVersion: 7 });
         // A base actualizada aceita imediatamente perfis e atribuições da associação existente.
         const upgraded = createSqliteAuthorizationPersistence(connection);
         const role = newRole(company, { code: 'LEITOR' });
@@ -297,7 +300,7 @@ describe('RBAC SQLite integrity (E1.07-D2, migration 6)', () => {
         runMigrations(connection, MIGRATIONS.slice(0, 5));
         const broken = { ...MIGRATIONS[5], sql: `${MIGRATIONS[5]?.sql ?? ''}\nSELECT * FROM missing_table;` } as (typeof MIGRATIONS)[number];
         expect(() => runMigrations(connection, [...MIGRATIONS.slice(0, 5), broken])).toThrow(/missing_table/);
-        expect(inspectMigrations(connection)).toMatchObject({ appliedVersions: [1, 2, 3, 4, 5], pendingVersions: [6] });
+        expect(inspectMigrations(connection)).toMatchObject({ appliedVersions: [1, 2, 3, 4, 5], pendingVersions: [6, 7] });
         expect(connection.prepare("SELECT count(*) FROM sqlite_schema WHERE name LIKE 'role%'").pluck().get()).toBe(0);
         runMigrations(connection);
         const altered = [...MIGRATIONS.slice(0, 5), { ...MIGRATIONS[5], sql: `${MIGRATIONS[5]?.sql ?? ''}\n` } as (typeof MIGRATIONS)[number]];
@@ -308,11 +311,11 @@ describe('RBAC SQLite integrity (E1.07-D2, migration 6)', () => {
       }
     });
 
-    it('[RM04] the local service refuses migration 6 under the strict policy without touching the file', async () => {
+    it('[RM04] the local service refuses migration 7 under the strict policy without touching a migration-6 file', async () => {
       const legacy = createTemporaryDatabase();
       try {
         const connection = legacy.open();
-        runMigrations(connection, MIGRATIONS.slice(0, 5));
+        runMigrations(connection, MIGRATIONS.slice(0, 6));
         connection.close();
         const before = readFileSync(legacy.filename);
         const strict = createServiceUnderTest(
@@ -322,8 +325,52 @@ describe('RBAC SQLite integrity (E1.07-D2, migration 6)', () => {
         expect(readFileSync(legacy.filename).equals(before)).toBe(true);
         const applying = createServiceUnderTest(serviceConfig(legacy.filename));
         await applying.service.start();
-        expect(applying.service.startupReport).toMatchObject({ appliedMigrations: [6], schemaVersion: 6 });
+        expect(applying.service.startupReport).toMatchObject({ appliedMigrations: [7], schemaVersion: 7 });
         await applying.service.stop();
+      } finally {
+        legacy.dispose();
+      }
+    });
+
+    it('[RM05] upgrades a migration-6 database with valid RBAC data without changing rows or checksums 1-6', async () => {
+      const legacy = createTemporaryDatabase();
+      try {
+        const connection = legacy.open();
+        expect(runMigrations(connection, MIGRATIONS.slice(0, 6))).toEqual({
+          applied: [1, 2, 3, 4, 5, 6],
+          currentVersion: 6,
+        });
+        const persistence = createSqliteAuthorizationPersistence(connection);
+        const seeded = await seedDatabase(connection, persistence);
+        await persistence.rolePermissions.add(contextFor(seeded.companyA.tenantId), grantTo(seeded.roleA, 'company.read'));
+        await persistence.roleAssignments.create(
+          contextFor(seeded.companyA.tenantId),
+          assignCompanyWide(seeded.roleA, seeded.aliceAtA),
+        );
+        const tables = [
+          'companies',
+          'branches',
+          'users',
+          'company_memberships',
+          'branch_memberships',
+          'roles',
+          'role_permissions',
+          'role_assignments',
+        ];
+        const snapshot = () =>
+          Object.fromEntries(tables.map((table) => [table, connection.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()]));
+        const rowsBefore = snapshot();
+        const checksumsBefore = connection
+          .prepare('SELECT version, checksum FROM schema_migrations WHERE version <= 6 ORDER BY version')
+          .all();
+
+        expect(runMigrations(connection)).toEqual({ applied: [7], currentVersion: 7 });
+        expect(snapshot()).toEqual(rowsBefore);
+        expect(
+          connection.prepare('SELECT version, checksum FROM schema_migrations WHERE version <= 6 ORDER BY version').all(),
+        ).toEqual(checksumsBefore);
+        expect(connection.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+        expect(connection.prepare('PRAGMA integrity_check').pluck().get()).toBe('ok');
       } finally {
         legacy.dispose();
       }
@@ -465,6 +512,195 @@ describe('RBAC SQLite integrity (E1.07-D2, migration 6)', () => {
       }
       reactivate();
       expect(database.prepare('SELECT status FROM role_assignments WHERE id = ?').pluck().get(id)).toBe('ACTIVE');
+    });
+
+    it('[RI05a] refuses REPLACE and UPDATE OR REPLACE through occupied RBAC rowids without changing history', () => {
+      const a = { companyId: s.companyA.id, tenantId: s.companyA.tenantId };
+      insertPermission(database, { permissionCode: 'company.read', roleId: s.roleA.id, tenantId: a.tenantId });
+      const wide = randomUUID();
+      const branch = randomUUID();
+      insertAssignment(database, { ...a, id: wide, membershipId: s.aliceAtA.id, roleId: s.roleA.id });
+      insertAssignment(database, {
+        ...a,
+        branchId: s.northA.id,
+        id: branch,
+        membershipId: s.carolAtA.id,
+        roleId: s.roleA.id,
+        scope: 'BRANCH',
+      });
+      const snapshot = () => ({
+        assignments: database.prepare('SELECT rowid, * FROM role_assignments ORDER BY rowid').all(),
+        grants: database.prepare('SELECT rowid, * FROM role_permissions ORDER BY rowid').all(),
+        roles: database.prepare('SELECT rowid, * FROM roles ORDER BY rowid').all(),
+      });
+      const before = snapshot();
+      const roleRowid = database.prepare('SELECT rowid FROM roles WHERE id = ?').pluck().get(s.roleA.id) as number;
+      const otherRoleRowid = database.prepare('SELECT rowid FROM roles WHERE id = ?').pluck().get(s.inactiveRoleA.id) as number;
+      const grantRowid = database
+        .prepare('SELECT rowid FROM role_permissions WHERE tenant_id = ? AND role_id = ? AND permission_code = ?')
+        .pluck()
+        .get(a.tenantId, s.roleA.id, 'company.read') as number;
+      const wideRowid = database.prepare('SELECT rowid FROM role_assignments WHERE id = ?').pluck().get(wide) as number;
+      const branchRowid = database.prepare('SELECT rowid FROM role_assignments WHERE id = ?').pluck().get(branch) as number;
+
+      expect(() =>
+        database
+          .prepare(
+            `REPLACE INTO roles
+               (rowid, id, tenant_id, company_id, code, name, description, status, created_at, updated_at)
+             VALUES (?, ?, ?, ?, 'SUBSTITUTO', 'Substituto', NULL, 'ACTIVE', ?, ?)`,
+          )
+          .run(roleRowid, randomUUID(), a.tenantId, a.companyId, CREATED_AT, CREATED_AT),
+      ).toThrow(REFUSED);
+      expect(() =>
+        database.prepare('UPDATE OR REPLACE roles SET rowid = ? WHERE id = ?').run(otherRoleRowid, s.roleA.id),
+      ).toThrow(REFUSED);
+      expect(() =>
+        database
+          .prepare(
+            `REPLACE INTO role_permissions
+               (rowid, tenant_id, role_id, permission_code, catalog_version, created_at)
+             VALUES (?, ?, ?, 'company.update', 1, ?)`,
+          )
+          .run(grantRowid, a.tenantId, s.roleA.id, CREATED_AT),
+      ).toThrow(REFUSED);
+      expect(() =>
+        database
+          .prepare(
+            `REPLACE INTO role_assignments
+               (rowid, id, tenant_id, company_id, role_id, company_membership_id, scope, branch_id, status, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, 'BRANCH', ?, 'ACTIVE', ?, ?)`,
+          )
+          .run(wideRowid, randomUUID(), a.tenantId, a.companyId, s.roleA.id, s.carolAtA.id, s.southA.id, CREATED_AT, CREATED_AT),
+      ).toThrow(REFUSED);
+      expect(() =>
+        database.prepare('UPDATE OR REPLACE role_assignments SET rowid = ? WHERE id = ?').run(branchRowid, wide),
+      ).toThrow(REFUSED);
+      expect(snapshot()).toEqual(before);
+    });
+
+    it('[RI05b] keeps parent identities and membership owners immutable, including associations without assignments', () => {
+      const a = { companyId: s.companyA.id, tenantId: s.companyA.tenantId };
+      insertAssignment(database, { ...a, membershipId: s.aliceAtA.id, roleId: s.roleA.id });
+      const localMembershipId = database
+        .prepare('SELECT id FROM branch_memberships WHERE company_membership_id = ? AND branch_id = ?')
+        .pluck()
+        .get(s.carolAtA.id, s.northA.id) as string;
+      const aliceRowid = database.prepare('SELECT rowid FROM company_memberships WHERE id = ?').pluck().get(s.aliceAtA.id) as number;
+      const carolRowid = database.prepare('SELECT rowid FROM company_memberships WHERE id = ?').pluck().get(s.carolAtA.id) as number;
+      const before = {
+        assignments: database.prepare('SELECT * FROM role_assignments ORDER BY id').all(),
+        branches: database.prepare('SELECT * FROM branches ORDER BY id').all(),
+        companies: database.prepare('SELECT * FROM companies ORDER BY id').all(),
+        companyMemberships: database.prepare('SELECT * FROM company_memberships ORDER BY id').all(),
+        localMemberships: database.prepare('SELECT * FROM branch_memberships ORDER BY id').all(),
+      };
+      const refused = [
+        ['UPDATE company_memberships SET user_id = ? WHERE id = ?', s.daveAtB.userId, s.aliceAtA.id],
+        ['UPDATE company_memberships SET user_id = ? WHERE id = ?', s.alice.id, s.daveAtB.id],
+        ['UPDATE OR REPLACE company_memberships SET rowid = ? WHERE id = ?', carolRowid, s.aliceAtA.id],
+        ['UPDATE companies SET tenant_id = ? WHERE id = ?', s.companyB.tenantId, s.companyA.id],
+        ['UPDATE branches SET company_id = ? WHERE id = ?', s.companyB.id, s.northA.id],
+        ['UPDATE branch_memberships SET branch_id = ? WHERE id = ?', s.southA.id, localMembershipId],
+      ] as const;
+      for (const [sql, ...parameters] of refused) expect(() => database.prepare(sql).run(...parameters), sql).toThrow(REFUSED);
+      expect(() =>
+        database
+          .prepare(
+            `INSERT OR REPLACE INTO company_memberships
+               (rowid, id, user_id, tenant_id, company_id, scope, status, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, 'COMPANY_WIDE', 'ACTIVE', ?, ?)`,
+          )
+          .run(aliceRowid, s.aliceAtA.id, s.daveAtB.userId, a.tenantId, a.companyId, CREATED_AT, CREATED_AT),
+      ).toThrow(REFUSED);
+      expect({
+        assignments: database.prepare('SELECT * FROM role_assignments ORDER BY id').all(),
+        branches: database.prepare('SELECT * FROM branches ORDER BY id').all(),
+        companies: database.prepare('SELECT * FROM companies ORDER BY id').all(),
+        companyMemberships: database.prepare('SELECT * FROM company_memberships ORDER BY id').all(),
+        localMemberships: database.prepare('SELECT * FROM branch_memberships ORDER BY id').all(),
+      }).toEqual(before);
+    });
+
+    it('[RI05c] preserves migration-4/5 identity, credential and session rows against rowid replacement', () => {
+      database
+        .prepare(
+          `INSERT INTO password_credentials
+             (user_id, algorithm, algorithm_version, memory_kib, passes, parallelism, salt, hash, created_at, updated_at)
+           VALUES (?, 'argon2id', 19, 19456, 2, 1, ?, ?, ?, ?)`,
+        )
+        .run(s.alice.id, randomBytes(16), randomBytes(32), CREATED_AT, CREATED_AT);
+      const sessionId = randomUUID();
+      database
+        .prepare(
+          `INSERT INTO local_sessions
+             (id, user_id, token_digest, security_version, credential_version, service_run_id,
+              created_at, last_activity_at, absolute_expires_at, revoked_at, revocation_reason)
+           VALUES (?, ?, ?, 1, 1, ?, ?, ?, ?, NULL, NULL)`,
+        )
+        .run(sessionId, s.alice.id, randomBytes(32), randomBytes(16).toString('hex'), CREATED_AT, CREATED_AT, UPDATED_AT);
+      const snapshot = () => ({
+        credentials: database.prepare('SELECT rowid, * FROM password_credentials ORDER BY rowid').all(),
+        sessions: database.prepare('SELECT rowid, * FROM local_sessions ORDER BY rowid').all(),
+        users: database.prepare('SELECT rowid, * FROM users ORDER BY rowid').all(),
+      });
+      const before = snapshot();
+      const aliceRowid = database.prepare('SELECT rowid FROM users WHERE id = ?').pluck().get(s.alice.id) as number;
+      const carolRowid = database.prepare('SELECT rowid FROM users WHERE id = ?').pluck().get(s.carol.id) as number;
+      const credentialRowid = database.prepare('SELECT rowid FROM password_credentials WHERE user_id = ?').pluck().get(s.alice.id) as number;
+      const sessionRowid = database.prepare('SELECT rowid FROM local_sessions WHERE id = ?').pluck().get(sessionId) as number;
+      const replacement = newUser();
+
+      expect(() =>
+        database
+          .prepare(
+            `REPLACE INTO users
+               (rowid, id, username, display_name, email, phone, status, created_at, updated_at, security_version)
+             VALUES (?, ?, ?, ?, NULL, NULL, 'ACTIVE', ?, ?, 1)`,
+          )
+          .run(aliceRowid, replacement.id, replacement.username, replacement.displayName, CREATED_AT, CREATED_AT),
+      ).toThrow(REFUSED);
+      expect(() => database.prepare('UPDATE OR REPLACE users SET rowid = ? WHERE id = ?').run(carolRowid, s.alice.id)).toThrow(REFUSED);
+      expect(() =>
+        database
+          .prepare(
+            `REPLACE INTO password_credentials
+               (rowid, user_id, algorithm, algorithm_version, memory_kib, passes, parallelism, salt, hash,
+                created_at, updated_at, credential_version)
+             VALUES (?, ?, 'argon2id', 19, 19456, 2, 1, ?, ?, ?, ?, 1)`,
+          )
+          .run(credentialRowid, s.carol.id, randomBytes(16), randomBytes(32), CREATED_AT, CREATED_AT),
+      ).toThrow(REFUSED);
+      expect(() =>
+        database
+          .prepare(
+            `REPLACE INTO local_sessions
+               (rowid, id, user_id, token_digest, security_version, credential_version, service_run_id,
+                created_at, last_activity_at, absolute_expires_at, revoked_at, revocation_reason)
+             VALUES (?, ?, ?, ?, 1, 1, ?, ?, ?, ?, NULL, NULL)`,
+          )
+          .run(
+            sessionRowid,
+            randomUUID(),
+            s.carol.id,
+            randomBytes(32),
+            randomBytes(16).toString('hex'),
+            CREATED_AT,
+            CREATED_AT,
+            UPDATED_AT,
+          ),
+      ).toThrow(REFUSED);
+      expect(snapshot()).toEqual(before);
+    });
+
+    it('[RI05d] rolls back earlier writes when a protected parent binding change is refused', () => {
+      const beforeName = database.prepare('SELECT name FROM roles WHERE id = ?').pluck().get(s.roleA.id);
+      const work = database.transaction(() => {
+        database.prepare("UPDATE roles SET name = 'Temporario', updated_at = ? WHERE id = ?").run(UPDATED_AT, s.roleA.id);
+        database.prepare('UPDATE company_memberships SET user_id = ? WHERE id = ?').run(s.daveAtB.userId, s.aliceAtA.id);
+      });
+      expect(() => work.immediate()).toThrow(REFUSED);
+      expect(database.prepare('SELECT name FROM roles WHERE id = ?').pluck().get(s.roleA.id)).toBe(beforeName);
     });
   });
 
