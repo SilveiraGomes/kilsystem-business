@@ -8,6 +8,7 @@ import {
 } from '@kil-business/shared-types';
 
 import type { AuthenticationBackend } from './authentication-backend.js';
+import { assertNotInitialAdministrator } from './initial-administrator-protection.js';
 import type { PasswordHash } from './password-hashing.js';
 import { throttleKeyFor } from './throttle-policy.js';
 
@@ -19,7 +20,10 @@ import { throttleKeyFor } from './throttle-policy.js';
 export interface CredentialManager {
   /** Primeira credencial de uma identidade existente; recusa uma segunda (`duplicate-credential`). */
   create(userId: UserId, password: unknown): Promise<void>;
-  /** Substituição controlada; repõe o contador de tentativas do username. */
+  /**
+   * Substituição controlada; repõe o contador de tentativas do username. Recusa o administrador
+   * inicial (`InitialAdministratorProtectedError`, E1.07-D3-G0) até existir autoridade da instalação.
+   */
   replace(userId: UserId, password: unknown): Promise<void>;
 }
 
@@ -65,12 +69,14 @@ export const createCredentialManager = (backend: AuthenticationBackend): Credent
     },
     replace: async (userId: UserId, password: unknown): Promise<void> => {
       const { prepared, store, user } = prepare(userId, password);
+      assertNotInitialAdministrator(store, userId);
       const existing = store.findCredential(userId);
       if (existing === undefined) throw new RecordNotFoundError('PasswordCredential');
       const hashed = await backend.hasher.hash(prepared);
       backend.assertCurrent(store);
       const at = backend.clock().toISOString() as Timestamp;
       store.transaction(() => {
+        assertNotInitialAdministrator(store, userId);
         const updatedAt = at < existing.createdAt ? existing.createdAt : at;
         store.replaceCredential(toStoredCredential(userId, hashed, existing.createdAt, updatedAt), existing.hash);
         store.deleteThrottle(throttleKeyFor(user.username));

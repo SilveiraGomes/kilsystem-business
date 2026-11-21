@@ -1,0 +1,685 @@
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
+import {
+  createSqliteAuthenticationStore,
+  createSqliteMembershipPersistence,
+  createSqliteTenantPersistence,
+  createSqliteUserDirectory,
+  findNonPositiveRowids,
+  inspectMigrations,
+  MIGRATIONS,
+  migrationChecksum,
+  NonPositiveRowidError,
+  ROWID_GUARDED_TABLES,
+  runMigrations,
+  type SqliteDatabase,
+} from '../packages/database/src/index';
+import {
+  createBranch,
+  createBranchMembership,
+  type Branch,
+  type BranchMembership,
+  type Company,
+  type User,
+} from '../packages/shared-types/src/index';
+import { InitialAdministratorProtectedError } from '../services/local-api/src/authentication/initial-administrator-protection';
+import {
+  createTestClock,
+  OTHER_TEST_PASSWORD,
+  TEST_HASHING_PARAMETERS,
+  TEST_PASSWORD,
+  type TestClock,
+} from './support/authentication-fixtures';
+import { companyTarget } from './support/authorization-fixtures';
+import { branchInput, contextFor, CREATED_AT, newCompany, newId, UPDATED_AT } from './support/fixtures';
+import { newBranchMembership, newCompanyMembership, newUser, uniqueUsername } from './support/identity-fixtures';
+import {
+  createServiceUnderTest,
+  inspectDatabase,
+  serviceConfig,
+  type ServiceUnderTest,
+} from './support/local-service-harness';
+import { createTemporaryDatabase, type TemporaryDatabase } from './support/sqlite-harness';
+
+/*
+ * E1.07-D3-G0 — Gate de segurança da administração da instalação (PD-73, PD-75, PD-76).
+ * G: identidades persistentes (migração 8), âncora da instalação, protecção do administrador
+ * inicial e pré-verificação de `rowid` legados. SQLite real, bases descartáveis, dados fictícios.
+ */
+
+const REFUSED = /constraint|FOREIGN KEY|UNIQUE|CHECK|never|immutable|belongs/i;
+
+/** Somas publicadas das migrações 1 a 7 (`main` = `5e60b7f`); a migração 8 não as altera. */
+const PUBLISHED_CHECKSUMS_1_TO_7 = [
+  'c70164d253bed3637177a1a434282a3fb9e4d16c294134dd2f6ec61dbf734b61',
+  'b05636332e82baa7250873473b7c91fd0a571ec07e2b90b7ee2d236fd9bfc2d0',
+  '340d886e73aae09527f46db3e3dbecfa9afc7b9fafa126e0267cea9d1d1a1f53',
+  '95e09724388a7dce7e6c5588a55f3c35ee98f7a7202356885720dd7d1cdedf6e',
+  'd404e58df245f3a42ed9970be395b0ae90cc7b8d0c08cdcb14d5da871823b7a4',
+  'f7bf395b5827dfb64a4b2c661416b77e3dfc168c0276d6509315d174f5b3d09f',
+  'a6dd64de16b2734d15be2a4714b9e6d7bb0eea9ad66a352b38eecdb758e59f7d',
+];
+
+const MIGRATION_8_TRIGGERS = [
+  'branch_memberships_never_deleted',
+  'users_creation_immutable',
+  'users_never_deleted',
+  'users_username_never_taken_over',
+];
+
+const CONFIGURATIONS = [
+  { foreignKeys: true, label: 'foreign_keys ON, recursive_triggers OFF', recursiveTriggers: false },
+  { foreignKeys: false, label: 'foreign_keys OFF, recursive_triggers OFF', recursiveTriggers: false },
+  { foreignKeys: true, label: 'foreign_keys ON, recursive_triggers ON', recursiveTriggers: true },
+  { foreignKeys: false, label: 'foreign_keys OFF, recursive_triggers ON', recursiveTriggers: true },
+] as const;
+
+type Configuration = (typeof CONFIGURATIONS)[number];
+
+const applyPragmas = (database: SqliteDatabase, { foreignKeys, recursiveTriggers }: Configuration): void => {
+  database.pragma(`foreign_keys = ${foreignKeys ? 'ON' : 'OFF'}`);
+  database.pragma(`recursive_triggers = ${recursiveTriggers ? 'ON' : 'OFF'}`);
+};
+
+interface IdentitySeed {
+  readonly administrator: User;
+  readonly other: User;
+  /** Identidade sem credencial, sessões nem associações (sem linhas filhas). */
+  readonly bare: User;
+  readonly company: Company;
+  readonly north: Branch;
+  readonly south: Branch;
+  readonly local: BranchMembership;
+  readonly sessionId: string;
+}
+
+const insertCredential = (database: SqliteDatabase, userId: string, at: string): void => {
+  createSqliteAuthenticationStore(database).insertCredential({
+    algorithm: 'argon2id',
+    algorithmVersion: 19,
+    createdAt: at as User['createdAt'],
+    hash: randomBytes(32),
+    memoryKiB: 19456,
+    parallelism: 1,
+    passes: 2,
+    salt: randomBytes(16),
+    updatedAt: at as User['createdAt'],
+    userId: userId as User['id'],
+  });
+};
+
+/**
+ * Estado típico de uma instalação, escrito pelos repositórios (como a aplicação): administrador
+ * inicial com credencial, sessão activa e registo da instalação; outra identidade com associação
+ * local; uma identidade sem linhas filhas.
+ */
+const seedIdentities = async (database: SqliteDatabase): Promise<IdentitySeed> => {
+  const store = createSqliteAuthenticationStore(database);
+  const administrator = newUser({ username: uniqueUsername('admin') });
+  store.transaction(() => {
+    store.insertUser(administrator);
+    insertCredential(database, administrator.id, administrator.createdAt);
+    store.insertBootstrap({ completedAt: administrator.createdAt, initialAdministratorId: administrator.id });
+  });
+  const users = createSqliteUserDirectory(database);
+  const other = newUser();
+  const bare = newUser();
+  await users.create(other);
+  await users.create(bare);
+  insertCredential(database, other.id, other.createdAt);
+  const sessionId = randomUUID();
+  database
+    .prepare(
+      `INSERT INTO local_sessions (id, user_id, token_digest, security_version, credential_version, service_run_id,
+         created_at, last_activity_at, absolute_expires_at) VALUES (?, ?, ?, 1, 1, ?, ?, ?, ?)`,
+    )
+    .run(sessionId, administrator.id, randomBytes(32), randomBytes(16).toString('hex'), CREATED_AT, CREATED_AT, UPDATED_AT);
+
+  const tenant = createSqliteTenantPersistence(database);
+  const memberships = createSqliteMembershipPersistence(database);
+  const company = newCompany();
+  const context = contextFor(company.tenantId);
+  await tenant.companies.create(context, company);
+  const north = createBranch(branchInput(company, { code: 'NORTE' }));
+  const south = createBranch(branchInput(company, { code: 'SUL' }));
+  await tenant.branches.create(context, north);
+  await tenant.branches.create(context, south);
+  const membership = newCompanyMembership(other, company, { scope: 'BRANCH_RESTRICTED' });
+  await memberships.companyMemberships.create(context, membership);
+  const local = newBranchMembership(membership, north);
+  await memberships.branchMemberships.create(context, local);
+  return { administrator, bare, company, local, north, other, sessionId, south };
+};
+
+const PROTECTED_TABLES = [
+  'users',
+  'password_credentials',
+  'local_sessions',
+  'installation_bootstrap',
+  'company_memberships',
+  'branch_memberships',
+] as const;
+
+const snapshot = (database: SqliteDatabase): Record<string, unknown[]> =>
+  Object.fromEntries(
+    PROTECTED_TABLES.map((table) => [table, database.prepare(`SELECT rowid, * FROM ${table} ORDER BY rowid`).all()]),
+  );
+
+const bootstrapTarget = (database: SqliteDatabase): unknown =>
+  database
+    .prepare(
+      `SELECT u.username, u.created_at FROM installation_bootstrap b LEFT JOIN users u ON u.id = b.initial_administrator_id`,
+    )
+    .get();
+
+/** Tentativas de eliminação, reinserção e substituição por SQL directo (PD-75). */
+const identityAttacks = (s: IdentitySeed): Readonly<Record<string, string>> => {
+  const userRow = (id: string, username: string, createdAt: string, securityVersion: number): string =>
+    `INSERT INTO users (id, username, display_name, status, created_at, updated_at, security_version)
+     VALUES ('${id}', '${username}', 'Impostor Fictício', 'ACTIVE', '${createdAt}', '${createdAt}', ${securityVersion})`;
+  const localRow = (branchId: string): string =>
+    `INSERT INTO branch_memberships (id, company_membership_id, tenant_id, company_id, branch_id, status, created_at, updated_at)
+     VALUES ('${s.local.id}', '${s.local.companyMembershipId}', '${s.local.tenantId}', '${s.local.companyId}', '${branchId}',
+       'ACTIVE', '${CREATED_AT}', '${CREATED_AT}')`;
+  return {
+    'DELETE initial administrator': `DELETE FROM users WHERE id = '${s.administrator.id}'`,
+    'DELETE + INSERT initial administrator with the same id': `DELETE FROM users WHERE id = '${s.administrator.id}';
+      ${userRow(s.administrator.id, 'impostor.ficticio', UPDATED_AT, 9)}`,
+    'DELETE childless identity': `DELETE FROM users WHERE id = '${s.bare.id}'`,
+    'DELETE + INSERT childless identity with the same id': `DELETE FROM users WHERE id = '${s.bare.id}';
+      ${userRow(s.bare.id, 'impostor.ficticio', UPDATED_AT, 1)}`,
+    'DELETE every identity': 'DELETE FROM users',
+    'UPDATE OR REPLACE username takeover of the initial administrator': `UPDATE OR REPLACE users
+      SET username = '${s.administrator.username}' WHERE id = '${s.other.id}'`,
+    'UPDATE OR REPLACE username takeover of a childless identity': `UPDATE OR REPLACE users
+      SET username = '${s.bare.username}' WHERE id = '${s.other.id}'`,
+    'REPLACE INTO initial administrator': `REPLACE INTO users (id, username, display_name, status, created_at, updated_at,
+      security_version) VALUES ('${s.administrator.id}', 'impostor.ficticio', 'Impostor', 'ACTIVE', '${UPDATED_AT}', '${UPDATED_AT}', 9)`,
+    // Data anterior: só a migração 8 a recusa (uma posterior a `updated_at` já falha `users_chronology`).
+    'UPDATE creation of the initial administrator': `UPDATE users SET created_at = '2020-01-01T00:00:00.000Z'
+      WHERE id = '${s.administrator.id}'`,
+    'DELETE branch membership': `DELETE FROM branch_memberships WHERE id = '${s.local.id}'`,
+    'DELETE + INSERT branch membership with the same id at another branch': `DELETE FROM branch_memberships
+      WHERE id = '${s.local.id}'; ${localRow(s.south.id)}`,
+    'DELETE every branch membership': 'DELETE FROM branch_memberships',
+  };
+};
+
+const MIGRATED_TO_7 = MIGRATIONS.slice(0, 7);
+
+describe('E1.07-D3-G0 installation authority gate (PD-73, PD-75, PD-76)', () => {
+  let temporary: TemporaryDatabase;
+  let extra: TemporaryDatabase[];
+  let clock: TestClock;
+  const running: ServiceUnderTest[] = [];
+
+  const fresh = (migrations = MIGRATIONS): { database: SqliteDatabase; temporary: TemporaryDatabase } => {
+    const own = createTemporaryDatabase();
+    extra.push(own);
+    const database = own.open();
+    runMigrations(database, migrations);
+    return { database, temporary: own };
+  };
+
+  const startedService = async (filename = temporary.filename): Promise<ServiceUnderTest> => {
+    const harness = createServiceUnderTest(serviceConfig(filename), undefined, {
+      clock: clock.now,
+      passwordHashing: { parameters: TEST_HASHING_PARAMETERS },
+    });
+    running.push(harness);
+    await harness.service.start();
+    return harness;
+  };
+
+  const provision = async ({ service }: ServiceUnderTest, password = TEST_PASSWORD): Promise<User> => {
+    const user = newUser();
+    await service.identityProvisioning.users.create(user);
+    await service.identityProvisioning.credentials.create(user.id, password);
+    return user;
+  };
+
+  const openSession = async ({ service }: ServiceUnderTest, user: User, password = TEST_PASSWORD) => {
+    const authenticated = await service.authentication.authenticate(user.username, password);
+    if (!authenticated.ok) throw new Error('Autenticação esperada.');
+    const created = await service.sessions.create(authenticated.identity);
+    if (!created.ok) throw new Error('Sessão esperada.');
+    return created.session;
+  };
+
+  const inspect = <T>(read: (database: SqliteDatabase) => T): T =>
+    inspectDatabase(temporary.filename, () => temporary.open(), read);
+
+  beforeEach(() => {
+    temporary = createTemporaryDatabase();
+    extra = [];
+    clock = createTestClock();
+  });
+
+  afterEach(async () => {
+    for (const harness of running.splice(0)) await harness.service.stop();
+    for (const own of extra) own.dispose();
+    temporary.dispose();
+  });
+
+  describe('PD-75 reproduction before migration 8 (migration 7, published head)', () => {
+    it.each(CONFIGURATIONS)('[G00] identities and local memberships can be deleted or replaced at migration 7 with $label', async (configuration) => {
+      const { database } = fresh(MIGRATED_TO_7);
+      const s = await seedIdentities(database);
+      applyPragmas(database, configuration);
+      const accepted: string[] = [];
+      for (const [label, sql] of Object.entries(identityAttacks(s))) {
+        database.exec('BEGIN');
+        try {
+          database.exec(sql);
+          accepted.push(label);
+        } catch {
+          // recusado
+        } finally {
+          database.exec('ROLLBACK');
+        }
+      }
+      // Sem linhas filhas, as identidades e as associações locais nunca estiveram protegidas.
+      const always = [
+        'DELETE childless identity',
+        'DELETE + INSERT childless identity with the same id',
+        'UPDATE OR REPLACE username takeover of a childless identity',
+        'UPDATE creation of the initial administrator',
+        'DELETE branch membership',
+        'DELETE + INSERT branch membership with the same id at another branch',
+        'DELETE every branch membership',
+      ];
+      const withoutForeignKeys = [
+        'DELETE initial administrator',
+        'DELETE + INSERT initial administrator with the same id',
+        'DELETE every identity',
+        'UPDATE OR REPLACE username takeover of the initial administrator',
+      ];
+      expect(accepted.sort()).toEqual((configuration.foreignKeys ? always : [...always, ...withoutForeignKeys]).sort());
+      // Só a migração 5 (REPLACE da mesma identidade) e a 7 (registo da instalação) resistiam.
+      expect(accepted).not.toContain('REPLACE INTO initial administrator');
+    });
+
+    it('[G00b] with foreign_keys OFF the installation record ends up pointing at a missing or different identity (migration 7)', async () => {
+      const { database } = fresh(MIGRATED_TO_7);
+      const s = await seedIdentities(database);
+      applyPragmas(database, CONFIGURATIONS[1]);
+      database.exec(`DELETE FROM users WHERE id = '${s.administrator.id}'`);
+      expect(bootstrapTarget(database)).toEqual({ created_at: null, username: null });
+      database.exec(identityAttacks(s)['DELETE + INSERT initial administrator with the same id']?.split(';')[1] ?? '');
+      expect(bootstrapTarget(database)).toEqual({ created_at: UPDATED_AT, username: 'impostor.ficticio' });
+      expect(createSqliteAuthenticationStore(database).readBootstrap()?.initialAdministratorId).toBe(s.administrator.id);
+    });
+  });
+
+  describe.each(CONFIGURATIONS)('migration 8 with $label', (configuration) => {
+    it('[G01] refuses every deletion, re-insertion and takeover and leaves the persisted state unchanged', async () => {
+      const { database, temporary: own } = fresh();
+      const s = await seedIdentities(database);
+      applyPragmas(database, configuration);
+      const before = snapshot(database);
+      for (const [label, sql] of Object.entries(identityAttacks(s))) {
+        expect(() => database.exec(sql), label).toThrow(REFUSED);
+        expect(snapshot(database), label).toEqual(before);
+      }
+      // Mesmo com o esquema protegido, o registo da instalação continua a apontar para a identidade gravada.
+      expect(createSqliteAuthenticationStore(database).readInstallationAnchor()).toEqual({
+        completedAt: s.administrator.createdAt,
+        initialAdministratorId: s.administrator.id,
+        state: 'intact',
+      });
+      database.close();
+      const reopened = own.open();
+      expect(snapshot(reopened)).toEqual(before);
+      expect(reopened.prepare('PRAGMA integrity_check').pluck().get()).toBe('ok');
+      expect(reopened.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+    });
+
+    it('[G02] refuses implicit deletion inside REPLACE paths and keeps the active session of the identity', async () => {
+      const { database } = fresh();
+      const s = await seedIdentities(database);
+      applyPragmas(database, configuration);
+      const before = snapshot(database);
+      for (const sql of [
+        `INSERT OR REPLACE INTO users (id, username, display_name, status, created_at, updated_at, security_version)
+           VALUES ('${newId()}', '${s.bare.username}', 'Outro', 'ACTIVE', '${CREATED_AT}', '${CREATED_AT}', 1)`,
+        `UPDATE OR REPLACE users SET id = '${s.bare.id}' WHERE id = '${s.other.id}'`,
+        `UPDATE OR REPLACE users SET rowid = (SELECT rowid FROM users WHERE id = '${s.bare.id}') WHERE id = '${s.other.id}'`,
+        `UPDATE OR REPLACE branch_memberships SET branch_id = '${s.south.id}' WHERE id = '${s.local.id}'`,
+      ]) {
+        expect(() => database.exec(sql)).toThrow(REFUSED);
+        expect(snapshot(database)).toEqual(before);
+      }
+      expect(database.prepare('SELECT revoked_at FROM local_sessions WHERE id = ?').pluck().get(s.sessionId)).toBeNull();
+    });
+
+    it('[G03] rolls back earlier writes of the same transaction when a protected deletion is refused', async () => {
+      const { database } = fresh();
+      const s = await seedIdentities(database);
+      applyPragmas(database, configuration);
+      const before = snapshot(database);
+      const newcomer = newUser();
+      const store = createSqliteAuthenticationStore(database);
+      expect(() =>
+        store.transaction(() => {
+          store.insertUser(newcomer);
+          database.prepare('UPDATE users SET display_name = ? WHERE id = ?').run('Alterado', s.other.id);
+          database.prepare('DELETE FROM branch_memberships WHERE id = ?').run(s.local.id);
+        }),
+      ).toThrow(REFUSED);
+      expect(snapshot(database)).toEqual(before);
+      expect(store.findUserById(newcomer.id)).toBeUndefined();
+    });
+
+    it('[G04] keeps the explicit boundary: a SQL writer on the normal connection can still edit and replace credentials in place', async () => {
+      const { database } = fresh();
+      const s = await seedIdentities(database);
+      applyPragmas(database, configuration);
+      // D-201, condição 4: edição no lugar, não substituição da identidade. A identidade, a referência e
+      // a ligação `created_at = completed_at` continuam as mesmas; as sessões são revogadas (migração 4).
+      database.prepare('UPDATE users SET username = ?, display_name = ? WHERE id = ?').run('renomeado.ficticio', 'Renomeado', s.administrator.id);
+      database
+        .prepare('UPDATE password_credentials SET hash = ?, credential_version = credential_version + 1, updated_at = ? WHERE user_id = ?')
+        .run(randomBytes(32), UPDATED_AT, s.administrator.id);
+      expect(database.prepare('SELECT revocation_reason FROM local_sessions WHERE id = ?').pluck().get(s.sessionId)).toBe(
+        'credential-replaced',
+      );
+      expect(createSqliteAuthenticationStore(database).readInstallationAnchor()).toMatchObject({
+        initialAdministratorId: s.administrator.id,
+        state: 'intact',
+      });
+    });
+  });
+
+  describe('legitimate repository operations under migration 8', () => {
+    it('[G05] deactivates (never deletes) ordinary identities and local memberships, preserving credentials and history', async () => {
+      const harness = await startedService();
+      const user = await provision(harness);
+      const session = await openSession(harness, user);
+      const credentialBefore = inspect((database) =>
+        database.prepare('SELECT hash, credential_version FROM password_credentials WHERE user_id = ?').get(user.id),
+      );
+
+      await harness.service.identityProvisioning.users.changeStatus(user.id, 'INACTIVE', clock.now().toISOString());
+      await expect(harness.service.sessions.validate(session.token)).resolves.toMatchObject({ ok: false });
+      await expect(harness.service.authentication.authenticate(user.username, TEST_PASSWORD)).resolves.toMatchObject({ ok: false });
+      const persisted = inspect((database) => ({
+        credential: database.prepare('SELECT hash, credential_version FROM password_credentials WHERE user_id = ?').get(user.id),
+        user: database.prepare('SELECT status FROM users WHERE id = ?').get(user.id),
+      }));
+      expect(persisted).toEqual({ credential: credentialBefore, user: { status: 'INACTIVE' } });
+      // O identificador continua ocupado: não pode ser reutilizado por outra identidade.
+      await expect(harness.service.identityProvisioning.users.create(newUser({ id: user.id }))).rejects.toThrow();
+      await harness.service.identityProvisioning.users.changeStatus(user.id, 'ACTIVE', clock.now().toISOString());
+      await expect(harness.service.authentication.authenticate(user.username, TEST_PASSWORD)).resolves.toMatchObject({ ok: true });
+
+      // Associação local: desactivada pelo repositório, a linha permanece.
+      const company = newCompany();
+      const context = contextFor(company.tenantId);
+      await harness.service.companies.create(context, company);
+      const branch = createBranch(branchInput(company));
+      await harness.service.branches.create(context, branch);
+      const membership = newCompanyMembership(user, company, { scope: 'BRANCH_RESTRICTED' });
+      await harness.service.companyMemberships.create(context, membership);
+      const local = newBranchMembership(membership, branch);
+      await harness.service.branchMemberships.create(context, local);
+      await harness.service.branchMemberships.update(
+        context,
+        createBranchMembership({ ...local, status: 'INACTIVE', updatedAt: UPDATED_AT }),
+      );
+      await expect(harness.service.branchMemberships.findById(context, local.id)).resolves.toMatchObject({ status: 'INACTIVE' });
+    });
+  });
+
+  describe('initial administrator protection (D-201, condition 3)', () => {
+    it('[G06] refuses changing the status or replacing the credential of the initial administrator, with no state change', async () => {
+      const harness = await startedService();
+      const input = { displayName: 'Administrador Fictício', id: newId(), username: uniqueUsername('admin') };
+      const { initialAdministratorId } = await harness.service.identityProvisioning.installation.initialise(input, TEST_PASSWORD);
+      const administrator = await harness.service.identityProvisioning.users.findById(initialAdministratorId);
+      if (administrator === undefined) throw new Error('Administrador esperado.');
+      const session = await openSession(harness, administrator);
+      const state = () =>
+        inspect((database) => ({
+          credential: database.prepare('SELECT * FROM password_credentials WHERE user_id = ?').get(initialAdministratorId),
+          sessions: database.prepare('SELECT id, revoked_at FROM local_sessions WHERE user_id = ? ORDER BY id').all(initialAdministratorId),
+          user: database.prepare('SELECT * FROM users WHERE id = ?').get(initialAdministratorId),
+        }));
+      const before = state();
+
+      for (const status of ['SUSPENDED', 'INACTIVE', 'ACTIVE'] as const) {
+        await expect(
+          harness.service.identityProvisioning.users.changeStatus(initialAdministratorId, status, clock.now().toISOString()),
+        ).rejects.toBeInstanceOf(InitialAdministratorProtectedError);
+        expect(state()).toEqual(before);
+      }
+      await expect(
+        harness.service.identityProvisioning.credentials.replace(initialAdministratorId, OTHER_TEST_PASSWORD),
+      ).rejects.toMatchObject({ reason: 'initial-administrator-protected' });
+      expect(state()).toEqual(before);
+      await expect(harness.service.sessions.validate(session.token)).resolves.toMatchObject({ ok: true });
+      await expect(harness.service.authentication.authenticate(administrator.username, TEST_PASSWORD)).resolves.toMatchObject({ ok: true });
+      await expect(harness.service.authentication.authenticate(administrator.username, OTHER_TEST_PASSWORD)).resolves.toMatchObject({ ok: false });
+
+      // Outras identidades continuam administráveis pelo provisionamento interno.
+      const ordinary = await provision(harness);
+      await harness.service.identityProvisioning.credentials.replace(ordinary.id, OTHER_TEST_PASSWORD);
+      await harness.service.identityProvisioning.users.changeStatus(ordinary.id, 'SUSPENDED', clock.now().toISOString());
+    });
+  });
+
+  describe('installation anchor (fail-closed reference)', () => {
+    it('[G07] reports uninitialised, then intact for the identity created by the bootstrap only', async () => {
+      const harness = await startedService();
+      await expect(harness.service.identityProvisioning.installation.verifyAnchor()).resolves.toEqual({ state: 'uninitialised' });
+      const existing = await provision(harness);
+      const input = { displayName: 'Administrador Fictício', id: newId(), username: uniqueUsername('admin') };
+      await harness.service.identityProvisioning.installation.initialise(input, TEST_PASSWORD);
+      const anchor = await harness.service.identityProvisioning.installation.verifyAnchor();
+      expect(anchor).toEqual({ completedAt: clock.now().toISOString(), initialAdministratorId: input.id, state: 'intact' });
+      expect(anchor).not.toMatchObject({ initialAdministratorId: existing.id });
+      expect(Object.isFrozen(anchor)).toBe(true);
+    });
+
+    it('[G08] fails closed on a legacy database where the initial administrator was deleted, replaced or lost its credential', async () => {
+      const scenario = async (tamper: (database: SqliteDatabase, s: IdentitySeed) => void) => {
+        const { database } = fresh(MIGRATED_TO_7);
+        const s = await seedIdentities(database);
+        applyPragmas(database, CONFIGURATIONS[1]);
+        tamper(database, s);
+        applyPragmas(database, CONFIGURATIONS[0]);
+        expect(runMigrations(database)).toEqual({ applied: [8], currentVersion: 8 });
+        const store = createSqliteAuthenticationStore(database);
+        // O registo descritivo continua a mostrar o identificador; só a âncora o recusa.
+        expect(store.readBootstrap()?.initialAdministratorId).toBe(s.administrator.id);
+        return store.readInstallationAnchor();
+      };
+
+      await expect(
+        scenario((database, s) => database.exec(`DELETE FROM users WHERE id = '${s.administrator.id}'`)),
+      ).resolves.toEqual({ fault: 'administrator-missing', state: 'broken' });
+      await expect(
+        scenario((database, s) => database.exec(identityAttacks(s)['DELETE + INSERT initial administrator with the same id'] ?? '')),
+      ).resolves.toEqual({ fault: 'administrator-mismatch', state: 'broken' });
+      await expect(
+        scenario((database, s) =>
+          database.exec(`DROP TRIGGER password_credentials_never_deleted;
+            DELETE FROM password_credentials WHERE user_id = '${s.administrator.id}'`),
+        ),
+      ).resolves.toEqual({ fault: 'administrator-credential-missing', state: 'broken' });
+    });
+
+    it('[G09] grants no installation or company authority to the initial administrator, even with an intact anchor', async () => {
+      const harness = await startedService();
+      const company = newCompany();
+      const context = contextFor(company.tenantId);
+      await harness.service.companies.create(context, company);
+      const input = { displayName: 'Administrador Fictício', id: newId(), username: uniqueUsername('admin') };
+      const { initialAdministratorId } = await harness.service.identityProvisioning.installation.initialise(input, TEST_PASSWORD);
+      await expect(harness.service.identityProvisioning.installation.verifyAnchor()).resolves.toMatchObject({ state: 'intact' });
+
+      const { domainEvaluator } = harness.service.internalAuthorization;
+      const evaluate = (input: Parameters<typeof domainEvaluator.evaluate>[0]) => domainEvaluator.evaluate(input);
+      for (const permissionCode of ['installation.users.provision', 'installation.companies.provision', 'installation.authorities.grant']) {
+        await expect(
+          evaluate({ permissionCode, scope: { kind: 'INSTALLATION' }, userId: initialAdministratorId }),
+        ).resolves.toMatchObject({ outcome: 'DENIED', reason: 'no-installation-authority' });
+      }
+      for (const permissionCode of ['company.read', 'roles.manage', 'memberships.manage']) {
+        await expect(
+          evaluate({ permissionCode, scope: companyTarget(company), userId: initialAdministratorId }),
+        ).resolves.toMatchObject({ outcome: 'DENIED' });
+      }
+      expect(
+        inspect((database) =>
+          ['company_memberships', 'branch_memberships', 'roles', 'role_permissions', 'role_assignments'].map(
+            (table) => database.prepare(`SELECT count(*) FROM ${table}`).pluck().get(),
+          ),
+        ),
+      ).toEqual([0, 0, 0, 0, 0]);
+    });
+  });
+
+  describe('migration 8', () => {
+    it('[G10] upgrades a migration-7 database with valid data without changing rows, sessions, credentials or checksums 1-7', async () => {
+      const { database } = fresh(MIGRATED_TO_7);
+      const s = await seedIdentities(database);
+      const triggers = () => database.prepare("SELECT name FROM sqlite_schema WHERE type = 'trigger' ORDER BY name").pluck().all();
+      const before = { rows: snapshot(database), triggers: triggers() };
+
+      expect(inspectMigrations(database)).toMatchObject({ appliedVersions: [1, 2, 3, 4, 5, 6, 7], pendingVersions: [8] });
+      expect(runMigrations(database)).toEqual({ applied: [8], currentVersion: 8 });
+      expect(snapshot(database)).toEqual(before.rows);
+      expect(triggers()).toEqual([...before.triggers, ...MIGRATION_8_TRIGGERS].sort());
+      expect(database.prepare('SELECT checksum FROM schema_migrations WHERE version <= 7 ORDER BY version').pluck().all()).toEqual(
+        PUBLISHED_CHECKSUMS_1_TO_7,
+      );
+      expect(MIGRATIONS.slice(0, 7).map(migrationChecksum)).toEqual(PUBLISHED_CHECKSUMS_1_TO_7);
+      expect(MIGRATIONS[7]).toMatchObject({ name: 'protect_persistent_identities', version: 8 });
+      expect(database.prepare('SELECT revoked_at FROM local_sessions WHERE id = ?').pluck().get(s.sessionId)).toBeNull();
+      expect(database.prepare('PRAGMA integrity_check').pluck().get()).toBe('ok');
+      expect(database.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+      expect(runMigrations(database)).toEqual({ applied: [], currentVersion: 8 });
+      // A migração 8 só acrescenta triggers; não cria tabelas, colunas nem dados.
+      expect(MIGRATIONS[7]?.sql.replace(/--.*$/gm, '')).not.toMatch(/\b(CREATE TABLE|ALTER TABLE|INSERT INTO|DROP)\b/i);
+    });
+
+    it('[G11] rolls back a failing migration 8 atomically and refuses migration 8 altered after it is applied', async () => {
+      const { database } = fresh(MIGRATED_TO_7);
+      await seedIdentities(database);
+      const triggers = () => database.prepare("SELECT name FROM sqlite_schema WHERE type = 'trigger' ORDER BY name").pluck().all();
+      const before = { rows: snapshot(database), triggers: triggers() };
+      const latest = MIGRATIONS[7] as (typeof MIGRATIONS)[number];
+      expect(() => runMigrations(database, [...MIGRATED_TO_7, { ...latest, sql: `${latest.sql}\nSELECT * FROM missing_table;` }])).toThrow(
+        /missing_table/,
+      );
+      expect(inspectMigrations(database)).toMatchObject({ appliedVersions: [1, 2, 3, 4, 5, 6, 7], pendingVersions: [8] });
+      expect(triggers()).toEqual(before.triggers);
+      expect(snapshot(database)).toEqual(before.rows);
+      expect(runMigrations(database)).toEqual({ applied: [8], currentVersion: 8 });
+      expect(() => inspectMigrations(database, [...MIGRATED_TO_7, { ...latest, sql: `${latest.sql}\n` }])).toThrow(
+        /migration-checksum-mismatch/,
+      );
+    });
+  });
+
+  describe('PD-76 pre-validation of legacy non-positive rowids', () => {
+    const legacyDatabase = async (migrations: typeof MIGRATIONS) => {
+      const connection = temporary.open();
+      runMigrations(connection, migrations);
+      const s = await seedIdentities(connection);
+      const legacyUser = newUser();
+      // Linhas com rowid não positivo só podem vir de SQL directo anterior à migração 7.
+      if (migrations.length < 7) {
+        connection
+          .prepare(`INSERT INTO users (rowid, id, username, display_name, status, created_at, updated_at) VALUES (-1, ?, ?, 'Legado', 'ACTIVE', ?, ?)`)
+          .run(legacyUser.id, legacyUser.username, CREATED_AT, CREATED_AT);
+        connection
+          .prepare(`INSERT INTO branch_memberships (rowid, id, company_membership_id, tenant_id, company_id, branch_id, status, created_at, updated_at)
+            SELECT 0, ?, company_membership_id, tenant_id, company_id, ?, 'ACTIVE', created_at, updated_at FROM branch_memberships WHERE id = ?`)
+          .run(randomUUID(), s.south.id, s.local.id);
+      }
+      return { connection, legacyUser, s };
+    };
+
+    it('[G12] lists the ten guarded tables and finds nothing in databases created by the application', async () => {
+      expect(ROWID_GUARDED_TABLES).toEqual([
+        'companies', 'branches', 'users', 'password_credentials', 'local_sessions',
+        'company_memberships', 'branch_memberships', 'roles', 'role_permissions', 'role_assignments',
+      ]);
+      expect(Object.isFrozen(ROWID_GUARDED_TABLES)).toBe(true);
+      const { database } = fresh();
+      await seedIdentities(database);
+      expect(findNonPositiveRowids(database)).toEqual([]);
+      const { database: legacyV2 } = fresh(MIGRATIONS.slice(0, 2));
+      expect(findNonPositiveRowids(legacyV2)).toEqual([]);
+    });
+
+    it('[G13] the local service refuses to migrate a database with legacy non-positive rowids, without renumbering or changing the file', async () => {
+      const { connection, legacyUser } = await legacyDatabase(MIGRATIONS.slice(0, 6));
+      expect(findNonPositiveRowids(connection)).toEqual([
+        { rows: 1, table: 'users' },
+        { rows: 1, table: 'branch_memberships' },
+      ]);
+      connection.close();
+      const hashBefore = createHash('sha256').update(readFileSync(temporary.filename)).digest('hex');
+
+      const harness = createServiceUnderTest(serviceConfig(temporary.filename), undefined, {
+        clock: clock.now,
+        passwordHashing: { parameters: TEST_HASHING_PARAMETERS },
+      });
+      running.push(harness);
+      const failure: unknown = await harness.service.start().catch((error: unknown) => error);
+      expect(failure).toMatchObject({ reason: 'legacy-rowid-incompatible' });
+      expect((failure as { cause?: unknown }).cause).toBeInstanceOf(NonPositiveRowidError);
+      expect(harness.service.state).toBe('FAILED');
+      const refused = harness.records().find((record) => record['event'] === 'service.migration_preflight_refused');
+      expect(refused).toMatchObject({ 'nonPositiveRowids.branch_memberships': 1, 'nonPositiveRowids.users': 1 });
+      expect(harness.lines.join('\n')).not.toContain(legacyUser.id);
+      expect(harness.lines.join('\n')).not.toContain(legacyUser.username);
+      await harness.service.stop();
+
+      expect(createHash('sha256').update(readFileSync(temporary.filename)).digest('hex')).toBe(hashBefore);
+      const reopened = temporary.open();
+      expect(inspectMigrations(reopened)).toMatchObject({ appliedVersions: [1, 2, 3, 4, 5, 6], pendingVersions: [7, 8] });
+      expect(reopened.prepare('SELECT id FROM users WHERE rowid = -1').pluck().get()).toBe(legacyUser.id);
+      reopened.close();
+    });
+
+    it('[G14] also refuses migration 8 on a migration-7 database that kept legacy rows, and ranks the strict policy first', async () => {
+      const connection = temporary.open();
+      runMigrations(connection, MIGRATIONS.slice(0, 6));
+      const legacyUser = newUser();
+      connection
+        .prepare(`INSERT INTO users (rowid, id, username, display_name, status, created_at, updated_at) VALUES (-5, ?, ?, 'Legado', 'ACTIVE', ?, ?)`)
+        .run(legacyUser.id, legacyUser.username, CREATED_AT, CREATED_AT);
+      runMigrations(connection, MIGRATED_TO_7);
+      connection.close();
+
+      const strict = createServiceUnderTest(
+        serviceConfig(temporary.filename, { startupPolicy: { onMissingDatabase: 'fail', onPendingMigrations: 'fail' } }),
+      );
+      running.push(strict);
+      await expect(strict.service.start()).rejects.toMatchObject({ reason: 'pending-migrations' });
+      const applying = createServiceUnderTest(serviceConfig(temporary.filename));
+      running.push(applying);
+      await expect(applying.service.start()).rejects.toMatchObject({ reason: 'legacy-rowid-incompatible' });
+      await applying.service.stop();
+      const reopened = temporary.open();
+      expect(inspectMigrations(reopened)).toMatchObject({ pendingVersions: [8] });
+      reopened.close();
+    });
+
+    it('[G15] starts normally and migrates a clean database created by the application', async () => {
+      const connection = temporary.open();
+      runMigrations(connection, MIGRATED_TO_7);
+      await seedIdentities(connection);
+      connection.close();
+      const harness = await startedService();
+      expect(harness.service.startupReport).toMatchObject({ appliedMigrations: [8], schemaVersion: 8 });
+      expect(harness.records().some((record) => record['event'] === 'service.migration_preflight_refused')).toBe(false);
+    });
+  });
+});

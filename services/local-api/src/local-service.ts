@@ -2,6 +2,7 @@ import { existsSync, statSync } from 'node:fs';
 import path from 'node:path';
 
 import {
+  assertNoNonPositiveRowids,
   createSqliteAuthenticationStore,
   createSqliteAuthorizationPersistence,
   createSqliteMembershipPersistence,
@@ -12,6 +13,7 @@ import {
   inspectMigrations,
   isSqliteBusy,
   MAX_DATABASE_LOCK_TIMEOUT_MS,
+  NonPositiveRowidError,
   openSqliteDatabase,
   PersistenceError,
   resolveDatabaseIdentity,
@@ -52,6 +54,7 @@ import {
   createInternalDomainAuthorizationEvaluator,
   type InternalDomainAuthorizationEvaluator,
 } from './authorization/domain-authorization-engine.js';
+import { assertNotInitialAdministrator } from './authentication/initial-administrator-protection.js';
 import { createInstallationBootstrap, type InstallationBootstrap } from './authentication/installation-bootstrap.js';
 import { createLocalAuthenticator, type LocalAuthenticator } from './authentication/local-authenticator.js';
 import { createPasswordHasher, type PasswordHasherOptions } from './authentication/password-hashing.js';
@@ -112,6 +115,8 @@ export type StartupFailureReason =
   | 'database-missing'
   | 'database-open-failed'
   | 'invalid-location'
+  /** Base existente com `rowid` não positivos nas tabelas guardadas: actualização recusada (PD-76). */
+  | 'legacy-rowid-incompatible'
   | 'migration-failed'
   | 'migration-integrity'
   | 'pending-migrations'
@@ -386,6 +391,24 @@ export const createLocalService = (
     if (status.pendingVersions.length > 0 && config.startupPolicy.onPendingMigrations === 'fail') {
       throw new LocalServiceStartupError('pending-migrations');
     }
+    // PD-76 (E1.07-D3-G0): antes de migrar uma base existente, recusa `rowid` legados não positivos
+    // nas tabelas guardadas pela migração 7, sem renumerar nem alterar a base.
+    if (status.pendingVersions.length > 0) {
+      try {
+        assertNoNonPositiveRowids(connection);
+      } catch (error) {
+        if (error instanceof NonPositiveRowidError) {
+          logger.log('error', 'service.migration_preflight_refused', {
+            databaseFile,
+            ...Object.fromEntries(error.findings.map((finding) => [`nonPositiveRowids.${finding.table}`, finding.rows])),
+          });
+          throw new LocalServiceStartupError('legacy-rowid-incompatible', { cause: error });
+        }
+        throw new LocalServiceStartupError(isCorruption(error) ? 'database-corrupt' : 'migration-integrity', {
+          cause: error,
+        });
+      }
+    }
     const result = attempt('migration-failed', () => runMigrations(connection));
     // Cada arranque efectivo tem um identificador novo; as sessões anteriores deixam de ser
     // válidas e ficam revogadas antes de o serviço aceitar operações (D-114). A eliminação de
@@ -518,7 +541,12 @@ export const createLocalService = (
   const users: UserDirectory = {
     findById: (id) => guarded((current) => current.users.findById(id)),
     create: (user) => guarded((current) => current.users.create(user)),
-    changeStatus: (id, status, at) => guarded((current) => current.users.changeStatus(id, status, at)),
+    // E1.07-D3-G0 (PD-75, D-201): o estado do administrador inicial só muda com autoridade da instalação.
+    changeStatus: (id, status, at) =>
+      guarded((current) => {
+        assertNotInitialAdministrator(current.authentication, id);
+        return current.users.changeStatus(id, status, at);
+      }),
   };
 
   const companyMemberships: CompanyMembershipRepository = {

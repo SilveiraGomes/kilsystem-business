@@ -52,6 +52,24 @@ export interface InstallationBootstrapRecord {
   readonly completedAt: string;
 }
 
+/** Motivo por que o registo da instalação não comprova a identidade gravada (E1.07-D3-G0, PD-75). */
+export type InstallationAnchorFault =
+  /** A identidade referida já não existe (eliminada por SQL directo antes da migração 8). */
+  | 'administrator-missing'
+  /** Existe uma linha com o mesmo id, mas não é a identidade criada na inicialização. */
+  | 'administrator-mismatch'
+  /** A identidade referida não tem credencial (credenciais nunca são eliminadas, D-110). */
+  | 'administrator-credential-missing';
+
+/**
+ * Verificação da âncora da instalação. `intact` só comprova que o registo aponta para a identidade
+ * criada na inicialização; não autentica ninguém e não concede autoridade (E1.07-D3-G0).
+ */
+export type InstallationAnchor =
+  | { readonly state: 'uninitialised' }
+  | { readonly state: 'intact'; readonly initialAdministratorId: UserId; readonly completedAt: string }
+  | { readonly state: 'broken'; readonly fault: InstallationAnchorFault };
+
 /**
  * Operações SÍNCRONAS de autenticação sobre SQLite, para compor passos atómicos com
  * `transaction`. Interno ao serviço local: não é um repositório empresarial e não recebe
@@ -80,7 +98,14 @@ export interface SqliteAuthenticationStore {
   /** Remove registos sem actividade desde `inactiveSince` e mantém no máximo `maxRows` (mais recentes). */
   pruneThrottle(inactiveSince: string, maxRows: number): void;
   countThrottle(): number;
+  /** Registo descritivo; não comprova a identidade referida (usar `readInstallationAnchor`). */
   readBootstrap(): InstallationBootstrapRecord | undefined;
+  /**
+   * Recusa fechada (D-201): `intact` só quando a identidade referida existe, foi criada no instante
+   * da inicialização (`users.created_at = completed_at`, imutável desde a migração 8) e tem
+   * credencial. Qualquer outra situação devolve `broken`; nunca procura outra identidade.
+   */
+  readInstallationAnchor(): InstallationAnchor;
   insertBootstrap(record: InstallationBootstrapRecord): void;
   /** Transacção `IMMEDIATE` síncrona; trabalho assíncrono é recusado (D-034). */
   transaction<T>(work: () => T): T;
@@ -123,6 +148,12 @@ const SQL = {
     FROM installation_bootstrap WHERE id = 1`,
   insertBootstrap: `INSERT INTO installation_bootstrap (id, initial_administrator_id, completed_at)
     VALUES (1, @initialAdministratorId, @completedAt)`,
+  installationAnchor: `SELECT b.initial_administrator_id AS initialAdministratorId, b.completed_at AS completedAt,
+    u.id AS userId, u.created_at AS userCreatedAt, c.user_id AS credentialUserId
+    FROM installation_bootstrap b
+    LEFT JOIN users u ON u.id = b.initial_administrator_id
+    LEFT JOIN password_credentials c ON c.user_id = b.initial_administrator_id
+    WHERE b.id = 1`,
 } as const;
 
 const integer = (row: Record<string, unknown>, key: string): number => {
@@ -264,6 +295,18 @@ export const createSqliteAuthenticationStore = (database: SqliteDatabase): Sqlit
         completedAt: textValue(record, 'completedAt'),
         initialAdministratorId: textValue(record, 'initialAdministratorId') as UserId,
       });
+    },
+    readInstallationAnchor: (): InstallationAnchor => {
+      const row: unknown = statements.installationAnchor.get();
+      if (row === undefined) return Object.freeze({ state: 'uninitialised' });
+      const record = readRow(row);
+      const broken = (fault: InstallationAnchorFault): InstallationAnchor => Object.freeze({ fault, state: 'broken' });
+      const initialAdministratorId = textValue(record, 'initialAdministratorId');
+      const completedAt = textValue(record, 'completedAt');
+      if (record['userId'] !== initialAdministratorId) return broken('administrator-missing');
+      if (record['userCreatedAt'] !== completedAt) return broken('administrator-mismatch');
+      if (record['credentialUserId'] !== initialAdministratorId) return broken('administrator-credential-missing');
+      return Object.freeze({ completedAt, initialAdministratorId: initialAdministratorId as UserId, state: 'intact' });
     },
     insertBootstrap: (record) => {
       statements.insertBootstrap.run(record);

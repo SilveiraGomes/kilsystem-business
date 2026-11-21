@@ -178,7 +178,7 @@ describe('RBAC SQLite integrity (E1.07-D2/R1, migrations 6-7)', () => {
       const fresh = createTemporaryDatabase();
       try {
         const connection = fresh.open();
-        expect(runMigrations(connection)).toEqual({ applied: [1, 2, 3, 4, 5, 6, 7], currentVersion: 7 });
+        expect(runMigrations(connection)).toEqual({ applied: [1, 2, 3, 4, 5, 6, 7, 8], currentVersion: 8 });
         const tables = connection
           .prepare("SELECT name, strict FROM pragma_table_list WHERE name IN ('roles', 'role_permissions', 'role_assignments') ORDER BY name")
           .all();
@@ -268,8 +268,8 @@ describe('RBAC SQLite integrity (E1.07-D2/R1, migrations 6-7)', () => {
         const snapshot = () => Object.fromEntries(tables.map((table) => [table, connection.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()]));
         const before = snapshot();
 
-        expect(inspectMigrations(connection)).toMatchObject({ appliedVersions: [1, 2, 3, 4, 5], pendingVersions: [6, 7] });
-        expect(runMigrations(connection)).toEqual({ applied: [6, 7], currentVersion: 7 });
+        expect(inspectMigrations(connection)).toMatchObject({ appliedVersions: [1, 2, 3, 4, 5], pendingVersions: [6, 7, 8] });
+        expect(runMigrations(connection)).toEqual({ applied: [6, 7, 8], currentVersion: 8 });
         const after = snapshot();
         expect({ ...after, schema_migrations: after['schema_migrations']?.slice(0, 5) }).toEqual(before);
         expect(connection.prepare('SELECT checksum FROM schema_migrations WHERE version = 6').pluck().get()).toBe(
@@ -280,7 +280,7 @@ describe('RBAC SQLite integrity (E1.07-D2/R1, migrations 6-7)', () => {
         );
         expect(connection.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
         expect(connection.prepare('PRAGMA integrity_check').pluck().get()).toBe('ok');
-        expect(runMigrations(connection)).toEqual({ applied: [], currentVersion: 7 });
+        expect(runMigrations(connection)).toEqual({ applied: [], currentVersion: 8 });
         // A base actualizada aceita imediatamente perfis e atribuições da associação existente.
         const upgraded = createSqliteAuthorizationPersistence(connection);
         const role = newRole(company, { code: 'LEITOR' });
@@ -301,7 +301,7 @@ describe('RBAC SQLite integrity (E1.07-D2/R1, migrations 6-7)', () => {
         runMigrations(connection, MIGRATIONS.slice(0, 5));
         const broken = { ...MIGRATIONS[5], sql: `${MIGRATIONS[5]?.sql ?? ''}\nSELECT * FROM missing_table;` } as (typeof MIGRATIONS)[number];
         expect(() => runMigrations(connection, [...MIGRATIONS.slice(0, 5), broken])).toThrow(/missing_table/);
-        expect(inspectMigrations(connection)).toMatchObject({ appliedVersions: [1, 2, 3, 4, 5], pendingVersions: [6, 7] });
+        expect(inspectMigrations(connection)).toMatchObject({ appliedVersions: [1, 2, 3, 4, 5], pendingVersions: [6, 7, 8] });
         expect(connection.prepare("SELECT count(*) FROM sqlite_schema WHERE name LIKE 'role%'").pluck().get()).toBe(0);
         runMigrations(connection);
         const altered = [...MIGRATIONS.slice(0, 5), { ...MIGRATIONS[5], sql: `${MIGRATIONS[5]?.sql ?? ''}\n` } as (typeof MIGRATIONS)[number]];
@@ -326,7 +326,7 @@ describe('RBAC SQLite integrity (E1.07-D2/R1, migrations 6-7)', () => {
         expect(readFileSync(legacy.filename).equals(before)).toBe(true);
         const applying = createServiceUnderTest(serviceConfig(legacy.filename));
         await applying.service.start();
-        expect(applying.service.startupReport).toMatchObject({ appliedMigrations: [7], schemaVersion: 7 });
+        expect(applying.service.startupReport).toMatchObject({ appliedMigrations: [7, 8], schemaVersion: 8 });
         await applying.service.stop();
       } finally {
         legacy.dispose();
@@ -365,7 +365,7 @@ describe('RBAC SQLite integrity (E1.07-D2/R1, migrations 6-7)', () => {
           .prepare('SELECT version, checksum FROM schema_migrations WHERE version <= 6 ORDER BY version')
           .all();
 
-        expect(runMigrations(connection)).toEqual({ applied: [7], currentVersion: 7 });
+        expect(runMigrations(connection)).toEqual({ applied: [7, 8], currentVersion: 8 });
         expect(snapshot()).toEqual(rowsBefore);
         expect(
           connection.prepare('SELECT version, checksum FROM schema_migrations WHERE version <= 6 ORDER BY version').all(),
@@ -394,16 +394,17 @@ describe('RBAC SQLite integrity (E1.07-D2/R1, migrations 6-7)', () => {
         const latest = MIGRATIONS[6] as (typeof MIGRATIONS)[number];
         const broken = { ...latest, sql: `${latest.sql}\nSELECT * FROM missing_table;` };
         expect(() => runMigrations(connection, [...MIGRATIONS.slice(0, 6), broken])).toThrow(/missing_table/);
-        expect(inspectMigrations(connection)).toMatchObject({ appliedVersions: [1, 2, 3, 4, 5, 6], pendingVersions: [7] });
+        expect(inspectMigrations(connection)).toMatchObject({ appliedVersions: [1, 2, 3, 4, 5, 6], pendingVersions: [7, 8] });
         expect(triggers()).toEqual(before);
         expect(connection.prepare('PRAGMA integrity_check').pluck().get()).toBe('ok');
 
-        expect(runMigrations(connection)).toEqual({ applied: [7], currentVersion: 7 });
+        // Só a migração 7 (a 8 tem o seu próprio ensaio em identity-persistence-gate.test.ts).
+        expect(runMigrations(connection, MIGRATIONS.slice(0, 7))).toEqual({ applied: [7], currentVersion: 7 });
         const created = [...latest.sql.matchAll(/CREATE TRIGGER (\w+)/g)].map((match) => match[1]);
         expect(created.length).toBeGreaterThan(20);
         expect(triggers()).toEqual([...before, ...created].sort());
         expect(connection.prepare('SELECT version, checksum FROM schema_migrations ORDER BY version').all()).toEqual(
-          MIGRATIONS.map((migration) => ({ checksum: migrationChecksum(migration), version: migration.version })),
+          MIGRATIONS.slice(0, 7).map((migration) => ({ checksum: migrationChecksum(migration), version: migration.version })),
         );
         const altered = [...MIGRATIONS.slice(0, 6), { ...latest, sql: `${latest.sql}\n` }];
         expect(() => inspectMigrations(connection, altered)).toThrow(/migration-checksum-mismatch/);
@@ -439,7 +440,9 @@ describe('RBAC SQLite integrity (E1.07-D2/R1, migrations 6-7)', () => {
           Object.fromEntries(tables.map((table) => [table, connection.prepare(`SELECT rowid, * FROM ${table} ORDER BY rowid`).all()]));
         const before = snapshot();
 
-        expect(runMigrations(connection)).toEqual({ applied: [7], currentVersion: 7 });
+        // Comportamento da própria migração 7 (D-196). O serviço local recusa esta actualização antes de
+        // migrar (pré-verificação PD-76, E1.07-D3-G0): ver identity-persistence-gate.test.ts.
+        expect(runMigrations(connection, MIGRATIONS.slice(0, 7))).toEqual({ applied: [7], currentVersion: 7 });
         expect(snapshot()).toEqual(before);
         connection.pragma('foreign_keys = OFF');
         // Uma linha legada com rowid -1 não bloqueia as inserções normais dos repositórios.
@@ -501,9 +504,9 @@ describe('RBAC SQLite integrity (E1.07-D2/R1, migrations 6-7)', () => {
 
         const reopened = legacy.open();
         expect(reopened.prepare('PRAGMA integrity_check').pluck().get()).toBe('ok');
-        expect(inspectMigrations(reopened)).toMatchObject({ appliedVersions: [1, 2, 3, 4, 5, 6], pendingVersions: [7] });
+        expect(inspectMigrations(reopened)).toMatchObject({ appliedVersions: [1, 2, 3, 4, 5, 6], pendingVersions: [7, 8] });
         expect(reopened.prepare("SELECT count(*) FROM sqlite_schema WHERE type = 'trigger'").pluck().get()).toBe(before);
-        expect(runMigrations(reopened)).toEqual({ applied: [7], currentVersion: 7 });
+        expect(runMigrations(reopened)).toEqual({ applied: [7, 8], currentVersion: 8 });
       } finally {
         legacy.dispose();
       }

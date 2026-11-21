@@ -1,3 +1,4 @@
+import type { InstallationAnchor } from '@kil-business/database';
 import {
   createUser,
   preparePassword,
@@ -30,7 +31,14 @@ export interface InstallationStatus {
 }
 
 export interface InstallationBootstrap {
+  /** Descritivo: o identificador persistido não comprova a identidade (usar `verifyAnchor`). */
   status(): Promise<InstallationStatus>;
+  /**
+   * Única fonte admissível da identidade do administrador inicial para a futura autoridade da
+   * instalação (E1.07-D3-G0, D-201): recusa fechada (`broken`) se a identidade referida não existir,
+   * não for a criada na inicialização ou não tiver credencial. Não autentica e não concede autoridade.
+   */
+  verifyAnchor(): Promise<InstallationAnchor>;
   initialise(administrator: InitialAdministratorInput, password: unknown): Promise<{ readonly initialAdministratorId: UserId }>;
 }
 
@@ -56,6 +64,10 @@ export const createInstallationBootstrap = (backend: AuthenticationBackend): Ins
               : { completedAt: record.completedAt, initialAdministratorId: record.initialAdministratorId, initialised: true },
           ),
         );
+      }),
+    verifyAnchor: (): Promise<InstallationAnchor> =>
+      new Promise<InstallationAnchor>((resolve) => {
+        resolve(backend.acquire().readInstallationAnchor());
       }),
     initialise: async (administrator: InitialAdministratorInput, password: unknown) => {
       const store = backend.acquire();
