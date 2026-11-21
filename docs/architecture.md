@@ -355,7 +355,7 @@ decisão = associação empresarial ∩ associação local ∩ âmbito da atribu
 
 ## Autorização: persistência RBAC e motor interno (E1.07-D2)
 
-Implementada na branch `feat/e107-d2-rbac-persistence`, por rever (D-179 a D-183). **Não é autorização operacional**: o `TenantContext` continua construído pelo chamador (PD-27), nada é exposto por HTTP/IPC e nenhuma operação aceita decisões de domínio. Detalhe em [tasks/E1.07-D2.md](tasks/E1.07-D2.md).
+Integrada em `main` pelo PR #13 e revista em E1.07-D2-M, GO com ressalvas (D-179 a D-186). **Não é autorização operacional**: o `TenantContext` continua construído pelo chamador (PD-27), nada é exposto por HTTP/IPC e nenhuma operação aceita decisões de domínio. Detalhe em [tasks/E1.07-D2.md](tasks/E1.07-D2.md).
 
 ```text
 LocalService.internalAuthorization (interno, não autenticado, READY)
@@ -369,9 +369,9 @@ LocalService.internalAuthorization (interno, não autenticado, READY)
      evaluateAuthorizationFacts (regras puras D1) ──▶ decisão de DOMÍNIO (não operacional)
 ```
 
-- **Migração 6 (D-180):** `roles`, `role_permissions`, `role_assignments` (`STRICT`, sem dados iniciais); FK compostas com `tenant_id`/`company_id`; índices únicos parciais para `COMPANY_WIDE` (`branch_id` nulo) e `BRANCH`; `CHECK` de gramática, estados e âmbitos; triggers que recusam reinserções, referências de outro tenant, atribuições inelegíveis (criação e reactivação), alterações de referências e eliminação de perfis e atribuições, com `foreign_keys` ligado ou desligado.
+- **Migração 6 (D-180):** `roles`, `role_permissions`, `role_assignments` (`STRICT`, sem dados iniciais); FK compostas com `tenant_id`/`company_id`; índices únicos parciais para `COMPANY_WIDE` (`branch_id` nulo) e `BRANCH`; `CHECK` de gramática, estados e âmbitos; triggers que recusam reinserções, referências de outro tenant, atribuições inelegíveis (criação e reactivação), alterações de referências e eliminação de perfis e atribuições, com `foreign_keys` ligado ou desligado. **Limite (D-185, PD-69):** com `recursive_triggers` desligado (configuração do serviço), `REPLACE`/`UPDATE OR REPLACE` por conflito de `rowid` contorna a não eliminação e a imutabilidade das ligações; a correcção é uma migração aditiva futura. As ligações das tabelas-pai (associações, estabelecimentos, empresas) não são imutáveis na base (PD-70).
 - **Catálogo (D-181):** continua em código, sem tabela de permissões; só o oficial é admitido; `catalog_version` por concessão; códigos não reconhecidos nunca concedem, ficam identificáveis e só saem por `remove` explícito.
-- **Motor (D-182):** leitor de factos no pacote `database`, motor no serviço local; sem *cache* de permissões; pedidos da instalação recusados até D3; estados empresariais segundo D1 (PD-58 em D3/D4).
+- **Motor (D-182):** leitor de factos no pacote `database`, motor no serviço local; sem *cache* de permissões; pedidos da instalação recusados até D3; estados empresariais segundo D1: em qualquer estado o motor concede as permissões `ADMINISTRATION`, sem operação executável (D-186; aplicação de D-159 em D3/D4).
 - **Repositórios (D-183):** D-020, D-034, D-039; suites de contrato sobre SQLite e através do serviço.
 
 ## Decisões definidas
@@ -408,7 +408,7 @@ LocalService.internalAuthorization (interno, não autenticado, READY)
 - Autenticação local offline com Argon2id nativo (RFC 9106), política NIST SP 800-63B, limitação persistente de tentativas, inicialização explícita da instalação e integração segura no ciclo de vida do serviço (D-090 a D-097).
 - Sessões locais revogáveis com tokens opacos, comprovativo interno de utilização única, versões de segurança monotónicas, relógio efectivo conservador e ligação ao arranque do serviço; uma sessão não é uma autorização empresarial (D-107 a D-116).
 - Exclusividade do serviço local por base SQLite, pelo bloqueio exclusivo do próprio SQLite adquirido e comprovado antes de qualquer leitura ou escrita, com identificação canónica da base e recusa tipada `database-locked` (D-130 a D-134, E1.07-X).
-- Autorização RBAC em quatro subtarefas (D-146). Contratos de E1.07-D1 e políticas D-147 a D-167; E1.07-D1-R2 encerrou PD-62/PD-63 (D-168). E1.07-D1-H-R2 aprovou a correcção fiscal integrada no PR #12 e encerrou PD-64 (D-178). E1.07-D2 (D-179 a D-183) persiste perfis, concessões e atribuições e avalia factos persistidos num motor interno; está por rever e o RBAC não é operacional até E1.07-D4.
+- Autorização RBAC em quatro subtarefas (D-146). Contratos de E1.07-D1 e políticas D-147 a D-167; E1.07-D1-R2 encerrou PD-62/PD-63 (D-168). E1.07-D1-H-R2 aprovou a correcção fiscal integrada no PR #12 e encerrou PD-64 (D-178). E1.07-D2 (D-179 a D-183) persiste perfis, concessões e atribuições e avalia factos persistidos num motor interno; integrada no PR #13 e revista em E1.07-D2-M (GO com ressalvas, D-184 a D-186). O RBAC não é operacional até E1.07-D4.
 
 ## Estrutura do monorepositório
 
@@ -432,7 +432,7 @@ LocalService.internalAuthorization (interno, não autenticado, READY)
 - Estratégia e protocolo de sincronização, resolução de conflitos, idempotência e operação offline.
 - Modelo de tenancy no PostgreSQL (colunas, schemas ou bases separadas), row-level security e driver PostgreSQL.
 - Framework de empacotamento, actualizações e assinatura de código do Electron.
-- Administração e integração da autorização (E1.07-D3 e E1.07-D4; a persistência de E1.07-D2 está implementada e por rever) e recuperação de conta (E1.07-E); origem autenticada do `TenantContext` (E1.07-D4). O modelo de identidade e associações está definido desde E1.07-A, a autenticação local desde E1.07-B e as sessões locais desde E1.07-C; o transporte da sessão até à interface fica para E1.08 (PD-42).
+- Administração e integração da autorização (E1.07-D3 e E1.07-D4; a persistência de E1.07-D2 está integrada, com as ressalvas PD-69 a PD-71) e recuperação de conta (E1.07-E); origem autenticada do `TenantContext` (E1.07-D4). O modelo de identidade e associações está definido desde E1.07-A, a autenticação local desde E1.07-B e as sessões locais desde E1.07-C; o transporte da sessão até à interface fica para E1.08 (PD-42).
 - Hosting, observabilidade, backups, recuperação de desastre e topologia de implantação.
 - Biblioteca de componentes e sistema visual definitivo.
 - Versões e arquitectura concretas do React Native quando começar o monitor móvel.
