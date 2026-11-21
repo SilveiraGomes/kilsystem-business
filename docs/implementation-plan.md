@@ -41,11 +41,11 @@ Este plano regista as etapas concluídas e o planeamento inicial da fase E1 até
 | [E1.07-D1-M](tasks/E1.07-D1-M.md) | Revisão independente dos contratos e da futura fronteira de autoridade | Concluída; **NO-GO**; registo integrado em `main` | `40d70cf` (`docs: record independent authorization contract review`); merge `f225366` |
 | [E1.07-D1-R1](tasks/E1.07-D1-R1.md) | Integridade e proveniência das decisões e do catálogo; imutabilidade das definições (PD-62, PD-63) | Integrada pelo responsável no PR #9 antes da revisão; aprovada por E1.07-D1-R2 | `0f1f9a6`; merge `1a69eb1` |
 | [E1.07-D1-R2](tasks/E1.07-D1-R2.md) | Revisão independente da correcção E1.07-D1-R1 | Concluída; **GO** para R1; não autoriza D2; registo integrado pelo responsável (PR #10) | `cbe2ad5`; merge `0539b15` |
-| [E1.07-D1-H](tasks/E1.07-D1-H.md) | Imutabilidade transversal dos contratos de domínio (PD-64) | Integrada antecipadamente no PR #11; revisão [E1.07-D1-H-M](tasks/E1.07-D1-H-M.md) recomendou NO-GO; correcção pendente | `3d6358b`; merge `7076d1f` |
+| [E1.07-D1-H](tasks/E1.07-D1-H.md) | Imutabilidade transversal dos contratos de domínio (PD-64) | Integrada no PR #11; correcção fiscal integrada no PR #12 e aprovada por H-R2; PD-64 encerrada | `3d6358b`; merges `7076d1f`, `5745d3d` |
 | [E1.07-D1-H-M](tasks/E1.07-D1-H-M.md) | Revisão independente da imutabilidade e estabilidade | Concluída; NO-GO por RV-D1-H-M-01; PD-64 aberta | `1ccb997` (`docs: record independent domain immutability review`) |
-| [E1.07-D1-H-R1](tasks/E1.07-D1-H-R1.md) | Correcção do isolamento da política fiscal (RV-D1-H-M-01) e diagnóstico do OOM do ESLint | Concluída na branch; aguarda E1.07-D1-H-R2; merge não autorizado | `fix: isolate tax policy validators from mutable inputs` |
-| E1.07-D1-H-R2 | Revisão independente da correcção R1 | Por executar | — |
-| [E1.07-D2](tasks/E1.07-D2.md) | Persistência RBAC (migração 6), repositórios e motor sobre concessões persistidas | **Suspensa, não autorizada** até E1.07-D1-H-R2, encerramento de PD-64 e aprovação explícita | — |
+| [E1.07-D1-H-R1](tasks/E1.07-D1-H-R1.md) | Correcção do isolamento da política fiscal (RV-D1-H-M-01) e diagnóstico do OOM do ESLint | Integrada no PR #12; aprovada por E1.07-D1-H-R2 | `3831700`; merge `5745d3d` |
+| [E1.07-D1-H-R2](tasks/E1.07-D1-H-R2.md) | Revisão independente da correcção R1 | Concluída; **GO**; PD-64 encerrada; não autoriza D2 | `docs: record final tax policy isolation review` |
+| [E1.07-D2](tasks/E1.07-D2.md) | Persistência RBAC (migração 6), repositórios e motor sobre concessões persistidas | **Suspensa, não autorizada** até aprovação explícita | — |
 | [E1.07-D3](tasks/E1.07-D3.md) | Autoridade inicial da instalação, administração empresarial, delegação e prevenção de escalada | Planeada, **não autorizada** | — |
 | [E1.07-D4](tasks/E1.07-D4.md) | Contexto derivado de sessão e autorização integrada; encerra PD-27, PD-28 e PD-44 | Planeada, **não autorizada** | — |
 | [E1.07-E](tasks/E1.07-E.md) | Protecção de contas e auditoria | Planeada, **não autorizada** | — |
@@ -124,7 +124,7 @@ Decisões do responsável D-098 a D-106. A implementação continua sujeita à a
 
 | Trabalho | Pendência | Etapa |
 | --- | --- | --- |
-| Garantir imutabilidade transversal, incluindo independência das regras fiscais recebidas de consumidores | PD-64 | **Aberta** (D-173): listas, limites e transições confirmados; RV-D1-H-M-01 corrigido na branch por E1.07-D1-H-R1 (D-176); encerramento após E1.07-D1-H-R2, antes de D2 |
+| Garantir imutabilidade transversal, incluindo independência das regras fiscais recebidas de consumidores | PD-64 | **Encerrada** por E1.07-D1-H-R2 (D-178); D2 continua dependente de aprovação explícita |
 
 ### Trabalho identificado em E1.07-D1-H
 
@@ -150,7 +150,7 @@ Relação entre as funcionalidades ainda não desenvolvidas e as decisões pende
 | Persistência central (E1.09) | Driver PostgreSQL, modelo de tenancy e row-level security |
 | Ferramenta operacional de inicialização | Entrada interactiva protegida, sem palavras-passe em argumentos ou ficheiros (PD-31) |
 | Sessões (E1.07-C) | Implementadas (D-107 a D-116) e corrigidas em E1.07-C-R1 (D-124 a D-127). Por decidir: transporte e guarda do token até à interface (E1.08, PD-42); política por tipo de posto; impacto operacional do fim das sessões no reinício (PD-41) |
-| Autorização RBAC (E1.07-D) | Contratos D-146 a D-167; R1 aprovada e PD-62/PD-63 encerradas em D-168. D1-H foi integrada, mas a revisão recomendou NO-GO (D-173); RV-D1-H-M-01 está corrigido na branch (E1.07-D1-H-R1, D-176) e, antes de D2, é obrigatório concluir a revisão E1.07-D1-H-R2 e obter aprovação explícita. D2: aplicar D-162, usar só o catálogo oficial e uma instância do módulo (D-167). D3: aplicar D-159 a D-161. D4: PD-27, PD-28, PD-44 e autorização operacional distinta da decisão de domínio (D-167) |
+| Autorização RBAC (E1.07-D) | Contratos D-146 a D-167; PD-62/PD-63 encerradas em D-168 e PD-64 encerrada por E1.07-D1-H-R2 (D-178). D2 permanece suspensa até aprovação explícita: aplicar D-162, usar só o catálogo oficial e uma instância do módulo (D-167). D3: aplicar D-159 a D-161. D4: PD-27, PD-28, PD-44 e autorização operacional distinta da decisão de domínio (D-167) |
 | Protecção de contas e auditoria (E1.07-E) | Limiares de bloqueio; retenção e consulta da auditoria, incluindo eventos de sessão (PD-26) |
 | API local e integração Electron (E1.08) | E1.07-B a E1.07-F; exclusividade do serviço por base (E1.07-X, PD-43, D-121; integrada pelo PR #7, D-140); transporte em loopback e do token de sessão, nunca em `localStorage` (PD-42, D-120); E1.06-S1 concluída; PD-27 e PD-28 resolvidas (bloqueantes, D-106); PD-29 resolvida (D-099); medidas contra a negação de serviço da instância (PD-35, PD-39) |
 | Ciclo de vida das empresas | Tabela de transições e auditoria (D-061); preservação do NIF (D-055) |
