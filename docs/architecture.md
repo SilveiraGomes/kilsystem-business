@@ -6,6 +6,10 @@ Este documento regista a fundação E1.01, a primeira aplicação desktop E1.02,
 
 ## Visão geral
 
+### Correcção E1.07-D2-R1
+
+A migração 7 acrescenta somente triggers contra substituições por `rowid` e mudanças das ligações de empresas, estabelecimentos e associações. Preserva migrações 1–6, dados e isolamento por tenant. O motor captura o pedido uma vez; nada é exposto por HTTP/IPC e não há autorização operacional.
+
 O KIL Business será um ERP híbrido e modular. A aplicação desktop operará com serviços e dados locais, enquanto serviços centrais em PostgreSQL suportarão capacidades centralizadas e sincronização. O monitor móvel será opcional e apenas consultará indicadores sincronizados quando for implementado.
 
 ```text

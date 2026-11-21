@@ -1,6 +1,6 @@
 # Estado do projecto
 
-Última verificação: 2026-11-21, em E1.07-D2-M (revisão independente de E1.07-D2, checkpoint `b85381c`; `origin/main` = `2c2b823`, merge do PR #13 feito antes da revisão).
+Última verificação: 2026-11-21, em E1.07-D2-R1 (checkpoint técnico `1942500`; base regularizada `0e1e509`; aguarda D2-R2, publicação e merge não autorizado).
 
 Este documento é o ponto de retoma para qualquer agente ou pessoa. Contém apenas factos verificados no repositório ou por execução; o que não foi executado está marcado como tal.
 
@@ -41,6 +41,7 @@ Este documento é o ponto de retoma para qualquer agente ou pessoa. Contém apen
 | E1.07-D1-H-R2 — integração do registo em `main` | Autorizada pelo responsável nesta sessão; merge sem *fast-forward* | `5bf2e00` (pais `5745d3d`, `db6a582`) | D-179 |
 | E1.07-D2 — Persistência RBAC e motor interno sobre concessões persistidas | Integrada pelo responsável no PR #13 antes da revisão; revista em E1.07-D2-M (GO com ressalvas); RBAC não operacional | `aa15864`; `b85381c`; merge `2c2b823` | [tasks/E1.07-D2.md](tasks/E1.07-D2.md) |
 | E1.07-D2-M — Revisão independente da persistência RBAC | Concluída; **GO com ressalvas** (RV-D2-M-01 Médio; RV-D2-M-03/04 Baixo); não autoriza D3 | `docs: record independent RBAC persistence review` | [tasks/E1.07-D2-M.md](tasks/E1.07-D2-M.md) |
+| E1.07-D2-R1 — Correcção de integridade SQLite | Implementação concluída; aguarda D2-R2; merge não autorizado | `1942500` | [tasks/E1.07-D2-R1.md](tasks/E1.07-D2-R1.md) |
 | E1.07-D3, E1.07-D4, E1.07-E, E1.07-F | Planeadas, não autorizadas | — | [tasks/E1.07-D.md](tasks/E1.07-D.md), [tasks/E1.07.md](tasks/E1.07.md) |
 | E1.08 a E1.10 | Planeadas, não autorizadas | — | [implementation-plan.md](implementation-plan.md) |
 

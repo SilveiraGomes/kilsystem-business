@@ -4,6 +4,9 @@ Decisões em vigor no projecto, com a etapa e o commit de origem. As entradas n�
 
 | ID | Decisão | Origem |
 | --- | --- | --- |
+| D-187 | O responsável ratifica E1.07-D2 e autoriza E1.07-D2-R1. O registo D2-M foi regularizado pelo PR #14, merge `0e1e509`; D3 continua não autorizada. | E1.07-D2-R1 |
+| D-188 | Corrige D-180/D-185 pela migração 7 aditiva: triggers recusam reutilização/alteração de `rowid` e mudanças das ligações das entidades-pai. Migrações 1–6 e dados existentes não mudam. A garantia não cobre controlo do esquema ou ficheiro. | E1.07-D2-R1; sujeita a D2-R2 |
+| D-189 | PD-70: titular e ligações das associações não são transferidos por SQL; revogação e nova associação auditadas permanecem para D3/E. PD-71 passa a ter cobertura permanente de `READY`, factos contraditórios, leitura única e M06b. | E1.07-D2-R1; sujeita a D2-R2 |
 | D-001 | Monorepositório com pnpm workspaces (`apps/*`, `services/*`, `packages/*`) e Git. | E1.01 · `ff5ba65` |
 | D-002 | TypeScript como linguagem comum, em modo `strict` com `noUncheckedIndexedAccess`. | E1.01 · `ff5ba65` |
 | D-003 | Desktop em Electron, React e Vite. | E1.01 · `ff5ba65` |
