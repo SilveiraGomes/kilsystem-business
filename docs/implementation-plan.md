@@ -49,6 +49,7 @@ Este plano regista as etapas concluídas e o planeamento inicial da fase E1 até
 | [E1.07-D2-M](tasks/E1.07-D2-M.md) | Revisão independente da persistência RBAC e integridade multiempresa | Concluída; **GO com ressalvas** (PD-69 a PD-71); não autoriza D3 | `docs: record independent RBAC persistence review` |
 | [E1.07-D2-R1](tasks/E1.07-D2-R1.md) | Correcção da integridade SQLite e cobertura RBAC | Implementação concluída; revista em E1.07-D2-R2 (**NO-GO**); PR #15 não integrado | `1942500`; `9d27418` |
 | [E1.07-D2-R2](tasks/E1.07-D2-R2.md) | Revisão independente final da integridade RBAC | Concluída; **NO-GO** (PD-70 incompleta; PD-72 a PD-74); PD-69/PD-71 confirmadas; não autoriza D3 | `docs: record independent RBAC integrity correction review` |
+| [E1.07-D2-R3](tasks/E1.07-D2-R3.md) | Correcção complementar de integridade SQLite e testes RBAC | Implementação concluída (PD-70, PD-72 a PD-74; D-194 a D-199); aguarda E1.07-D2-R4; PR #15 em Draft, não integrado | `30126b6`; `198e6ca` |
 | [E1.07-D3](tasks/E1.07-D3.md) | Autoridade inicial da instalação, administração empresarial, delegação e prevenção de escalada | Planeada, **não autorizada** | — |
 | [E1.07-D4](tasks/E1.07-D4.md) | Contexto derivado de sessão e autorização integrada; encerra PD-27, PD-28 e PD-44 | Planeada, **não autorizada** | — |
 | [E1.07-E](tasks/E1.07-E.md) | Protecção de contas e auditoria | Planeada, **não autorizada** | — |
@@ -122,7 +123,11 @@ Decisões do responsável D-098 a D-106. A implementação continua sujeita à a
 | Códigos de permissão desconhecidos ou `WITHDRAWN` | PD-61 | Política decidida em D-162; tratamento inicial na persistência de E1.07-D2 (D-181); validação integrada em E1.07-D4 |
 | Apresentação administrativa e limpeza auditada de concessões não reconhecidas | PD-68 | E1.07-D3 e E1.07-E |
 | `REPLACE` por `rowid` com `recursive_triggers` desligado nas tabelas RBAC | PD-69 | Correcção por migração aditiva (D-185), antes de E1.07-D3 |
-| Imutabilidade das ligações das tabelas-pai (associações, estabelecimentos, empresas) | PD-70 | Decisão do responsável; tarefa correctiva ou E1.07-F |
+| Imutabilidade das ligações das tabelas-pai (associações, estabelecimentos, empresas) | PD-70 | Corrigida na branch por E1.07-D2-R1/R3 (D-189, D-195); encerramento após E1.07-D2-R4 e merge |
+| Guardas de `rowid` dependentes de `NEW.rowid` indefinido | PD-72 | Corrigida na branch por E1.07-D2-R3 (D-196); encerramento após E1.07-D2-R4 e merge |
+| `installation_bootstrap` mutável | PD-73 | Protegida na branch por E1.07-D2-R3 (D-197); Gate de E1.07-D3 com a PD-75 |
+| Asserções não discriminantes (R10, R12, R13) | PD-74 | Corrigida na branch por E1.07-D2-R3 (D-198); encerramento após E1.07-D2-R4 e merge |
+| Política de identidades e autoridade sobre o administrador inicial (linha `users` eliminável e reinserível com `foreign_keys` desligado) | PD-75 | Decisão no Gate de E1.07-D3 |
 | Cobertura: guarda `READY` RBAC, factos contraditórios em SQLite real, leitura única do pedido | PD-71 | Tarefa correctiva da PD-69 |
 | Decisões `GRANTED` estruturalmente forjáveis | PD-62 | Encerrada por E1.07-D1-R2 (D-168), formalizada após o PR #10 (D-170); vinculação operacional permanece em D4 (D-167) |
 | Proveniência do catálogo e definições iniciais superficialmente congeladas | PD-63 | Encerrada por E1.07-D1-R2 (D-168), formalizada após o PR #10 (D-170); composição só com o catálogo oficial permanece requisito de D2 (D-167) |
@@ -157,7 +162,7 @@ Relação entre as funcionalidades ainda não desenvolvidas e as decisões pende
 | Persistência central (E1.09) | Driver PostgreSQL, modelo de tenancy e row-level security |
 | Ferramenta operacional de inicialização | Entrada interactiva protegida, sem palavras-passe em argumentos ou ficheiros (PD-31) |
 | Sessões (E1.07-C) | Implementadas (D-107 a D-116) e corrigidas em E1.07-C-R1 (D-124 a D-127). Por decidir: transporte e guarda do token até à interface (E1.08, PD-42); política por tipo de posto; impacto operacional do fim das sessões no reinício (PD-41) |
-| Autorização RBAC (E1.07-D) | Contratos D-146 a D-167; PD-62/PD-63 encerradas em D-168 e PD-64 encerrada por E1.07-D1-H-R2 (D-178). D2 integrada (PR #13) e revista em E1.07-D2-M, GO com ressalvas (D-179 a D-186): migração 6, repositórios, catálogo oficial, PD-61 e motor interno não operacional; PD-69 a PD-71 antes de D3. D3: autoridade do actor, `InstallationAuthorityGrant`, D-159 a D-161, PD-68. D4: PD-27, PD-28, PD-44 e autorização operacional distinta da decisão de domínio (D-167) |
+| Autorização RBAC (E1.07-D) | Contratos D-146 a D-167; PD-62/PD-63 encerradas em D-168 e PD-64 encerrada por E1.07-D1-H-R2 (D-178). D2 integrada (PR #13) e revista em E1.07-D2-M, GO com ressalvas (D-179 a D-186): migração 6, repositórios, catálogo oficial, PD-61 e motor interno não operacional; PD-69 a PD-71 antes de D3; correcção E1.07-D2-R1/R3 (PR #15, migração 7 corrigida, D-187 a D-199) a aguardar E1.07-D2-R4. D3 (Gate com PD-73/PD-75): autoridade do actor, `InstallationAuthorityGrant`, D-159 a D-161, PD-68. D4: PD-27, PD-28, PD-44 e autorização operacional distinta da decisão de domínio (D-167) |
 | Protecção de contas e auditoria (E1.07-E) | Limiares de bloqueio; retenção e consulta da auditoria, incluindo eventos de sessão (PD-26) |
 | API local e integração Electron (E1.08) | E1.07-B a E1.07-F; exclusividade do serviço por base (E1.07-X, PD-43, D-121; integrada pelo PR #7, D-140); transporte em loopback e do token de sessão, nunca em `localStorage` (PD-42, D-120); E1.06-S1 concluída; PD-27 e PD-28 resolvidas (bloqueantes, D-106); PD-29 resolvida (D-099); medidas contra a negação de serviço da instância (PD-35, PD-39) |
 | Ciclo de vida das empresas | Tabela de transições e auditoria (D-061); preservação do NIF (D-055) |
