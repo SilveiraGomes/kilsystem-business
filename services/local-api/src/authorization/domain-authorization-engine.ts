@@ -80,7 +80,7 @@ export const createInternalDomainAuthorizationEvaluator = (
     const permissionCode = input.permissionCode;
     const scope = input.scope;
     if (typeof scope !== 'object' || scope === null) {
-      throw new DomainValidationError('request', 'nÃ£o Ã© um pedido de avaliaÃ§Ã£o');
+      throw new DomainValidationError('request', 'não é um pedido de avaliação');
     }
     const request = createAuthorizationRequest({
       permissionCode,

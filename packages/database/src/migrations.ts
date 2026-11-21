@@ -569,11 +569,18 @@ END;
 // de titular/ligacoes, impedindo que atribuicoes existentes sejam transferidas para outra identidade,
 // empresa ou filial por SQL directo. So acrescenta triggers; nao altera dados nem as migracoes 1-6.
 // A fronteira de confianca mantem-se: quem controla o esquema ou o ficheiro pode remover triggers.
+// E1.07-D2-R3 (PD-70, PD-72; migracao 7 ainda nao integrada, corrigida no proprio ficheiro):
+// - as associacoes empresariais sao desactivadas, nunca eliminadas: com foreign_keys desligado,
+//   DELETE seguido de INSERT com o mesmo id e outro titular transferia as atribuicoes;
+// - num BEFORE INSERT sem rowid explicito, NEW.rowid e indefinido (-1 no SQLite 3.53.2) e igual ao
+//   de um rowid -1 explicito. As guardas por rowid so comparam rowids positivos, e o AFTER INSERT,
+//   onde NEW.rowid e o valor real, recusa rowids nao positivos. Assim um rowid explicito ocupado e
+//   sempre recusado, e uma linha com rowid -1 nao bloqueia as insercoes normais.
 const V7_HARDEN_RBAC_REPLACEMENT_AND_PARENT_BINDINGS = `
 CREATE TRIGGER companies_insert_requires_new_company
 BEFORE INSERT ON companies
 WHEN EXISTS (
-  SELECT 1 FROM companies WHERE rowid = NEW.rowid OR id = NEW.id OR tenant_id = NEW.tenant_id
+  SELECT 1 FROM companies WHERE (NEW.rowid > 0 AND rowid = NEW.rowid) OR id = NEW.id OR tenant_id = NEW.tenant_id
 )
 BEGIN
   SELECT RAISE(ABORT, 'constraint failed: companies are never re-inserted');
@@ -591,7 +598,7 @@ CREATE TRIGGER branches_insert_requires_new_branch
 BEFORE INSERT ON branches
 WHEN EXISTS (
   SELECT 1 FROM branches
-  WHERE rowid = NEW.rowid OR id = NEW.id OR (company_id = NEW.company_id AND code = NEW.code)
+  WHERE (NEW.rowid > 0 AND rowid = NEW.rowid) OR id = NEW.id OR (company_id = NEW.company_id AND code = NEW.code)
 )
 BEGIN
   SELECT RAISE(ABORT, 'constraint failed: branches are never re-inserted');
@@ -607,7 +614,7 @@ END;
 
 CREATE TRIGGER users_rowid_insert_requires_new_identity
 BEFORE INSERT ON users
-WHEN EXISTS (SELECT 1 FROM users WHERE rowid = NEW.rowid)
+WHEN NEW.rowid > 0 AND EXISTS (SELECT 1 FROM users WHERE rowid = NEW.rowid)
 BEGIN
   SELECT RAISE(ABORT, 'constraint failed: users rowid is never re-used');
 END;
@@ -621,7 +628,7 @@ END;
 
 CREATE TRIGGER password_credentials_rowid_insert_requires_new_credential
 BEFORE INSERT ON password_credentials
-WHEN EXISTS (SELECT 1 FROM password_credentials WHERE rowid = NEW.rowid)
+WHEN NEW.rowid > 0 AND EXISTS (SELECT 1 FROM password_credentials WHERE rowid = NEW.rowid)
 BEGIN
   SELECT RAISE(ABORT, 'constraint failed: password_credentials rowid is never re-used');
 END;
@@ -635,7 +642,7 @@ END;
 
 CREATE TRIGGER local_sessions_rowid_insert_requires_new_session
 BEFORE INSERT ON local_sessions
-WHEN EXISTS (SELECT 1 FROM local_sessions WHERE rowid = NEW.rowid)
+WHEN NEW.rowid > 0 AND EXISTS (SELECT 1 FROM local_sessions WHERE rowid = NEW.rowid)
 BEGIN
   SELECT RAISE(ABORT, 'constraint failed: local_sessions rowid is never re-used');
 END;
@@ -651,7 +658,7 @@ CREATE TRIGGER company_memberships_insert_requires_new_membership
 BEFORE INSERT ON company_memberships
 WHEN EXISTS (
   SELECT 1 FROM company_memberships
-  WHERE rowid = NEW.rowid OR id = NEW.id OR (user_id = NEW.user_id AND tenant_id = NEW.tenant_id)
+  WHERE (NEW.rowid > 0 AND rowid = NEW.rowid) OR id = NEW.id OR (user_id = NEW.user_id AND tenant_id = NEW.tenant_id)
 )
 BEGIN
   SELECT RAISE(ABORT, 'constraint failed: company_memberships are never re-inserted');
@@ -666,11 +673,17 @@ BEGIN
   SELECT RAISE(ABORT, 'constraint failed: company_memberships owner and references are immutable');
 END;
 
+CREATE TRIGGER company_memberships_never_deleted
+BEFORE DELETE ON company_memberships
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: company_memberships are deactivated, never deleted');
+END;
+
 CREATE TRIGGER branch_memberships_insert_requires_new_membership
 BEFORE INSERT ON branch_memberships
 WHEN EXISTS (
   SELECT 1 FROM branch_memberships
-  WHERE rowid = NEW.rowid OR id = NEW.id
+  WHERE (NEW.rowid > 0 AND rowid = NEW.rowid) OR id = NEW.id
     OR (company_membership_id = NEW.company_membership_id AND branch_id = NEW.branch_id)
 )
 BEGIN
@@ -689,7 +702,7 @@ END;
 
 CREATE TRIGGER roles_rowid_insert_requires_new_role
 BEFORE INSERT ON roles
-WHEN EXISTS (SELECT 1 FROM roles WHERE rowid = NEW.rowid)
+WHEN NEW.rowid > 0 AND EXISTS (SELECT 1 FROM roles WHERE rowid = NEW.rowid)
 BEGIN
   SELECT RAISE(ABORT, 'constraint failed: roles rowid is never re-used');
 END;
@@ -703,7 +716,7 @@ END;
 
 CREATE TRIGGER role_permissions_rowid_insert_requires_new_grant
 BEFORE INSERT ON role_permissions
-WHEN EXISTS (SELECT 1 FROM role_permissions WHERE rowid = NEW.rowid)
+WHEN NEW.rowid > 0 AND EXISTS (SELECT 1 FROM role_permissions WHERE rowid = NEW.rowid)
 BEGIN
   SELECT RAISE(ABORT, 'constraint failed: role_permissions rowid is never re-used');
 END;
@@ -717,7 +730,7 @@ END;
 
 CREATE TRIGGER role_assignments_rowid_insert_requires_new_assignment
 BEFORE INSERT ON role_assignments
-WHEN EXISTS (SELECT 1 FROM role_assignments WHERE rowid = NEW.rowid)
+WHEN NEW.rowid > 0 AND EXISTS (SELECT 1 FROM role_assignments WHERE rowid = NEW.rowid)
 BEGIN
   SELECT RAISE(ABORT, 'constraint failed: role_assignments rowid is never re-used');
 END;
@@ -727,6 +740,56 @@ BEFORE UPDATE ON role_assignments
 WHEN NEW.rowid IS NOT OLD.rowid
 BEGIN
   SELECT RAISE(ABORT, 'constraint failed: role_assignments rowid is immutable');
+END;
+
+CREATE TRIGGER companies_rowid_positive AFTER INSERT ON companies WHEN NEW.rowid <= 0
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: companies rowid must be positive');
+END;
+
+CREATE TRIGGER branches_rowid_positive AFTER INSERT ON branches WHEN NEW.rowid <= 0
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: branches rowid must be positive');
+END;
+
+CREATE TRIGGER users_rowid_positive AFTER INSERT ON users WHEN NEW.rowid <= 0
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: users rowid must be positive');
+END;
+
+CREATE TRIGGER password_credentials_rowid_positive AFTER INSERT ON password_credentials WHEN NEW.rowid <= 0
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: password_credentials rowid must be positive');
+END;
+
+CREATE TRIGGER local_sessions_rowid_positive AFTER INSERT ON local_sessions WHEN NEW.rowid <= 0
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: local_sessions rowid must be positive');
+END;
+
+CREATE TRIGGER company_memberships_rowid_positive AFTER INSERT ON company_memberships WHEN NEW.rowid <= 0
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: company_memberships rowid must be positive');
+END;
+
+CREATE TRIGGER branch_memberships_rowid_positive AFTER INSERT ON branch_memberships WHEN NEW.rowid <= 0
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: branch_memberships rowid must be positive');
+END;
+
+CREATE TRIGGER roles_rowid_positive AFTER INSERT ON roles WHEN NEW.rowid <= 0
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: roles rowid must be positive');
+END;
+
+CREATE TRIGGER role_permissions_rowid_positive AFTER INSERT ON role_permissions WHEN NEW.rowid <= 0
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: role_permissions rowid must be positive');
+END;
+
+CREATE TRIGGER role_assignments_rowid_positive AFTER INSERT ON role_assignments WHEN NEW.rowid <= 0
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: role_assignments rowid must be positive');
 END;
 `;
 
