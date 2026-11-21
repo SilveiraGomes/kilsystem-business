@@ -53,6 +53,7 @@ Este plano regista as etapas concluídas e o planeamento inicial da fase E1 até
 | [E1.07-D2-R4](tasks/E1.07-D2-R4.md) | Revisão independente final da migração 7 e da integridade RBAC | Concluída; **GO**, aprovada pelo responsável; PD-75 condiciona a activação de D3 (D-200 a D-202) | `2f876d6` |
 | E1.07-D2 — encerramento | Merge do PR #15 e registo do encerramento | **Concluído** (D-203, D-204): PD-69/70/71/72/74 encerradas; PD-73/PD-75 abertas para o Gate D3; PD-76 nova | merge `dc5b046` |
 | [E1.07-D3-G0](tasks/E1.07-D3-G0.md) | Gate de segurança da administração da instalação (PD-73, PD-75, PD-76; contratos de D3) | **Implementação concluída na branch; aguarda E1.07-D3-G0-M** (sem merge); activação bloqueada (PD-77) | branch `feat/e107-d3-g0-installation-authority` |
+| [E1.07-D3-G0-M](tasks/E1.07-D3-G0-M.md) | Revisão independente do Gate de segurança da instalação | **Concluída — GO** com ressalvas (D-214); condições antes da D3-A: PD-80, PD-81; PD-77 com R1 (D-215); PD-78 avaliada (D-216); PD-79 especificada (D-217) | branch `feat/e107-d3-g0-installation-authority` (`a994705`) |
 | [E1.07-D3](tasks/E1.07-D3.md) | Autoridade inicial da instalação, administração empresarial, delegação e prevenção de escalada | Gate G0 em revisão; restante planeado, **não autorizado** | — |
 | [E1.07-D4](tasks/E1.07-D4.md) | Contexto derivado de sessão e autorização integrada; encerra PD-27, PD-28 e PD-44 | Planeada, **não autorizada** | — |
 | [E1.07-E](tasks/E1.07-E.md) | Protecção de contas e auditoria | Planeada, **não autorizada** | — |
@@ -135,6 +136,8 @@ Decisões do responsável D-098 a D-106. A implementação continua sujeita à a
 | Processo aprovado de recuperação/substituição do administrador inicial | PD-77 | **Bloqueia a activação** de qualquer autoridade da instalação; proposta R1/R2 (D-210) aguarda decisão do responsável |
 | Empresas e estabelecimentos elimináveis (repositório; SQL com FK desligado e reinserção do mesmo `id`) | PD-78 | Decisão em E1.07-D3 (relaciona-se com D-027) |
 | Instalador/actualizador obrigado à pré-verificação PD-76 | PD-79 | Antes da primeira distribuição (E1.10) |
+| `credentials.create` sem protecção do administrador inicial | PD-80 | Aberta; antes da D3-A e de qualquer activação (D-219) |
+| Cobertura de `verifyAnchor()` pelo serviço e registo da pré-verificação | PD-81 | Aberta; antes da D3-A (D-219) |
 | Cobertura: guarda `READY` RBAC, factos contraditórios em SQLite real, leitura única do pedido | PD-71 | **Encerrada** (D-204): cobertura integrada pelo PR #15 |
 | Decisões `GRANTED` estruturalmente forjáveis | PD-62 | Encerrada por E1.07-D1-R2 (D-168), formalizada após o PR #10 (D-170); vinculação operacional permanece em D4 (D-167) |
 | Proveniência do catálogo e definições iniciais superficialmente congeladas | PD-63 | Encerrada por E1.07-D1-R2 (D-168), formalizada após o PR #10 (D-170); composição só com o catálogo oficial permanece requisito de D2 (D-167) |

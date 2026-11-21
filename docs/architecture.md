@@ -383,7 +383,7 @@ LocalService.internalAuthorization (interno, não autenticado, READY)
 
 ## Autorização: Gate da instalação (E1.07-D3-G0)
 
-Implementado na branch `feat/e107-d3-g0-installation-authority`, a rever em E1.07-D3-G0-M (D-205 a D-213). **Não activa nenhuma autoridade**: o motor continua a recusar todos os pedidos da instalação (`no-installation-authority`) e a activação está bloqueada até à recuperação aprovada (PD-77). Detalhe, reprodução da PD-75 e modelo de ameaças em [tasks/E1.07-D3-G0.md](tasks/E1.07-D3-G0.md).
+Implementado na branch `feat/e107-d3-g0-installation-authority`, a rever em E1.07-D3-G0-M (D-205 a D-213). **Não activa nenhuma autoridade**: o motor continua a recusar todos os pedidos da instalação (`no-installation-authority`) e a activação está bloqueada até à recuperação aprovada (PD-77). Detalhe, reprodução da PD-75 e modelo de ameaças em [tasks/E1.07-D3-G0.md](tasks/E1.07-D3-G0.md). Revisto em E1.07-D3-G0-M: GO com ressalvas (D-214, D-218).
 
 ```text
 installation_bootstrap (imutável, migração 7) ──▶ initial_administrator_id
@@ -391,19 +391,19 @@ installation_bootstrap (imutável, migração 7) ──▶ initial_administrator
         │   readInstallationAnchor() / verifyAnchor()  ▼
         └──────────────▶ users (nunca eliminado, created_at imutável — migração 8)
                          + password_credentials (nunca eliminada — migração 4)
-                         intact  ⇔ existe ∧ created_at = completed_at ∧ tem credencial
+                         intact  ⇔ existe ∧ created_at = completed_at ∧ tem credencial (consistência estrutural; não prova origem nem estado, D-218)
                          broken  ⇔ caso contrário (recusa fechada, sem procurar outra identidade)
 
 identityProvisioning.users.changeStatus / credentials.replace
         └─ administrador inicial ──▶ InitialAdministratorProtectedError (sem autoridade da instalação)
 
 LocalService.start ──▶ inspectMigrations ──▶ [pendentes] findNonPositiveRowids (10 tabelas)
-        └─ linhas rowid ≤ 0 ──▶ legacy-rowid-incompatible (ficheiro inalterado; sem renumeração)
+        └─ linhas rowid ≤ 0 ──▶ legacy-rowid-incompatible (dados e esquema inalterados; sem renumeração; ver D-218 sobre WAL)
 ```
 
 - **Migração 8 (D-206):** só triggers; `users` e `branch_memberships` desactivados, nunca eliminados; `UPDATE OF username` para o de outra identidade recusado antes da resolução de conflitos (fecha a eliminação implícita de `UPDATE OR REPLACE`); `users.created_at` imutável. Somas 1–7 inalteradas.
-- **Âncora (D-207):** única fonte admissível da identidade do administrador inicial para a futura autoridade; `status()` é descritivo.
-- **Administrador inicial (D-208):** estado e credencial recusados pelo provisionamento interno enquanto não existir autoridade da instalação.
+- **Âncora (D-207, D-218):** única fonte admissível da identidade do administrador inicial para a futura autoridade, sempre combinada com identidade ACTIVE e sessão autenticada; `status()` é descritivo; `intact` é consistência estrutural, não prova de origem face a um escritor SQL.
+- **Administrador inicial (D-208):** estado e credencial recusados pelo provisionamento interno enquanto não existir autoridade da instalação. A criação de credencial para o administrador inicial ainda não é recusada (PD-80).
 - **Fronteira (D-209):** o esquema impede eliminar, reutilizar e redireccionar; não impede editar no lugar (nome, estado, credencial) por SQL. Sem garantias contra quem controla o esquema, o ficheiro, o código ou o sistema operativo.
 - **PD-76 (D-211):** pré-verificação no serviço local antes de qualquer migração pendente; `runMigrations` continua primitiva (PD-79 para o instalador).
 
