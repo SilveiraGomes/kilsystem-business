@@ -97,10 +97,10 @@ conserva o objecto original mutável como receptor da função de validação (R
 A correcção [E1.07-D1-H-R1](docs/tasks/E1.07-D1-H-R1.md) foi integrada no PR #12 e aprovada pela
 revisão [E1.07-D1-H-R2](docs/tasks/E1.07-D1-H-R2.md): PD-64 está encerrada.
 
-E1.07-D2 (branch `feat/e107-d2-rbac-persistence`, por rever) acrescenta a migração 6 com perfis,
-concessões e atribuições isolados por tenant, os repositórios RBAC SQLite e um motor interno que
-avalia os factos persistidos com o catálogo oficial. A decisão produzida é de domínio, não é
-autorização operacional: não há HTTP, IPC, login RBAC nem `TenantContext` autenticado, e o RBAC
-continua não operacional até E1.07-D4.
+E1.07-D2 (integrada no PR #13 e revista em [E1.07-D2-M](docs/tasks/E1.07-D2-M.md), GO com ressalvas)
+acrescenta a migração 6 com perfis, concessões e atribuições isolados por tenant, os repositórios
+RBAC SQLite e um motor interno que avalia os factos persistidos com o catálogo oficial. A decisão
+produzida é de domínio, não é autorização operacional: não há HTTP, IPC, login RBAC nem
+`TenantContext` autenticado, e o RBAC continua não operacional até E1.07-D4.
 
 Consulte [docs/architecture.md](docs/architecture.md) e [AGENTS.md](AGENTS.md) antes de contribuir. Para retomar o trabalho noutra sessão ou com outro agente, comece por [docs/project-status.md](docs/project-status.md).
