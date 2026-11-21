@@ -165,7 +165,7 @@ Executado com Node.js 24.22.3 e pnpm 9.15.9, cada comando sozinho, sem suites co
 - Na branch: `pnpm.cmd check` final **aprovado** (lint, typecheck, **834/834** em 22 ficheiros, 12/12; 138,6 s), sem *timeouts* nem OOM; desktop 6/6; smoke `KIL_ELECTRON_SMOKE_OK`; `git diff --check` sem erros.
 - Mutações: **19/19 detectadas**; SHA-256 dos quatro ficheiros reposto e confirmado depois de cada uma.
 - `pnpm audit`: só `minimatch` moderada (PD-19); `audit --prod` 0. Sem dependências novas; `migrations.ts` só com adições; somas das migrações 1–5 inalteradas.
-- Suite sem `dist`: ver [tasks/E1.07-D2.md](tasks/E1.07-D2.md#81-suite-sem-artefactos-dist). Detalhe em [tasks/E1.07-D2.md](tasks/E1.07-D2.md).
+- Suite sem `dist` num worktree externo do commit `aa15864` (0 directórios de build): **834/834**, 56,1 s; worktree removido e confirmado. Detalhe em [tasks/E1.07-D2.md](tasks/E1.07-D2.md).
 
 ### E1.07-D1-H-R1 (isolamento da política fiscal), 2026-11-20/21
 
