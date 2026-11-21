@@ -2,7 +2,7 @@
 
 ## Estado deste documento
 
-Este documento regista a fundação E1.01, a primeira aplicação desktop E1.02, a arquitectura de negócio consolidada em E1.02-H, os contratos multiempresa de E1.03, a persistência SQLite de E1.04, o ciclo de vida do serviço local de E1.05, o ambiente de execução e as decisões de E1.06, a actualização segura do Electron em E1.06-S1, a modernização do Vitest em E1.06-S2, a identidade local com associações multiempresa de E1.07-A, a autenticação local offline de E1.07-B, as sessões locais revogáveis de E1.07-C, a exclusividade por base de E1.07-X, os contratos de autorização RBAC de E1.07-D1 e a persistência RBAC com motor interno de E1.07-D2 (ambos não operacionais). “Definido” significa uma decisão já fornecida ou validada pelo projecto; “pendente” requer validação posterior e não deve ser inferido.
+Este documento regista a fundação E1.01, a primeira aplicação desktop E1.02, a arquitectura de negócio consolidada em E1.02-H, os contratos multiempresa de E1.03, a persistência SQLite de E1.04, o ciclo de vida do serviço local de E1.05, o ambiente de execução e as decisões de E1.06, a actualização segura do Electron em E1.06-S1, a modernização do Vitest em E1.06-S2, a identidade local com associações multiempresa de E1.07-A, a autenticação local offline de E1.07-B, as sessões locais revogáveis de E1.07-C, a exclusividade por base de E1.07-X, os contratos de autorização RBAC de E1.07-D1 e a persistência RBAC com motor interno de E1.07-D2 (ambos não operacionais), e — só na branch de E1.07-D3-G0, a rever — as protecções do Gate da instalação (migração 8, âncora, pré-verificação PD-76), sem nenhuma autoridade activada. “Definido” significa uma decisão já fornecida ou validada pelo projecto; “pendente” requer validação posterior e não deve ser inferido.
 
 ## Visão geral
 
@@ -10,7 +10,7 @@ Este documento regista a fundação E1.01, a primeira aplicação desktop E1.02,
 
 A migração 7 acrescenta somente triggers contra substituições por `rowid` e mudanças das ligações de empresas, estabelecimentos e associações. Preserva migrações 1–6, dados e isolamento por tenant. O motor captura o pedido uma vez; nada é exposto por HTTP/IPC e não há autorização operacional. Revista em [E1.07-D2-R2](tasks/E1.07-D2-R2.md): NO-GO (D-190) — com `foreign_keys` desligado, a eliminação e reinserção de uma associação empresarial ainda transfere atribuições (D-191, PD-70), e as guardas de `rowid` dependem de `NEW.rowid` indefinido (D-192, PD-72). Não integrada em `main`.
 
-Complementada por [E1.07-D2-R3](tasks/E1.07-D2-R3.md), que corrige a própria migração 7 (não integrada, sem bases não descartáveis dependentes; D-194): associações empresariais desactivadas, nunca eliminadas (D-195, PD-70); guardas de `rowid` só para `rowid` explícitos positivos e recusa de `rowid` não positivo num AFTER INSERT (D-196, PD-72); `installation_bootstrap` gravado uma vez, imutável e não eliminável (D-197, PD-73; política de identidades do administrador inicial em PD-75, Gate D3). Revista em [E1.07-D2-R4](tasks/E1.07-D2-R4.md): **GO** (D-200); integrada em `main` pelo PR #15 (merge `dc5b046`), o que encerra E1.07-D2 (D-203). Fronteira confirmada: os triggers protegem as ligações de autoridade contra escritas SQL pela ligação normal em qualquer configuração de `foreign_keys`/`recursive_triggers`, mas não a autenticação: um escritor SQL pode substituir credenciais. Com FK desligado, as linhas `users` e `branch_memberships` continuam elimináveis. Nenhuma autoridade baseada em `installation_bootstrap` fica operacional antes da política da PD-75 (D-201).
+Complementada por [E1.07-D2-R3](tasks/E1.07-D2-R3.md), que corrige a própria migração 7 (não integrada, sem bases não descartáveis dependentes; D-194): associações empresariais desactivadas, nunca eliminadas (D-195, PD-70); guardas de `rowid` só para `rowid` explícitos positivos e recusa de `rowid` não positivo num AFTER INSERT (D-196, PD-72); `installation_bootstrap` gravado uma vez, imutável e não eliminável (D-197, PD-73; política de identidades do administrador inicial em PD-75, Gate D3). Revista em [E1.07-D2-R4](tasks/E1.07-D2-R4.md): **GO** (D-200); integrada em `main` pelo PR #15 (merge `dc5b046`), o que encerra E1.07-D2 (D-203). Fronteira confirmada: os triggers protegem as ligações de autoridade contra escritas SQL pela ligação normal em qualquer configuração de `foreign_keys`/`recursive_triggers`, mas não a autenticação: um escritor SQL pode substituir credenciais. Com FK desligado, as linhas `users` e `branch_memberships` continuam elimináveis. Nenhuma autoridade baseada em `installation_bootstrap` fica operacional antes da política da PD-75 (D-201). **E1.07-D3-G0 (branch, a rever):** a migração 8 fecha essa eliminação em qualquer configuração; ver [Gate da instalação](#autorização-gate-da-instalação-e107-d3-g0).
 
 O KIL Business será um ERP híbrido e modular. A aplicação desktop operará com serviços e dados locais, enquanto serviços centrais em PostgreSQL suportarão capacidades centralizadas e sincronização. O monitor móvel será opcional e apenas consultará indicadores sincronizados quando for implementado.
 
@@ -381,6 +381,32 @@ LocalService.internalAuthorization (interno, não autenticado, READY)
 - **Motor (D-182):** leitor de factos no pacote `database`, motor no serviço local; sem *cache* de permissões; pedidos da instalação recusados até D3; estados empresariais segundo D1: em qualquer estado o motor concede as permissões `ADMINISTRATION`, sem operação executável (D-186; aplicação de D-159 em D3/D4).
 - **Repositórios (D-183):** D-020, D-034, D-039; suites de contrato sobre SQLite e através do serviço.
 
+## Autorização: Gate da instalação (E1.07-D3-G0)
+
+Implementado na branch `feat/e107-d3-g0-installation-authority`, a rever em E1.07-D3-G0-M (D-205 a D-213). **Não activa nenhuma autoridade**: o motor continua a recusar todos os pedidos da instalação (`no-installation-authority`) e a activação está bloqueada até à recuperação aprovada (PD-77). Detalhe, reprodução da PD-75 e modelo de ameaças em [tasks/E1.07-D3-G0.md](tasks/E1.07-D3-G0.md).
+
+```text
+installation_bootstrap (imutável, migração 7) ──▶ initial_administrator_id
+        │                                              │
+        │   readInstallationAnchor() / verifyAnchor()  ▼
+        └──────────────▶ users (nunca eliminado, created_at imutável — migração 8)
+                         + password_credentials (nunca eliminada — migração 4)
+                         intact  ⇔ existe ∧ created_at = completed_at ∧ tem credencial
+                         broken  ⇔ caso contrário (recusa fechada, sem procurar outra identidade)
+
+identityProvisioning.users.changeStatus / credentials.replace
+        └─ administrador inicial ──▶ InitialAdministratorProtectedError (sem autoridade da instalação)
+
+LocalService.start ──▶ inspectMigrations ──▶ [pendentes] findNonPositiveRowids (10 tabelas)
+        └─ linhas rowid ≤ 0 ──▶ legacy-rowid-incompatible (ficheiro inalterado; sem renumeração)
+```
+
+- **Migração 8 (D-206):** só triggers; `users` e `branch_memberships` desactivados, nunca eliminados; `UPDATE OF username` para o de outra identidade recusado antes da resolução de conflitos (fecha a eliminação implícita de `UPDATE OR REPLACE`); `users.created_at` imutável. Somas 1–7 inalteradas.
+- **Âncora (D-207):** única fonte admissível da identidade do administrador inicial para a futura autoridade; `status()` é descritivo.
+- **Administrador inicial (D-208):** estado e credencial recusados pelo provisionamento interno enquanto não existir autoridade da instalação.
+- **Fronteira (D-209):** o esquema impede eliminar, reutilizar e redireccionar; não impede editar no lugar (nome, estado, credencial) por SQL. Sem garantias contra quem controla o esquema, o ficheiro, o código ou o sistema operativo.
+- **PD-76 (D-211):** pré-verificação no serviço local antes de qualquer migração pendente; `runMigrations` continua primitiva (PD-79 para o instalador).
+
 ## Decisões definidas
 
 - Monorepositório com pnpm workspaces e Git.
@@ -439,7 +465,7 @@ LocalService.internalAuthorization (interno, não autenticado, READY)
 - Estratégia e protocolo de sincronização, resolução de conflitos, idempotência e operação offline.
 - Modelo de tenancy no PostgreSQL (colunas, schemas ou bases separadas), row-level security e driver PostgreSQL.
 - Framework de empacotamento, actualizações e assinatura de código do Electron.
-- Administração e integração da autorização (E1.07-D3 e E1.07-D4; a persistência de E1.07-D2 está integrada, com as ressalvas PD-69 a PD-71; a correcção E1.07-D2-R1, complementada por E1.07-D2-R3 (PD-70, PD-72 a PD-74, D-194 a D-199), revista em E1.07-D2-R4 com GO (D-200) e integrada pelo PR #15, `dc5b046`; PD-75 no Gate D3 e condição de activação, D-201; PD-76 antes de migrar bases existentes) e recuperação de conta (E1.07-E); origem autenticada do `TenantContext` (E1.07-D4). O modelo de identidade e associações está definido desde E1.07-A, a autenticação local desde E1.07-B e as sessões locais desde E1.07-C; o transporte da sessão até à interface fica para E1.08 (PD-42).
+- Administração e integração da autorização (E1.07-D3 e E1.07-D4; a persistência de E1.07-D2 está integrada, com as ressalvas PD-69 a PD-71; a correcção E1.07-D2-R1, complementada por E1.07-D2-R3 (PD-70, PD-72 a PD-74, D-194 a D-199), revista em E1.07-D2-R4 com GO (D-200) e integrada pelo PR #15, `dc5b046`; PD-75 no Gate D3 e condição de activação, D-201; PD-76 antes de migrar bases existentes; ambas tratadas na branch de E1.07-D3-G0, D-206 a D-211, a rever), recuperação administrativa do administrador inicial (proposta R1/R2, D-210; PD-77 bloqueia a activação) e recuperação de conta (E1.07-E); política de eliminação de empresas e estabelecimentos (PD-78); origem autenticada do `TenantContext` (E1.07-D4). O modelo de identidade e associações está definido desde E1.07-A, a autenticação local desde E1.07-B e as sessões locais desde E1.07-C; o transporte da sessão até à interface fica para E1.08 (PD-42).
 - Hosting, observabilidade, backups, recuperação de desastre e topologia de implantação.
 - Biblioteca de componentes e sistema visual definitivo.
 - Versões e arquitectura concretas do React Native quando começar o monitor móvel.
