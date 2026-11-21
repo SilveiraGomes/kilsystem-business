@@ -55,7 +55,7 @@ Copie `.env.example` para `.env` apenas no ambiente local e substitua os marcado
 - `services/central-api`: API Fastify para serviços centrais.
 - `services/sync-service`: futuro serviço de sincronização.
 - `packages/shared-types`: contratos de domínio multiempresa, identidades locais, associações a empresas e estabelecimentos, sessões e contratos de autorização (E1.07-D1).
-- `packages/database`: persistência SQLite local isolada por empresa, incluindo identidades e associações (migração 2), credenciais (migração 3) e sessões locais (migração 4).
+- `packages/database`: persistência SQLite local isolada por empresa, incluindo identidades e associações (migração 2), credenciais (migração 3), sessões locais (migração 4) e perfis, concessões e atribuições RBAC (migração 6, E1.07-D2).
 - Restantes `packages/*`: fronteiras partilhadas, ainda sem regras de negócio.
 - `tests`: verificações transversais iniciais.
 - `docs`: decisões de arquitectura.
@@ -95,7 +95,12 @@ A imutabilidade transversal dos restantes contratos de domínio (PD-64) foi inte
 mas a revisão [E1.07-D1-H-M](docs/tasks/E1.07-D1-H-M.md) recomendou NO-GO: a política fiscal
 conserva o objecto original mutável como receptor da função de validação (RV-D1-H-M-01).
 A correcção [E1.07-D1-H-R1](docs/tasks/E1.07-D1-H-R1.md) foi integrada no PR #12 e aprovada pela
-revisão [E1.07-D1-H-R2](docs/tasks/E1.07-D1-H-R2.md): PD-64 está encerrada. D2 continua suspensa e
-não autorizada até aprovação explícita, e o RBAC continua não operacional.
+revisão [E1.07-D1-H-R2](docs/tasks/E1.07-D1-H-R2.md): PD-64 está encerrada.
+
+E1.07-D2 (branch `feat/e107-d2-rbac-persistence`, por rever) acrescenta a migração 6 com perfis,
+concessões e atribuições isolados por tenant, os repositórios RBAC SQLite e um motor interno que
+avalia os factos persistidos com o catálogo oficial. A decisão produzida é de domínio, não é
+autorização operacional: não há HTTP, IPC, login RBAC nem `TenantContext` autenticado, e o RBAC
+continua não operacional até E1.07-D4.
 
 Consulte [docs/architecture.md](docs/architecture.md) e [AGENTS.md](AGENTS.md) antes de contribuir. Para retomar o trabalho noutra sessão ou com outro agente, comece por [docs/project-status.md](docs/project-status.md).

@@ -648,13 +648,14 @@ describe('Domain contract immutability (E1.07-D1-H, PD-64)', () => {
         maxTrackedKeys: 10000,
       });
 
-      expect(() => (MIGRATIONS as unknown as unknown[]).push({ name: 'x', sql: '', version: 6 })).toThrow(TypeError);
+      expect(() => (MIGRATIONS as unknown as unknown[]).push({ name: 'x', sql: '', version: 7 })).toThrow(TypeError);
       for (const migration of MIGRATIONS) {
         expect(() => {
           (migration as unknown as Record<string, unknown>)['sql'] = 'DROP TABLE users';
         }).toThrow(TypeError);
       }
-      expect(MIGRATIONS.map((migration) => migration.version)).toEqual([1, 2, 3, 4, 5]);
+      // E1.07-D2 acrescenta a migração 6; a lista continua congelada.
+      expect(MIGRATIONS.map((migration) => migration.version)).toEqual([1, 2, 3, 4, 5, 6]);
 
       expect(() => {
         (EMPTY_COMMON_PASSWORD_LIST as unknown as Record<string, unknown>)['includes'] = () => true;

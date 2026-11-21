@@ -334,12 +334,240 @@ BEGIN
 END;
 `;
 
+// E1.07-D2 (D-179 a D-183): perfis, concessões e atribuições RBAC por tenant. Só acrescenta tabelas,
+// índices e triggers; não altera tabelas, dados nem as migrações 1 a 5, e não cria perfis, concessões
+// nem atribuições (nenhum privilégio implícito).
+// - Chaves estrangeiras compostas com `tenant_id` (e `company_id`) impedem relações entre tenants,
+//   sempre `ON DELETE RESTRICT`, sem cascatas.
+// - O catálogo de permissões continua em código (D-149): não há tabela de permissões. A base só
+//   impõe a gramática básica do código e recusa os prefixos da instalação e da plataforma; a
+//   admissibilidade no catálogo oficial é verificada pela aplicação. `catalog_version` regista a
+//   versão do catálogo oficial em que a concessão foi feita (D-181).
+// - A unicidade das atribuições usa dois índices únicos parciais: com `branch_id` nulo, um UNIQUE
+//   convencional admitiria duplicados `COMPANY_WIDE`. Não depende do estado (reactivar, não duplicar).
+// - Os triggers BEFORE INSERT correm antes da resolução de conflitos e da verificação das chaves
+//   estrangeiras, em qualquer configuração de `foreign_keys`/`recursive_triggers`: recusam
+//   reinserções (REPLACE, UPSERT) e referências inexistentes, contraditórias ou de outro tenant, e
+//   exigem, na criação e na reactivação de uma atribuição, perfil, associação e estabelecimento activos
+//   e um âmbito contido no da associação.
+// Fronteira de confiança (como D-126): protege contra defeitos da aplicação e escritas SQL pela
+// ligação normal; não protege contra quem controle o esquema ou o ficheiro.
+const V6_RBAC_ROLES_PERMISSIONS_ASSIGNMENTS = `
+CREATE TABLE roles (
+  id TEXT PRIMARY KEY NOT NULL,
+  tenant_id TEXT NOT NULL,
+  company_id TEXT NOT NULL,
+  code TEXT NOT NULL CHECK (
+    length(code) BETWEEN 2 AND 64 AND code = upper(code) AND code GLOB '[A-Z]*' AND code NOT GLOB '*[^A-Z0-9_-]*'
+  ),
+  name TEXT NOT NULL CHECK (length(trim(name)) > 0),
+  description TEXT CHECK (description IS NULL OR length(trim(description)) > 0),
+  status TEXT NOT NULL CHECK (status IN ('ACTIVE', 'INACTIVE')),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  CONSTRAINT roles_company_fk FOREIGN KEY (company_id, tenant_id)
+    REFERENCES companies (id, tenant_id) ON UPDATE RESTRICT ON DELETE RESTRICT,
+  CONSTRAINT roles_code_unique_per_tenant UNIQUE (tenant_id, code),
+  CONSTRAINT roles_id_tenant_unique UNIQUE (id, tenant_id),
+  CONSTRAINT roles_id_tenant_company_unique UNIQUE (id, tenant_id, company_id),
+  CONSTRAINT roles_chronology CHECK (updated_at >= created_at)
+) STRICT;
+
+CREATE INDEX roles_tenant_company_idx ON roles (tenant_id, company_id);
+
+CREATE TABLE role_permissions (
+  tenant_id TEXT NOT NULL,
+  role_id TEXT NOT NULL,
+  permission_code TEXT NOT NULL CHECK (
+    length(permission_code) BETWEEN 3 AND 96
+    AND permission_code NOT GLOB '*[^a-z0-9._]*'
+    AND length(permission_code) - length(replace(permission_code, '.', '')) BETWEEN 1 AND 3
+    AND ('.' || permission_code) NOT GLOB '*.[^a-z]*'
+    AND (permission_code || '.') NOT GLOB '*[._].*'
+    AND permission_code NOT GLOB '*.'
+    AND permission_code NOT GLOB '*__*'
+    AND ('.' || permission_code || '.') NOT GLOB '*.all.*'
+    AND ('.' || permission_code || '.') NOT GLOB '*.any.*'
+    AND permission_code NOT GLOB 'installation.*'
+    AND permission_code NOT GLOB 'platform.*'
+  ),
+  catalog_version INTEGER NOT NULL CHECK (catalog_version >= 1),
+  created_at TEXT NOT NULL,
+  CONSTRAINT role_permissions_pk PRIMARY KEY (tenant_id, role_id, permission_code),
+  CONSTRAINT role_permissions_role_fk FOREIGN KEY (role_id, tenant_id)
+    REFERENCES roles (id, tenant_id) ON UPDATE RESTRICT ON DELETE RESTRICT
+) STRICT;
+
+CREATE INDEX role_permissions_role_idx ON role_permissions (role_id, tenant_id);
+
+CREATE TABLE role_assignments (
+  id TEXT PRIMARY KEY NOT NULL,
+  tenant_id TEXT NOT NULL,
+  company_id TEXT NOT NULL,
+  role_id TEXT NOT NULL,
+  company_membership_id TEXT NOT NULL,
+  scope TEXT NOT NULL CHECK (scope IN ('COMPANY_WIDE', 'BRANCH')),
+  branch_id TEXT,
+  status TEXT NOT NULL CHECK (status IN ('ACTIVE', 'INACTIVE')),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  CONSTRAINT role_assignments_role_fk FOREIGN KEY (role_id, tenant_id, company_id)
+    REFERENCES roles (id, tenant_id, company_id) ON UPDATE RESTRICT ON DELETE RESTRICT,
+  CONSTRAINT role_assignments_membership_fk FOREIGN KEY (company_membership_id, tenant_id, company_id)
+    REFERENCES company_memberships (id, tenant_id, company_id) ON UPDATE RESTRICT ON DELETE RESTRICT,
+  CONSTRAINT role_assignments_branch_fk FOREIGN KEY (branch_id, tenant_id, company_id)
+    REFERENCES branches (id, tenant_id, company_id) ON UPDATE RESTRICT ON DELETE RESTRICT,
+  CONSTRAINT role_assignments_scope_branch CHECK (
+    (scope = 'COMPANY_WIDE' AND branch_id IS NULL) OR (scope = 'BRANCH' AND branch_id IS NOT NULL)
+  ),
+  CONSTRAINT role_assignments_chronology CHECK (updated_at >= created_at)
+) STRICT;
+
+CREATE UNIQUE INDEX role_assignments_company_wide_unique
+  ON role_assignments (tenant_id, company_membership_id, role_id) WHERE scope = 'COMPANY_WIDE';
+CREATE UNIQUE INDEX role_assignments_branch_unique
+  ON role_assignments (tenant_id, company_membership_id, role_id, branch_id) WHERE scope = 'BRANCH';
+CREATE INDEX role_assignments_membership_idx ON role_assignments (tenant_id, company_membership_id);
+CREATE INDEX role_assignments_role_idx ON role_assignments (tenant_id, role_id);
+
+CREATE TRIGGER roles_insert_requires_new_role_in_company
+BEFORE INSERT ON roles
+WHEN EXISTS (SELECT 1 FROM roles WHERE id = NEW.id OR (tenant_id = NEW.tenant_id AND code = NEW.code))
+  OR NOT EXISTS (SELECT 1 FROM companies WHERE id = NEW.company_id AND tenant_id = NEW.tenant_id)
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: roles are never re-inserted and belong to a company of the same tenant');
+END;
+
+CREATE TRIGGER roles_identity_immutable
+BEFORE UPDATE OF id, tenant_id, company_id, code, created_at ON roles
+WHEN NEW.id IS NOT OLD.id OR NEW.tenant_id IS NOT OLD.tenant_id OR NEW.company_id IS NOT OLD.company_id
+  OR NEW.code IS NOT OLD.code OR NEW.created_at IS NOT OLD.created_at
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: roles id, tenant, company, code and creation are immutable');
+END;
+
+CREATE TRIGGER roles_never_deleted
+BEFORE DELETE ON roles
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: roles are deactivated, never deleted');
+END;
+
+CREATE TRIGGER role_permissions_insert_requires_new_grant_on_tenant_role
+BEFORE INSERT ON role_permissions
+WHEN EXISTS (
+    SELECT 1 FROM role_permissions
+    WHERE tenant_id = NEW.tenant_id AND role_id = NEW.role_id AND permission_code = NEW.permission_code
+  )
+  OR NOT EXISTS (SELECT 1 FROM roles WHERE id = NEW.role_id AND tenant_id = NEW.tenant_id)
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: role_permissions are never re-inserted and require a role of the same tenant');
+END;
+
+CREATE TRIGGER role_permissions_immutable
+BEFORE UPDATE ON role_permissions
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: role_permissions are immutable; revoke and grant instead');
+END;
+
+CREATE TRIGGER role_assignments_insert_requires_new_eligible_assignment
+BEFORE INSERT ON role_assignments
+WHEN EXISTS (
+    SELECT 1 FROM role_assignments
+    WHERE id = NEW.id OR (
+      tenant_id = NEW.tenant_id AND company_membership_id = NEW.company_membership_id AND role_id = NEW.role_id
+      AND scope = NEW.scope AND branch_id IS NEW.branch_id
+    )
+  )
+  OR NOT (
+    EXISTS (
+      SELECT 1 FROM roles
+      WHERE id = NEW.role_id AND tenant_id = NEW.tenant_id AND company_id = NEW.company_id AND status = 'ACTIVE'
+    )
+    AND EXISTS (
+      SELECT 1 FROM company_memberships AS m
+      WHERE m.id = NEW.company_membership_id AND m.tenant_id = NEW.tenant_id AND m.company_id = NEW.company_id
+        AND m.status = 'ACTIVE'
+        AND (
+          (NEW.scope = 'COMPANY_WIDE' AND NEW.branch_id IS NULL AND m.scope = 'COMPANY_WIDE')
+          OR (
+            NEW.scope = 'BRANCH' AND EXISTS (
+              SELECT 1 FROM branches AS b
+              WHERE b.id = NEW.branch_id AND b.tenant_id = NEW.tenant_id AND b.company_id = NEW.company_id
+                AND b.status = 'ACTIVE'
+            )
+            AND (
+              m.scope = 'COMPANY_WIDE' OR EXISTS (
+                SELECT 1 FROM branch_memberships AS l
+                WHERE l.company_membership_id = m.id AND l.tenant_id = NEW.tenant_id AND l.company_id = NEW.company_id
+                  AND l.branch_id = NEW.branch_id AND l.status = 'ACTIVE'
+              )
+            )
+          )
+        )
+    )
+  )
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: role_assignments are never re-inserted and require active, same-tenant references within the membership scope');
+END;
+
+CREATE TRIGGER role_assignments_binding_immutable
+BEFORE UPDATE OF id, tenant_id, company_id, role_id, company_membership_id, scope, branch_id, created_at
+  ON role_assignments
+WHEN NEW.id IS NOT OLD.id OR NEW.tenant_id IS NOT OLD.tenant_id OR NEW.company_id IS NOT OLD.company_id
+  OR NEW.role_id IS NOT OLD.role_id OR NEW.company_membership_id IS NOT OLD.company_membership_id
+  OR NEW.scope IS NOT OLD.scope OR NEW.branch_id IS NOT OLD.branch_id OR NEW.created_at IS NOT OLD.created_at
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: role_assignments references are immutable');
+END;
+
+CREATE TRIGGER role_assignments_reactivation_requires_eligibility
+BEFORE UPDATE OF status ON role_assignments
+WHEN NEW.status = 'ACTIVE' AND OLD.status <> 'ACTIVE' AND NOT (
+  EXISTS (
+    SELECT 1 FROM roles
+    WHERE id = OLD.role_id AND tenant_id = OLD.tenant_id AND company_id = OLD.company_id AND status = 'ACTIVE'
+  )
+  AND EXISTS (
+    SELECT 1 FROM company_memberships AS m
+    WHERE m.id = OLD.company_membership_id AND m.tenant_id = OLD.tenant_id AND m.company_id = OLD.company_id
+      AND m.status = 'ACTIVE'
+      AND (
+        (OLD.scope = 'COMPANY_WIDE' AND m.scope = 'COMPANY_WIDE')
+        OR (
+          OLD.scope = 'BRANCH' AND EXISTS (
+            SELECT 1 FROM branches AS b
+            WHERE b.id = OLD.branch_id AND b.tenant_id = OLD.tenant_id AND b.company_id = OLD.company_id
+              AND b.status = 'ACTIVE'
+          )
+          AND (
+            m.scope = 'COMPANY_WIDE' OR EXISTS (
+              SELECT 1 FROM branch_memberships AS l
+              WHERE l.company_membership_id = m.id AND l.tenant_id = OLD.tenant_id AND l.company_id = OLD.company_id
+                AND l.branch_id = OLD.branch_id AND l.status = 'ACTIVE'
+            )
+          )
+        )
+      )
+  )
+)
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: role_assignments reactivation requires active, same-tenant references within the membership scope');
+END;
+
+CREATE TRIGGER role_assignments_never_deleted
+BEFORE DELETE ON role_assignments
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: role_assignments are deactivated, never deleted');
+END;
+`;
+
 export const MIGRATIONS: readonly Migration[] = Object.freeze([
   Object.freeze({ name: 'create_companies_and_branches', sql: V1_COMPANIES_AND_BRANCHES, version: 1 }),
   Object.freeze({ name: 'create_users_and_memberships', sql: V2_USERS_AND_MEMBERSHIPS, version: 2 }),
   Object.freeze({ name: 'create_credentials_and_authentication', sql: V3_CREDENTIALS_AND_AUTHENTICATION, version: 3 }),
   Object.freeze({ name: 'create_sessions_and_security_versions', sql: V4_SESSIONS_AND_SECURITY_VERSIONS, version: 4 }),
   Object.freeze({ name: 'protect_security_versions_against_reinsertion', sql: V5_SECURITY_VERSION_REINSERTION, version: 5 }),
+  Object.freeze({ name: 'create_rbac_roles_permissions_assignments', sql: V6_RBAC_ROLES_PERMISSIONS_ASSIGNMENTS, version: 6 }),
 ]);
 
 export const migrationChecksum = (migration: Migration): string =>

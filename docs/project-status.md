@@ -1,6 +1,6 @@
 # Estado do projecto
 
-Última verificação: 2026-11-21, em E1.07-D1-H-R2 (branch `feat/e107-d1-h-domain-immutability`; checkpoint revisto `3831700`; `origin/main` observado em `5745d3d`, merge do PR #12).
+Última verificação: 2026-11-21, em E1.07-D2 (branch `feat/e107-d2-rbac-persistence`, criada a partir de `main` = `origin/main` = `5bf2e00`, merge do registo documental `db6a582` autorizado pelo responsável, D-179).
 
 Este documento é o ponto de retoma para qualquer agente ou pessoa. Contém apenas factos verificados no repositório ou por execução; o que não foi executado está marcado como tal.
 
@@ -38,18 +38,21 @@ Este documento é o ponto de retoma para qualquer agente ou pessoa. Contém apen
 | E1.07-D1-H-M — Revisão independente da imutabilidade | Concluída; **NO-GO** por RV-D1-H-M-01; PD-64 aberta | `1ccb997` (`docs: record independent domain immutability review`) | [tasks/E1.07-D1-H-M.md](tasks/E1.07-D1-H-M.md) |
 | E1.07-D1-H-R1 — Isolamento da política fiscal (RV-D1-H-M-01) | Integrada no PR #12; aprovada por H-R2 | `3831700`; merge `5745d3d` | [tasks/E1.07-D1-H-R1.md](tasks/E1.07-D1-H-R1.md) |
 | E1.07-D1-H-R2 — Revisão final da correcção fiscal | Concluída; **GO**; PD-64 encerrada; não autoriza D2 | `docs: record final tax policy isolation review` | [tasks/E1.07-D1-H-R2.md](tasks/E1.07-D1-H-R2.md) |
-| E1.07-D2 | **Suspensa, não autorizada** até aprovação explícita | — | [tasks/E1.07-D2.md](tasks/E1.07-D2.md) |
+| E1.07-D1-H-R2 — integração do registo em `main` | Autorizada pelo responsável nesta sessão; merge sem *fast-forward* | `5bf2e00` (pais `5745d3d`, `db6a582`) | D-179 |
+| E1.07-D2 — Persistência RBAC e motor interno sobre concessões persistidas | Implementada na branch `feat/e107-d2-rbac-persistence`; **por rever** (E1.07-D2-M), sem merge; RBAC não operacional | `feat: add tenant-isolated RBAC persistence and internal evaluation` | [tasks/E1.07-D2.md](tasks/E1.07-D2.md) |
 | E1.07-D3, E1.07-D4, E1.07-E, E1.07-F | Planeadas, não autorizadas | — | [tasks/E1.07-D.md](tasks/E1.07-D.md), [tasks/E1.07.md](tasks/E1.07.md) |
 | E1.08 a E1.10 | Planeadas, não autorizadas | — | [implementation-plan.md](implementation-plan.md) |
 
-Tarefa activa: **nenhuma implementação nova autorizada.** [E1.07-D1-H-R2](tasks/E1.07-D1-H-R2.md) aprovou a correcção fiscal `3831700`, já integrada pelo responsável no PR #12 (`5745d3d`), e encerrou PD-64 (D-178). A revisão confirmou receptor neutro e congelado, `Reflect.apply` capturado, leitura única, contrato `this: void`, H13 corrigido, HR01–HR15 e 7/7 mutações críticas. PD-65 e PD-67 permanecem abertas para E1.07-F. E1.07-D2 continua suspensa e não autorizada até aprovação explícita.
+Tarefa activa: **[E1.07-D2](tasks/E1.07-D2.md), implementada e publicada na branch `feat/e107-d2-rbac-persistence`, a aguardar a revisão independente E1.07-D2-M e aprovação explícita (sem merge).** Migração 6 (perfis, concessões e atribuições isolados por tenant, FK compostas, índices únicos parciais, triggers eficazes com as FK desligadas), repositórios RBAC SQLite, motor interno de domínio com o catálogo oficial fixo e tratamento inicial de PD-61 (D-179 a D-183). Testes: 834 (755 anteriores + 79 novos), 19/19 mutações detectadas. **O RBAC continua não operacional**: sem HTTP, IPC, login RBAC nem `TenantContext` autenticado (PD-27 em D4).
+
+Anterior: [E1.07-D1-H-R2](tasks/E1.07-D1-H-R2.md) aprovou a correcção fiscal `3831700`, já integrada pelo responsável no PR #12 (`5745d3d`), e encerrou PD-64 (D-178). A revisão confirmou receptor neutro e congelado, `Reflect.apply` capturado, leitura única, contrato `this: void`, H13 corrigido, HR01–HR15 e 7/7 mutações críticas. PD-65 e PD-67 permanecem abertas para E1.07-F. E1.07-D2 continua suspensa e não autorizada até aprovação explícita.
 
 - **Inventário** de todas as estruturas de nível de módulo de `packages`, `services` e `apps`, classificadas A/B/C/D.
 - **16 riscos reproduzidos** sobre o build da `main` (as sete listas da PD-64, regra fiscal exposta por `TaxIdPolicy.ruleFor`, extensões da base, arrays internos das transições do serviço, limites internos das credenciais e listas da configuração); nenhum acima de gravidade baixa.
 - **Protecção (D-171), com ressalva D-173 corrigida na branch por D-176:** `Object.freeze` em listas e em cada nível das estruturas aninhadas; a regra fiscal devolvida conservava uma referência ao receptor original mutável (RV-D1-H-M-01), corrigido em H-R1.
 - **Testes e mutações:** H01–H20 (D1-H) e HR01–HR15 (H-R1), 755 testes no total; 27/27 mutações em D1-H e 17/17 em H-R1.
 
-PD-64 está encerrada (D-178). PD-65 permanece para diagnóstico definitivo em E1.07-F (D-174/D-177), e PD-67 permanece aberta (D-177). PD-66 está encerrada (D-175). **O RBAC não está operacional**, nada está persistido nem ligado ao serviço, e o `TenantContext` continua construído pelo chamador. D2 está suspensa e não autorizada; D3/D4, E1.07-E/F e E1.08–E1.10 permanecem não autorizadas.
+PD-64 está encerrada (D-178). PD-65 permanece para diagnóstico definitivo em E1.07-F (D-174/D-177), e PD-67 permanece aberta (D-177). PD-66 está encerrada (D-175). **O RBAC não está operacional**: em `main` nada está persistido; na branch de D2 existe persistência e um motor interno não autenticado, e o `TenantContext` continua construído pelo chamador. D3/D4, E1.07-E/F e E1.08–E1.10 permanecem não autorizadas.
 
 Validação final da revisão H-M: `pnpm check` foi executado em 2026-11-20 com Node 24.22.3 e falhou durante `eslint .` por `JavaScript heap out of memory` (cerca de 4,1 GB; exit 134), antes de `typecheck`, testes e build. Não foi repetido nem contornado com aumento de heap. Nas execuções independentes anteriores, `pnpm lint`, `pnpm typecheck` e `pnpm build` (12/12) passaram; a suite permaneceu instável conforme PD-65. O resultado obrigatório não é declarado aprovado. H-R1 reproduziu essa falha com dois worktrees dentro da raiz e explicou-a (D-177); o resultado de `pnpm check` em H-R1 está na secção “Validação verificada”.
 
@@ -153,6 +156,16 @@ node -v   # v24.22.3
 Noutra máquina, instale o Node 24.22.3 (instalador oficial ou um gestor de versões que leia `.node-version`, como o fnm) e o pnpm 9.15.9. Com o Node 24 em Windows x64 não são necessárias ferramentas de compilação C++: o `better-sqlite3` descarrega um binário pré-compilado.
 
 ## Validação verificada
+
+### E1.07-D2 (persistência RBAC e motor interno), 2026-11-21
+
+Executado com Node.js 24.22.3 e pnpm 9.15.9, cada comando sozinho, sem suites concorrentes:
+
+- Linha de base em `main` `5bf2e00`: `pnpm.cmd check` aprovado (755/755, 12/12).
+- Na branch: `pnpm.cmd check` final **aprovado** (lint, typecheck, **834/834** em 22 ficheiros, 12/12; 138,6 s), sem *timeouts* nem OOM; desktop 6/6; smoke `KIL_ELECTRON_SMOKE_OK`; `git diff --check` sem erros.
+- Mutações: **19/19 detectadas**; SHA-256 dos quatro ficheiros reposto e confirmado depois de cada uma.
+- `pnpm audit`: só `minimatch` moderada (PD-19); `audit --prod` 0. Sem dependências novas; `migrations.ts` só com adições; somas das migrações 1–5 inalteradas.
+- Suite sem `dist`: ver [tasks/E1.07-D2.md](tasks/E1.07-D2.md#81-suite-sem-artefactos-dist). Detalhe em [tasks/E1.07-D2.md](tasks/E1.07-D2.md).
 
 ### E1.07-D1-H-R1 (isolamento da política fiscal), 2026-11-20/21
 
@@ -528,7 +541,8 @@ Notas sobre o arranque do Electron:
   Sem permissões nem tenant. Disponível apenas na composição interna do serviço local.
 - Exclusividade do serviço local por base SQLite (E1.07-X, integrada pelo PR #7, merge `1872bdf`): bloqueio exclusivo do SQLite comprovado antes de qualquer leitura ou escrita, identificação canónica da base e recusa `database-locked`.
 - Contratos de autorização em `packages/shared-types` (PR #8, corrigidos por E1.07-D1-R1 no PR #9 e aprovados por E1.07-D1-R2): autoridades, `PermissionCode`, catálogo inicial de 24 permissões com proveniência, perfis, concessões, atribuições, decisões reconhecidas por registo privado e regras puras de avaliação, interfaces dos repositórios. **Não operacionais**: sem persistência, sem ligação ao serviço e sem emissão de `TenantContext`.
-- Na branch de E1.07-D1-H, por rever e integrar: imutabilidade em execução das listas de valores, limites e regras de validação dos restantes módulos (D-171).
+- Imutabilidade em execução das listas de valores, limites e regras de validação dos restantes módulos (E1.07-D1-H, D-171; correcção fiscal D-176, aprovada em D-178).
+- Na branch de E1.07-D2, por rever e integrar: migração 6 e repositórios RBAC SQLite (perfis, concessões, atribuições), diagnóstico de concessões não reconhecidas (PD-61) e motor interno de avaliação de domínio sobre factos persistidos, só em `LocalService.internalAuthorization`. **Não operacional**: sem HTTP, IPC nem `TenantContext` autenticado.
 
 ### Demonstrativas, sem dados nem regras de negócio
 
@@ -540,7 +554,7 @@ Notas sobre o arranque do Electron:
 ### Ainda não desenvolvidas
 
 - Implementação das decisões de domínio D-055, D-058, D-060 e D-061 (PD-14 a PD-16).
-- Autorização RBAC efectiva (persistência, administração e integração: E1.07-D2 a E1.07-D4), protecção avançada de contas e auditoria (E1.07-E, E1.07-F); ferramenta operacional de inicialização (PD-31); API local e integração Electron (E1.08), incluindo o transporte da sessão (PD-42).
+- Autorização RBAC efectiva (administração e integração: E1.07-D3 e E1.07-D4; a persistência de E1.07-D2 está por rever), protecção avançada de contas e auditoria (E1.07-E, E1.07-F); ferramenta operacional de inicialização (PD-31); API local e integração Electron (E1.08), incluindo o transporte da sessão (PD-42).
 - Serviços centrais e PostgreSQL (E1.09); instalação, serviço Windows, cópias de segurança e Gate E1 (E1.10).
 - Regra de validação do NIF para qualquer jurisdição real (PD-09).
 - Modos de implantação B e C, sincronização e funcionamento offline entre estabelecimentos.
@@ -611,13 +625,14 @@ Notas sobre o arranque do Electron:
 | PD-58 | E1.07-D1: as regras puras só bloqueiam permissões `OPERATION` em empresas não `ACTIVE`; as permissões `ADMINISTRATION` mantêm-se aplicáveis em `DRAFT`, `SUSPENDED` e `INACTIVE`. | Sem implementação, uma empresa suspensa ou inactiva poderia continuar a ser administrada sem restrição funcional. | Política decidida em D-159: DRAFT só configuração/provisionamento; ACTIVE conforme autoridade; SUSPENDED bloqueia novos movimentos e preserva histórico/administração restrita; INACTIVE preserva histórico/consultas/exportações e impede novas operações; reactivação controlada. Implementação pendente em D3/D4. |
 | PD-59 | A autoridade sobre sessões e `cleanupSessions()` não tem permissão no catálogo inicial. | Administração de sessões continua interna e sem autorização própria. | Política decidida em D-160: separar logout próprio, gestão própria, revogação administrativa da instalação e revogação empresarial; esta última não termina sessões usadas noutras empresas. Implementação pendente em D3/D4/E. |
 | PD-60 | O catálogo inicial é técnico e conservador; sem perfis predefinidos, catálogo por sector ou segregação de funções normativa. | Operações futuras podem ficar sem correspondência explícita ou com permissões inadequadas. | Princípio decidido em D-161: toda operação protegida corresponde explicitamente a uma permissão; ocultar UI não autoriza. Validação funcional e normativa permanece pendente em D3 e módulos sectoriais. |
-| PD-61 | Uma concessão persistida pode referir código removido ou `WITHDRAWN`; persistência e versão do catálogo ainda não existem. | Concessões órfãs sem tratamento poderiam ser convertidas, eliminadas ou reutilizadas indevidamente. | Política decidida em D-162: não conceder, não converter/apagar silenciosamente, manter diagnóstico e não reutilizar significado sem migração revista. Implementação pendente em D2/D4. |
+| PD-61 | Uma concessão persistida pode referir código removido ou `WITHDRAWN`; persistência e versão do catálogo ainda não existem. | Concessões órfãs sem tratamento poderiam ser convertidas, eliminadas ou reutilizadas indevidamente. | Política decidida em D-162. **Tratamento inicial implementado em E1.07-D2 (D-181), por rever:** `catalog_version` por concessão; classificação `UNREGISTERED`/`WITHDRAWN`/`AUTHORITY_INCOMPATIBLE`/`NEWER_CATALOG`; nunca concedem (RE08); identificáveis por `diagnostics.listUnrecognized`; sem conversão nem eliminação automática; só `remove` explícito. Validação integrada em D4; apresentação administrativa em PD-68. |
 | PD-62 | E1.07-D1-M (RV-D1-M-01): decisões `GRANTED` eram estruturalmente forjáveis. | Uma futura fronteira poderia aceitar uma decisão construída pelo consumidor. | **Encerrada em E1.07-D1-R2 (D-168)**; encerramento formalizado após a integração do registo no PR #10 (D-170). R1 usa identidade e resultado registados num `WeakMap`; a revisão repetiu fabricação, clones, resposta externa e mutações. D4 continua proibida de aceitar decisões do transporte. Garantias confirmadas de novo em E1.07-D1-H (R1-M01, R1-M05). |
 | PD-63 | E1.07-D1-M (RV-D1-M-02/03): catálogo sem proveniência e definições superficialmente congeladas. | Um motor futuro poderia receber catálogo não confiável; definições públicas eram alteráveis. | **Encerrada em E1.07-D1-R2 (D-168)**; encerramento formalizado após a integração do registo no PR #10 (D-170). Proveniência `OFFICIAL`/`EXPERIMENTAL`/`UNKNOWN`, definições e listas congeladas, sem fornecedor injectável; duas instâncias falham fechadas. D2 continua obrigado a usar uma única instância e só o catálogo oficial (D-167). Garantias confirmadas de novo em E1.07-D1-H (R1-M08, R1-M09, R1-CAT). |
 | PD-64 | Imutabilidade transversal dos contratos, incluindo isolamento de `TaxIdPolicy` do objecto original. | O defeito histórico permitia alterar uma política criada por estado lido através de `this`. | **Encerrada em E1.07-D1-H-R2 (D-178).** D1-H protege listas/limites/transições; H-R1 corrigiu RV-D1-H-M-01; H-R2 confirmou HR01–HR15 e 7/7 mutações críticas. |
 | PD-65 | *Timeouts* de 5 s em Argon2id/SQLite/sessões e falhas de arranque de workers. A revisão reproduziu-os também em `0539b15`; grupos isolados variaram e H01–H20 não deixaram resíduos. | Falsos negativos intermitentes; causalidade com D1-H não demonstrada. | **Aberta** (D-174, D-177). Tratar em E1.07-F com PD-56/PD-57, medindo recursos e concorrência antes de alterar configuração. Em H-R1 nenhuma suite completa teve *timeouts* (755/755, com e sem `dist`). |
 | PD-66 | Aviso `GHSA-fc5q-39xc-vjpf` sobre `picomatch` 4.0.7, só na cadeia de desenvolvimento. | O GitHub retirou o aviso em 2026-11-18; o audit actual já não o reporta e produção permanece limpa. | **Encerrada** em E1.07-D1-H-M (D-175), sem alterações de dependências. Reabrir se o aviso for republicado. Confirmada em H-R1 (`audit` sem `picomatch`). |
 | PD-67 | `eslint .` analisa, com tipos, qualquer worktree ou cópia colocada dentro da raiz (as exclusões só cobrem `dist`, `dist-electron`, `node_modules`, `coverage`). Um worktree leva o pico a ~3,9 GiB; dois excedem o limite de *heap* por omissão (4288 MiB) e dão exit 134, como na H-M. | `pnpm check`/`pnpm lint` falham por falta de memória durante ensaios com worktrees; sem relação com o código (D-177). | **Aberta** (D-177). Proposta para E1.07-F, por aprovar: worktrees de ensaio fora da raiz e/ou exclusão explícita no ESLint. Sem aumento de *heap* nem alteração de configuração. |
+| PD-68 | E1.07-D2: as concessões persistidas fora do catálogo vigente são detectáveis (`diagnostics.listUnrecognized`), mas só por chamada interna; não há apresentação administrativa, alerta nem limpeza auditada. | Concessões obsoletas não concedem nada, mas podem acumular-se sem visibilidade para o administrador da empresa. | **Aberta.** Apresentação e limpeza autorizadas e auditadas em E1.07-D3 (autoridade do actor) e E1.07-E (auditoria). |
 
 As decisões arquitecturais ainda em aberto estão em [architecture.md](architecture.md#decisões-pendentes).
 
@@ -632,7 +647,7 @@ As decisões arquitecturais ainda em aberto estão em [architecture.md](architec
    git -c safe.directory=C:/KIL-BUSINESS status -sb         # sem "ahead"/"behind" inesperados
    git -c safe.directory=C:/KIL-BUSINESS log --oneline -n 10
    ```
-   O último `origin/main` observado é `5745d3d`, merge do PR #12, que contém `1ccb997` e `3831700`. O directório canónico é `C:\xampp\htdocs\gestao_hoteleira\kilsystem-business`; `C:\KIL-BUSINESS` é outro clone e não deve ser usado. Confirmar novamente por `fetch` antes de retomar; nunca forçar. Worktrees de ensaio ficam fora da raiz do repositório (PD-67).
+   O último `origin/main` observado é `5bf2e00`, merge sem *fast-forward* do registo documental `db6a582` (E1.07-D1-H-R2), autorizado pelo responsável (D-179); contém o PR #12 (`5745d3d`). O directório canónico é `C:\xampp\htdocs\gestao_hoteleira\kilsystem-business`; `C:\KIL-BUSINESS` é outro clone e não deve ser usado. Confirmar novamente por `fetch` antes de retomar; nunca forçar. Worktrees de ensaio ficam fora da raiz do repositório (PD-67).
 4. Executar `pnpm.cmd install --frozen-lockfile` (se `node_modules` não existir ou se a versão do Node mudou) e `pnpm.cmd check` para obter a linha de base. Registar qualquer falha antes de alterar código.
 5. Identificar a tarefa activa em `docs/tasks/`.
    - E1.06-S2 está integrada em `main` através do PR #2 (`d29a629`).
@@ -643,7 +658,8 @@ As decisões arquitecturais ainda em aberto estão em [architecture.md](architec
    - E1.07-X (exclusividade por base) está integrada em `main` através do PR #7 (`1872bdf`) e revista em E1.07-X-M; PD-43 e PD-51 estão encerradas (D-140). E1.08 continua bloqueada por PD-27 e PD-28.
    - E1.07-D1-M concluída com NO-GO; registo integrado em `main` (`f225366`). O PR #8 já estava integrado pelo responsável. O RBAC não está operacional.
    - E1.07-D1-R2 concluiu a revisão com GO para R1 e encerrou PD-62/PD-63; o registo foi integrado pelo responsável no PR #10 (`0539b15`, D-170).
-   - E1.07-D1-H-R2 aprovou a correcção integrada no PR #12 e encerrou PD-64 (D-178). O commit documental da revisão deve seguir em PR Draft separado, sem merge automático. E1.07-D2 continua **suspensa e não autorizada** até aprovação explícita.
+   - E1.07-D1-H-R2 aprovou a correcção integrada no PR #12 e encerrou PD-64 (D-178); o registo documental foi integrado em `main` (`5bf2e00`, D-179).
+   - E1.07-D2 está implementada na branch `feat/e107-d2-rbac-persistence` e aguarda a revisão independente E1.07-D2-M; não fazer merge sem aprovação explícita. Não iniciar E1.07-D3.
    - Regras ou validadores recebidos de consumidores (D-176): funções puras, invocadas sem o objecto do consumidor como receptor; propriedades lidas uma vez; estado de fechos fica fora da garantia. E1.07-D3/D4, E1.07-E/F e E1.08–E1.10 continuam planeadas mas não autorizadas.
    - Imutabilidade (D-171): novas listas de valores, limites ou definições exportadas usadas em validações são congeladas em execução (cada nível, se aninhadas) e testadas por comportamento; regras recebidas de consumidores são copiadas e congeladas na criação, sem congelar o objecto do consumidor.
    - Contratos de autorização (D-163 a D-167): decisões só se reconhecem com `inspectDomainDecision`; nunca usar `outcome` estrutural. O caminho operacional usa só `OFFICIAL_PERMISSION_CATALOG` (ou `requireOfficialPermissionCatalog`); catálogos experimentais são só para testes.
@@ -651,6 +667,7 @@ As decisões arquitecturais ainda em aberto estão em [architecture.md](architec
 6. Trabalhar apenas no âmbito da tarefa. Regras a manter:
    - qualquer implementação nova de repositório tem de passar `tests/support/tenant-repository-contract.ts` (D-021);
    - qualquer implementação de identidades ou associações tem de passar `tests/support/membership-repository-contract.ts` (D-089);
+   - qualquer implementação de perfis, concessões ou atribuições tem de passar `tests/support/authorization-repository-contract.ts` (D-183); a persistência e a avaliação RBAC usam só `OFFICIAL_PERMISSION_CATALOG` e nunca recebem catálogos, concessões ou decisões do consumidor (D-181, D-182); uma decisão de domínio nunca é autorização operacional (D4);
    - o directório de identidades (`UserDirectory`) é provisionamento interno: nunca o expor a um tenant, por HTTP ou por IPC (D-087);
    - autenticação, credenciais e inicialização são internas (D-093 a D-096). Uma `AuthenticatedIdentity` só é válida se `isAuthenticatedIdentity` a reconhecer, e nunca é uma autorização empresarial;
    - sessões só se criam com o comprovativo interno (D-108). Tokens nunca em registos, erros, base ou documentação (D-113). Qualquer novo caminho de escrita sobre o estado da identidade ou a credencial tem de respeitar os triggers de versão da migração 4 (D-110, D-111). A administração de sessões é interna (D-116);

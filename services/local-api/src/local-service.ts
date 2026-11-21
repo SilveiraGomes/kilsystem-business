@@ -3,6 +3,7 @@ import path from 'node:path';
 
 import {
   createSqliteAuthenticationStore,
+  createSqliteAuthorizationPersistence,
   createSqliteMembershipPersistence,
   createSqliteSessionStore,
   createSqliteTenantPersistence,
@@ -19,7 +20,9 @@ import {
   sqliteErrorCode,
   verifyExclusiveOwnership,
   type OpenSqliteOptions,
+  type RolePermissionDiagnostics,
   type SqliteAuthenticationStore,
+  type SqliteAuthorizationPersistence,
   type SqliteDatabase,
   type SqliteMembershipPersistence,
   type SqliteSessionStore,
@@ -28,6 +31,7 @@ import {
 } from '@kil-business/database';
 import {
   EMPTY_COMMON_PASSWORD_LIST,
+  OFFICIAL_PERMISSION_CATALOG,
   parseSessionPolicy,
   type BranchMembershipRepository,
   type BranchRepository,
@@ -35,12 +39,19 @@ import {
   type CompanyMembershipRepository,
   type CompanyRepository,
   type MembershipScopeReader,
+  type RoleAssignmentRepository,
+  type RolePermissionRepository,
+  type RoleRepository,
   type SessionPolicy,
   type UserDirectory,
 } from '@kil-business/shared-types';
 
 import type { AuthenticationBackend } from './authentication/authentication-backend.js';
 import { createCredentialManager, type CredentialManager } from './authentication/credential-manager.js';
+import {
+  createInternalDomainAuthorizationEvaluator,
+  type InternalDomainAuthorizationEvaluator,
+} from './authorization/domain-authorization-engine.js';
 import { createInstallationBootstrap, type InstallationBootstrap } from './authentication/installation-bootstrap.js';
 import { createLocalAuthenticator, type LocalAuthenticator } from './authentication/local-authenticator.js';
 import { createPasswordHasher, type PasswordHasherOptions } from './authentication/password-hashing.js';
@@ -150,6 +161,22 @@ export interface LocalServiceDependencies {
   readonly databaseLockTimeoutMs?: number;
 }
 
+/**
+ * RBAC INTERNO e NÃO AUTENTICADO (E1.07-D2): persistência de perfis, concessões e atribuições e
+ * avaliação de domínio sobre os factos persistidos. Exigem `TenantContext` construído pelo chamador
+ * (PD-27), que não prova autoridade; não verificam a autoridade do actor (E1.07-D3) e não produzem
+ * autorização operacional (E1.07-D4). Nunca expostos por HTTP, IPC Electron nem interface.
+ */
+export interface InternalAuthorization {
+  readonly roles: RoleRepository;
+  readonly rolePermissions: RolePermissionRepository;
+  readonly roleAssignments: RoleAssignmentRepository;
+  /** Concessões persistidas fora do catálogo oficial vigente (PD-61); só leitura. */
+  readonly diagnostics: RolePermissionDiagnostics;
+  /** Avaliação de domínio sobre factos persistidos; a decisão não é autorização operacional. */
+  readonly domainEvaluator: InternalDomainAuthorizationEvaluator;
+}
+
 export interface LocalService {
   readonly state: LocalServiceState;
   /** Resultado do último arranque bem-sucedido. */
@@ -185,6 +212,8 @@ export interface LocalService {
   readonly branchMemberships: BranchMembershipRepository;
   /** Avaliação interna de elegibilidade (D-088); não é autenticação nem autorização. */
   readonly membershipScopes: MembershipScopeReader;
+  /** RBAC interno e não autenticado (E1.07-D2); recusa operações fora de `READY`. */
+  readonly internalAuthorization: InternalAuthorization;
   /**
    * Autenticação local offline por username e palavra-passe (D-093). O resultado não é uma
    * sessão nem uma autorização empresarial.
@@ -204,6 +233,7 @@ interface ServiceStores {
   readonly tenant: SqliteTenantPersistence;
   readonly users: UserDirectory;
   readonly memberships: SqliteMembershipPersistence;
+  readonly authorization: SqliteAuthorizationPersistence;
   readonly authentication: SqliteAuthenticationStore;
   readonly sessions: SqliteSessionStore;
   /** Identificador aleatório deste arranque efectivo; não é o identificador da instalação. */
@@ -366,6 +396,7 @@ export const createLocalService = (
     logger.log('info', 'service.sessions_reset', { ...reset, startupDeletion: 'suspended' });
     stores = {
       authentication: createSqliteAuthenticationStore(connection),
+      authorization: createSqliteAuthorizationPersistence(connection),
       memberships: createSqliteMembershipPersistence(connection),
       serviceRunId,
       sessions: sessionStore,
@@ -516,6 +547,49 @@ export const createLocalService = (
     evaluate: (context, userId) => guarded((current) => current.memberships.scopes.evaluate(context, userId)),
   };
 
+  // RBAC interno (E1.07-D2): cada chamada obtém a persistência da ligação activa em `READY`.
+  const roles: RoleRepository = {
+    findById: (context, id) => guarded((current) => current.authorization.roles.findById(context, id)),
+    findByCode: (context, code) => guarded((current) => current.authorization.roles.findByCode(context, code)),
+    listByCompany: (context, companyId) =>
+      guarded((current) => current.authorization.roles.listByCompany(context, companyId)),
+    create: (context, role) => guarded((current) => current.authorization.roles.create(context, role)),
+    update: (context, role) => guarded((current) => current.authorization.roles.update(context, role)),
+  };
+
+  const rolePermissions: RolePermissionRepository = {
+    listByRole: (context, roleId) => guarded((current) => current.authorization.rolePermissions.listByRole(context, roleId)),
+    add: (context, grant) => guarded((current) => current.authorization.rolePermissions.add(context, grant)),
+    remove: (context, roleId, permissionCode) =>
+      guarded((current) => current.authorization.rolePermissions.remove(context, roleId, permissionCode)),
+  };
+
+  const roleAssignments: RoleAssignmentRepository = {
+    findById: (context, id) => guarded((current) => current.authorization.roleAssignments.findById(context, id)),
+    listByCompanyMembership: (context, companyMembershipId) =>
+      guarded((current) => current.authorization.roleAssignments.listByCompanyMembership(context, companyMembershipId)),
+    listByRole: (context, roleId) =>
+      guarded((current) => current.authorization.roleAssignments.listByRole(context, roleId)),
+    create: (context, assignment) =>
+      guarded((current) => current.authorization.roleAssignments.create(context, assignment)),
+    update: (context, assignment) =>
+      guarded((current) => current.authorization.roleAssignments.update(context, assignment)),
+  };
+
+  const internalAuthorization: InternalAuthorization = Object.freeze({
+    diagnostics: Object.freeze({
+      catalogVersion: OFFICIAL_PERMISSION_CATALOG.version,
+      listUnrecognized: (context) =>
+        guarded((current) => current.authorization.diagnostics.listUnrecognized(context)),
+    } satisfies RolePermissionDiagnostics),
+    domainEvaluator: createInternalDomainAuthorizationEvaluator((context, userId, companyId) =>
+      guarded((current) => current.authorization.readCompanyAuthorizationFacts(context, userId, companyId)),
+    ),
+    roleAssignments,
+    rolePermissions,
+    roles,
+  });
+
   // Autenticação (E1.07-B): cada operação obtém o armazenamento em `READY` e, depois de cada
   // derivação assíncrona, confirma que continua a ser o da ligação activa. Uma derivação que
   // termine após `stop()` (ou após um novo arranque) é recusada sem escrever (D-097).
@@ -607,6 +681,7 @@ export const createLocalService = (
     companyMemberships,
     branchMemberships,
     membershipScopes,
+    internalAuthorization,
     authentication: createLocalAuthenticator(authenticationBackend),
     get sessions() {
       return currentSessions().sessions;

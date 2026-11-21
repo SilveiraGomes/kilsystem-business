@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import {
+  createSqliteAuthorizationPersistence,
   createSqliteMembershipPersistence,
   createSqliteTenantPersistence,
   createSqliteUserDirectory,
@@ -10,6 +11,8 @@ import {
   runMigrations,
   type SqliteDatabase,
 } from '../../packages/database/src/index';
+import { createInternalDomainAuthorizationEvaluator } from '../../services/local-api/src/authorization/domain-authorization-engine';
+import type { AuthorizationRepositoryHarness } from './authorization-repository-contract';
 import type { IdentityRepositoryHarness } from './membership-repository-contract';
 import type { TenantRepositoryHarness } from './tenant-repository-contract';
 
@@ -63,6 +66,31 @@ export const createSqliteIdentityHarness = (): IdentityRepositoryHarness => {
     companyMemberships,
     dispose: temporary.dispose,
     scopes,
+    users: createSqliteUserDirectory(connection),
+  };
+};
+
+/** Persistência RBAC e motor interno sobre SQLite real em ficheiro temporário (E1.07-D2). */
+export const createSqliteAuthorizationHarness = (): AuthorizationRepositoryHarness => {
+  const temporary = createTemporaryDatabase();
+  const connection = temporary.open();
+  runMigrations(connection);
+  const { branches, companies } = createSqliteTenantPersistence(connection);
+  const { branchMemberships, companyMemberships, scopes } = createSqliteMembershipPersistence(connection);
+  const authorization = createSqliteAuthorizationPersistence(connection);
+  return {
+    branches,
+    branchMemberships,
+    companies,
+    companyMemberships,
+    diagnostics: authorization.diagnostics,
+    dispose: temporary.dispose,
+    evaluator: createInternalDomainAuthorizationEvaluator(authorization.readCompanyAuthorizationFacts),
+    roleAssignments: authorization.roleAssignments,
+    rolePermissions: authorization.rolePermissions,
+    roles: authorization.roles,
+    scopes,
+    sql: (work) => work(connection),
     users: createSqliteUserDirectory(connection),
   };
 };

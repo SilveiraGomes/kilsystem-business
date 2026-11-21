@@ -385,23 +385,39 @@ describe('E1.07-D1 pure evaluation', () => {
 });
 
 describe('E1.07-D1 boundaries', () => {
-  it('D60 adds no migrations and keeps the checksums of migrations 1 to 5', () => {
-    expect(MIGRATIONS.map((migration) => migration.version)).toEqual([1, 2, 3, 4, 5]);
-    expect(MIGRATIONS.map(migrationChecksum)).toEqual([
+  // Actualizado em E1.07-D2: D1 não acrescentou migrações; a 6 (RBAC) é de D2. As migrações 1 a 5
+  // mantêm as somas publicadas e continuam sem objectos RBAC.
+  it('D60 keeps the checksums of migrations 1 to 5; RBAC tables only from migration 6 (E1.07-D2)', () => {
+    expect(MIGRATIONS.map((migration) => migration.version)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(MIGRATIONS.slice(0, 5).map(migrationChecksum)).toEqual([
       'c70164d253bed3637177a1a434282a3fb9e4d16c294134dd2f6ec61dbf734b61',
       'b05636332e82baa7250873473b7c91fd0a571ec07e2b90b7ee2d236fd9bfc2d0',
       '340d886e73aae09527f46db3e3dbecfa9afc7b9fafa126e0267cea9d1d1a1f53',
       '95e09724388a7dce7e6c5588a55f3c35ee98f7a7202356885720dd7d1cdedf6e',
       'd404e58df245f3a42ed9970be395b0ae90cc7b8d0c08cdcb14d5da871823b7a4',
     ]);
-    for (const migration of MIGRATIONS) expect(migration.sql).not.toMatch(/\b(roles?|permissions?|role_assignments)\b/i);
+    for (const migration of MIGRATIONS.slice(0, 5)) {
+      expect(migration.sql).not.toMatch(/\b(roles?|permissions?|role_assignments)\b/i);
+    }
+    expect(MIGRATIONS[5]).toMatchObject({ name: 'create_rbac_roles_permissions_assignments', version: 6 });
   });
 
-  it('D61 leaves authentication, sessions and persistence without RBAC integration', () => {
+  // Actualizado em E1.07-D2: a persistência RBAC e o motor interno existem só nos ficheiros
+  // indicados; autenticação, sessões e a restante persistência continuam sem integração RBAC.
+  it('D61 leaves authentication, sessions and other persistence without RBAC integration (E1.07-D2)', () => {
+    const rbacFiles = new Set(
+      [
+        ['services', 'local-api', 'src', 'local-service.ts'],
+        ['services', 'local-api', 'src', 'authorization', 'domain-authorization-engine.ts'],
+        ['packages', 'database', 'src', 'sqlite-authorization-persistence.ts'],
+        ['packages', 'database', 'src', 'sqlite-rows.ts'],
+        ['packages', 'database', 'src', 'index.ts'],
+      ].map((segments) => path.join(REPOSITORY_ROOT, ...segments)),
+    );
     const integration = [
       ...sources(path.join(REPOSITORY_ROOT, 'services', 'local-api', 'src')),
       ...sources(path.join(REPOSITORY_ROOT, 'packages', 'database', 'src')),
-    ];
+    ].filter((file) => !rbacFiles.has(file));
     expect(integration.length).toBeGreaterThan(10);
     for (const file of integration) expect(readFileSync(file, 'utf8'), file).not.toMatch(RBAC_SYMBOLS);
   });
@@ -443,7 +459,9 @@ describe('E1.07-D1 boundaries', () => {
     expect(listApplicablePermissionCodes({ catalog: TEST_CATALOG, userId: scenario.user.id, scope: request.scope, company: facts })).toEqual([]);
   });
 
-  it('D64 emits no authenticated context from arbitrary data and is not wired into the service', () => {
+  // Actualizado em E1.07-D2: só o motor interno (D-182) usa as regras puras no serviço; nenhum
+  // outro módulo do serviço as usa, e o motor marca o seu contexto como não autenticado.
+  it('D64 emits no authenticated context from arbitrary data; only the internal engine uses the rules (E1.07-D2)', () => {
     for (const file of AUTHORIZATION_SOURCES) {
       expect(readFileSync(file, 'utf8'), file).not.toMatch(/createTenantContext|TenantContextInput|actorId|correlationId/);
     }
@@ -453,7 +471,10 @@ describe('E1.07-D1 boundaries', () => {
     expect(() => assertTenantContext(decision)).toThrow();
     expect(() => assertTenantContext(toExternalDomainEvaluationResponse(decision))).toThrow();
     expect(() => assertTenantContext(inspectDomainDecision(decision))).toThrow();
-    const service = sources(path.join(REPOSITORY_ROOT, 'services', 'local-api', 'src'));
-    for (const file of service) expect(readFileSync(file, 'utf8')).not.toMatch(/evaluateAuthorizationFacts|AuthorizationRequest/);
+    const engine = path.join(REPOSITORY_ROOT, 'services', 'local-api', 'src', 'authorization', 'domain-authorization-engine.ts');
+    const service = sources(path.join(REPOSITORY_ROOT, 'services', 'local-api', 'src')).filter((file) => file !== engine);
+    expect(service.length).toBeGreaterThan(5);
+    for (const file of service) expect(readFileSync(file, 'utf8'), file).not.toMatch(/evaluateAuthorizationFacts|AuthorizationRequest/);
+    expect(readFileSync(engine, 'utf8')).toMatch(/actorId: UNAUTHENTICATED_DOMAIN_EVALUATION_ACTOR/);
   });
 });
