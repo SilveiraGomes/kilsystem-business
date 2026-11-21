@@ -55,7 +55,7 @@ Copie `.env.example` para `.env` apenas no ambiente local e substitua os marcado
 - `services/central-api`: API Fastify para serviços centrais.
 - `services/sync-service`: futuro serviço de sincronização.
 - `packages/shared-types`: contratos de domínio multiempresa, identidades locais, associações a empresas e estabelecimentos, sessões e contratos de autorização (E1.07-D1).
-- `packages/database`: persistência SQLite local isolada por empresa, incluindo identidades e associações (migração 2), credenciais (migração 3), sessões locais (migração 4) e perfis, concessões e atribuições RBAC (migração 6, E1.07-D2).
+- `packages/database`: persistência SQLite local isolada por empresa, incluindo identidades e associações (migração 2), credenciais (migração 3), sessões locais (migração 4) e perfis, concessões e atribuições RBAC (migração 6, E1.07-D2; a migração 7 de E1.07-D2-R1 está só na branch da correcção, revista com NO-GO em E1.07-D2-R2).
 - Restantes `packages/*`: fronteiras partilhadas, ainda sem regras de negócio.
 - `tests`: verificações transversais iniciais.
 - `docs`: decisões de arquitectura.

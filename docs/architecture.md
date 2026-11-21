@@ -8,7 +8,7 @@ Este documento regista a fundação E1.01, a primeira aplicação desktop E1.02,
 
 ### Correcção E1.07-D2-R1
 
-A migração 7 acrescenta somente triggers contra substituições por `rowid` e mudanças das ligações de empresas, estabelecimentos e associações. Preserva migrações 1–6, dados e isolamento por tenant. O motor captura o pedido uma vez; nada é exposto por HTTP/IPC e não há autorização operacional.
+A migração 7 acrescenta somente triggers contra substituições por `rowid` e mudanças das ligações de empresas, estabelecimentos e associações. Preserva migrações 1–6, dados e isolamento por tenant. O motor captura o pedido uma vez; nada é exposto por HTTP/IPC e não há autorização operacional. Revista em [E1.07-D2-R2](tasks/E1.07-D2-R2.md): NO-GO (D-190) — com `foreign_keys` desligado, a eliminação e reinserção de uma associação empresarial ainda transfere atribuições (D-191, PD-70), e as guardas de `rowid` dependem de `NEW.rowid` indefinido (D-192, PD-72). Não integrada em `main`.
 
 O KIL Business será um ERP híbrido e modular. A aplicação desktop operará com serviços e dados locais, enquanto serviços centrais em PostgreSQL suportarão capacidades centralizadas e sincronização. O monitor móvel será opcional e apenas consultará indicadores sincronizados quando for implementado.
 
@@ -436,7 +436,7 @@ LocalService.internalAuthorization (interno, não autenticado, READY)
 - Estratégia e protocolo de sincronização, resolução de conflitos, idempotência e operação offline.
 - Modelo de tenancy no PostgreSQL (colunas, schemas ou bases separadas), row-level security e driver PostgreSQL.
 - Framework de empacotamento, actualizações e assinatura de código do Electron.
-- Administração e integração da autorização (E1.07-D3 e E1.07-D4; a persistência de E1.07-D2 está integrada, com as ressalvas PD-69 a PD-71) e recuperação de conta (E1.07-E); origem autenticada do `TenantContext` (E1.07-D4). O modelo de identidade e associações está definido desde E1.07-A, a autenticação local desde E1.07-B e as sessões locais desde E1.07-C; o transporte da sessão até à interface fica para E1.08 (PD-42).
+- Administração e integração da autorização (E1.07-D3 e E1.07-D4; a persistência de E1.07-D2 está integrada, com as ressalvas PD-69 a PD-71; a correcção E1.07-D2-R1 aguarda correcção complementar da PD-70 e das PD-72/PD-74, D-190 a D-193) e recuperação de conta (E1.07-E); origem autenticada do `TenantContext` (E1.07-D4). O modelo de identidade e associações está definido desde E1.07-A, a autenticação local desde E1.07-B e as sessões locais desde E1.07-C; o transporte da sessão até à interface fica para E1.08 (PD-42).
 - Hosting, observabilidade, backups, recuperação de desastre e topologia de implantação.
 - Biblioteca de componentes e sistema visual definitivo.
 - Versões e arquitectura concretas do React Native quando começar o monitor móvel.

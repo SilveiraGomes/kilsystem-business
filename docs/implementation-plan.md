@@ -47,7 +47,8 @@ Este plano regista as etapas concluídas e o planeamento inicial da fase E1 até
 | [E1.07-D1-H-R2](tasks/E1.07-D1-H-R2.md) | Revisão independente da correcção R1 | Concluída; **GO**; PD-64 encerrada; não autoriza D2 | `docs: record final tax policy isolation review` |
 | [E1.07-D2](tasks/E1.07-D2.md) | Persistência RBAC (migração 6), repositórios e motor sobre concessões persistidas | Integrada no PR #13 antes da revisão; revista em E1.07-D2-M; RBAC não operacional | `aa15864`; `b85381c`; merge `2c2b823` |
 | [E1.07-D2-M](tasks/E1.07-D2-M.md) | Revisão independente da persistência RBAC e integridade multiempresa | Concluída; **GO com ressalvas** (PD-69 a PD-71); não autoriza D3 | `docs: record independent RBAC persistence review` |
-| [E1.07-D2-R1](tasks/E1.07-D2-R1.md) | Correcção da integridade SQLite e cobertura RBAC | Implementação concluída; aguarda D2-R2; merge não autorizado | `1942500` |
+| [E1.07-D2-R1](tasks/E1.07-D2-R1.md) | Correcção da integridade SQLite e cobertura RBAC | Implementação concluída; revista em E1.07-D2-R2 (**NO-GO**); PR #15 não integrado | `1942500`; `9d27418` |
+| [E1.07-D2-R2](tasks/E1.07-D2-R2.md) | Revisão independente final da integridade RBAC | Concluída; **NO-GO** (PD-70 incompleta; PD-72 a PD-74); PD-69/PD-71 confirmadas; não autoriza D3 | `docs: record independent RBAC integrity correction review` |
 | [E1.07-D3](tasks/E1.07-D3.md) | Autoridade inicial da instalação, administração empresarial, delegação e prevenção de escalada | Planeada, **não autorizada** | — |
 | [E1.07-D4](tasks/E1.07-D4.md) | Contexto derivado de sessão e autorização integrada; encerra PD-27, PD-28 e PD-44 | Planeada, **não autorizada** | — |
 | [E1.07-E](tasks/E1.07-E.md) | Protecção de contas e auditoria | Planeada, **não autorizada** | — |
