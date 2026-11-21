@@ -9,6 +9,7 @@ import {
   type LocalServiceDependencies,
 } from '../../services/local-api/src/local-service';
 import { createJsonLogger } from '../../services/local-api/src/logger';
+import type { AuthorizationRepositoryHarness } from './authorization-repository-contract';
 import type { IdentityRepositoryHarness } from './membership-repository-contract';
 import { createTemporaryDatabase } from './sqlite-harness';
 import type { TenantRepositoryHarness } from './tenant-repository-contract';
@@ -159,6 +160,32 @@ export const createLocalServiceIdentityHarness = async (): Promise<IdentityRepos
       temporary.dispose();
     },
     scopes: service.membershipScopes,
+    users: service.identityProvisioning.users,
+  };
+};
+
+/** Persistência RBAC e motor interno através do serviço local em `READY` (E1.07-D2). */
+export const createLocalServiceAuthorizationHarness = async (): Promise<AuthorizationRepositoryHarness> => {
+  const temporary = createTemporaryDatabase();
+  const { service } = createServiceUnderTest(serviceConfig(temporary.filename));
+  await service.start();
+  const rbac = service.internalAuthorization;
+  return {
+    branches: service.branches,
+    branchMemberships: service.branchMemberships,
+    companies: service.companies,
+    companyMemberships: service.companyMemberships,
+    diagnostics: rbac.diagnostics,
+    dispose: async () => {
+      await service.stop();
+      temporary.dispose();
+    },
+    evaluator: rbac.domainEvaluator,
+    roleAssignments: rbac.roleAssignments,
+    rolePermissions: rbac.rolePermissions,
+    roles: rbac.roles,
+    scopes: service.membershipScopes,
+    sql: (work) => inspectDatabase(temporary.filename, temporary.open, work),
     users: service.identityProvisioning.users,
   };
 };

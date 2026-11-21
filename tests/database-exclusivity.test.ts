@@ -589,7 +589,7 @@ describe('Database exclusivity (E1.07-X)', () => {
         for (const loser of losers) expect(loser.events.map((event) => event['event'])).not.toContain('service.database_opened');
         const winner = contenders[results.indexOf(winners[0] as ChildEvent)] as TestChild;
         // `createdDatabase` não é afirmado: um processo recusado pode ter criado o ficheiro vazio primeiro.
-        expect(winner.events.find(isEvent('service.ready'))).toMatchObject({ appliedMigrations: [1, 2, 3, 4, 5] });
+        expect(winner.events.find(isEvent('service.ready'))).toMatchObject({ appliedMigrations: [1, 2, 3, 4, 5, 6] });
         expect(await stopCli(winner)).toBe(0);
         withOwnConnection(filename, (database) => {
           expect(database.pragma('integrity_check', { simple: true })).toBe('ok');
@@ -625,7 +625,8 @@ describe('Database exclusivity (E1.07-X)', () => {
         const contenders = Array.from({ length: 3 }, (_, index) => spawnServiceCli(bundle, { databasePath: filename, instanceId: `m${index}` }));
         const results = await outcomes(contenders);
         const ready = results.filter((event) => event['event'] === 'service.ready');
-        expect(ready).toEqual([expect.objectContaining({ appliedMigrations: [5], schemaVersion: 5 })]);
+        // E1.07-D2: a base com as migrações 1 a 4 recebe a 5 e a 6, uma única vez.
+        expect(ready).toEqual([expect.objectContaining({ appliedMigrations: [5, 6], schemaVersion: 6 })]);
         expect(results.filter((event) => event['reason'] === 'database-locked')).toHaveLength(2);
         const winner = contenders[results.indexOf(ready[0] as ChildEvent)] as TestChild;
         expect(await stopCli(winner)).toBe(0);

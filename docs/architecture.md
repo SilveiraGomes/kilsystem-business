@@ -2,7 +2,7 @@
 
 ## Estado deste documento
 
-Este documento regista a fundação E1.01, a primeira aplicação desktop E1.02, a arquitectura de negócio consolidada em E1.02-H, os contratos multiempresa de E1.03, a persistência SQLite de E1.04, o ciclo de vida do serviço local de E1.05, o ambiente de execução e as decisões de E1.06, a actualização segura do Electron em E1.06-S1, a modernização do Vitest em E1.06-S2, a identidade local com associações multiempresa de E1.07-A, a autenticação local offline de E1.07-B, as sessões locais revogáveis de E1.07-C, a exclusividade por base de E1.07-X e os contratos de autorização RBAC de E1.07-D1 (não operacionais). “Definido” significa uma decisão já fornecida ou validada pelo projecto; “pendente” requer validação posterior e não deve ser inferido.
+Este documento regista a fundação E1.01, a primeira aplicação desktop E1.02, a arquitectura de negócio consolidada em E1.02-H, os contratos multiempresa de E1.03, a persistência SQLite de E1.04, o ciclo de vida do serviço local de E1.05, o ambiente de execução e as decisões de E1.06, a actualização segura do Electron em E1.06-S1, a modernização do Vitest em E1.06-S2, a identidade local com associações multiempresa de E1.07-A, a autenticação local offline de E1.07-B, as sessões locais revogáveis de E1.07-C, a exclusividade por base de E1.07-X, os contratos de autorização RBAC de E1.07-D1 e a persistência RBAC com motor interno de E1.07-D2 (ambos não operacionais). “Definido” significa uma decisão já fornecida ou validada pelo projecto; “pendente” requer validação posterior e não deve ser inferido.
 
 ## Visão geral
 
@@ -349,9 +349,30 @@ decisão = associação empresarial ∩ associação local ∩ âmbito da atribu
 - **Perfis e concessões (D-150, D-151):** perfis por tenant, com código normalizado e único no tenant; nome só de apresentação. Concessões explícitas, sem permissões negativas, *wildcards* nem hierarquias.
 - **Atribuições (D-152):** sempre através de uma associação empresarial do mesmo tenant; `COMPANY_WIDE` exige associação `COMPANY_WIDE`; `BRANCH` exige estabelecimento activo e, sob `BRANCH_RESTRICTED`, associação local activa.
 - **Avaliação pura (D-153, D-154):** recusa por omissão; permissão registada, disponível e com o âmbito do alvo; factos de outro tenant recusam toda a decisão; concessões de um estabelecimento nunca valem noutro; permissões `OPERATION` exigem empresa `ACTIVE`. Motivos internos tipados; resposta externa idêntica para todas as recusas.
-- **Repositórios futuros (D-155):** interfaces `RoleRepository`, `RolePermissionRepository` e `RoleAssignmentRepository`, com `TenantContext` e semântica D-020; implementação em E1.07-D2.
+- **Repositórios (D-155):** interfaces `RoleRepository`, `RolePermissionRepository` e `RoleAssignmentRepository`, com `TenantContext` e semântica D-020; implementadas em SQLite por E1.07-D2 (secção seguinte).
 - **Prevenção de escalada (D-156):** requisitos de delegação para E1.07-D3 e E1.07-D4.
 - **Estados, sessões e catálogo (D-159 a D-162):** política explícita por estado empresarial; autoridades distintas para logout e revogação de sessões/acesso; correspondência obrigatória operação/permissão; códigos desconhecidos ou retirados nunca concedem nem são convertidos ou eliminados silenciosamente.
+
+## Autorização: persistência RBAC e motor interno (E1.07-D2)
+
+Implementada na branch `feat/e107-d2-rbac-persistence`, por rever (D-179 a D-183). **Não é autorização operacional**: o `TenantContext` continua construído pelo chamador (PD-27), nada é exposto por HTTP/IPC e nenhuma operação aceita decisões de domínio. Detalhe em [tasks/E1.07-D2.md](tasks/E1.07-D2.md).
+
+```text
+LocalService.internalAuthorization (interno, não autenticado, READY)
+  ├─ roles / rolePermissions / roleAssignments ──▶ SQLite (migração 6, D-180)
+  ├─ diagnostics.listUnrecognized ──▶ concessões fora do catálogo vigente (PD-61, D-181)
+  └─ domainEvaluator.evaluate({ userId, permissionCode, scope })
+        │  pedido reconstruído; catálogo OFICIAL fixo; contexto interno "unauthenticated:…"
+        ▼
+     readCompanyAuthorizationFacts (uma transacção de leitura, só o tenant do alvo)
+        ▼
+     evaluateAuthorizationFacts (regras puras D1) ──▶ decisão de DOMÍNIO (não operacional)
+```
+
+- **Migração 6 (D-180):** `roles`, `role_permissions`, `role_assignments` (`STRICT`, sem dados iniciais); FK compostas com `tenant_id`/`company_id`; índices únicos parciais para `COMPANY_WIDE` (`branch_id` nulo) e `BRANCH`; `CHECK` de gramática, estados e âmbitos; triggers que recusam reinserções, referências de outro tenant, atribuições inelegíveis (criação e reactivação), alterações de referências e eliminação de perfis e atribuições, com `foreign_keys` ligado ou desligado.
+- **Catálogo (D-181):** continua em código, sem tabela de permissões; só o oficial é admitido; `catalog_version` por concessão; códigos não reconhecidos nunca concedem, ficam identificáveis e só saem por `remove` explícito.
+- **Motor (D-182):** leitor de factos no pacote `database`, motor no serviço local; sem *cache* de permissões; pedidos da instalação recusados até D3; estados empresariais segundo D1 (PD-58 em D3/D4).
+- **Repositórios (D-183):** D-020, D-034, D-039; suites de contrato sobre SQLite e através do serviço.
 
 ## Decisões definidas
 
@@ -387,7 +408,7 @@ decisão = associação empresarial ∩ associação local ∩ âmbito da atribu
 - Autenticação local offline com Argon2id nativo (RFC 9106), política NIST SP 800-63B, limitação persistente de tentativas, inicialização explícita da instalação e integração segura no ciclo de vida do serviço (D-090 a D-097).
 - Sessões locais revogáveis com tokens opacos, comprovativo interno de utilização única, versões de segurança monotónicas, relógio efectivo conservador e ligação ao arranque do serviço; uma sessão não é uma autorização empresarial (D-107 a D-116).
 - Exclusividade do serviço local por base SQLite, pelo bloqueio exclusivo do próprio SQLite adquirido e comprovado antes de qualquer leitura ou escrita, com identificação canónica da base e recusa tipada `database-locked` (D-130 a D-134, E1.07-X).
-- Autorização RBAC em quatro subtarefas (D-146). Contratos de E1.07-D1 e políticas D-147 a D-167; E1.07-D1-R2 encerrou PD-62/PD-63 (D-168). E1.07-D1-H-R2 aprovou a correcção fiscal integrada no PR #12 e encerrou PD-64 (D-178). D2 continua não autorizada até aprovação explícita e o RBAC não é operacional até E1.07-D4.
+- Autorização RBAC em quatro subtarefas (D-146). Contratos de E1.07-D1 e políticas D-147 a D-167; E1.07-D1-R2 encerrou PD-62/PD-63 (D-168). E1.07-D1-H-R2 aprovou a correcção fiscal integrada no PR #12 e encerrou PD-64 (D-178). E1.07-D2 (D-179 a D-183) persiste perfis, concessões e atribuições e avalia factos persistidos num motor interno; está por rever e o RBAC não é operacional até E1.07-D4.
 
 ## Estrutura do monorepositório
 
@@ -411,7 +432,7 @@ decisão = associação empresarial ∩ associação local ∩ âmbito da atribu
 - Estratégia e protocolo de sincronização, resolução de conflitos, idempotência e operação offline.
 - Modelo de tenancy no PostgreSQL (colunas, schemas ou bases separadas), row-level security e driver PostgreSQL.
 - Framework de empacotamento, actualizações e assinatura de código do Electron.
-- Persistência, administração e integração da autorização (E1.07-D2 a E1.07-D4; D2 suspensa até aprovação explícita, embora PD-64 esteja encerrada por D-178) e recuperação de conta (E1.07-E); origem autenticada do `TenantContext` (E1.07-D4). O modelo de identidade e associações está definido desde E1.07-A, a autenticação local desde E1.07-B e as sessões locais desde E1.07-C; o transporte da sessão até à interface fica para E1.08 (PD-42).
+- Administração e integração da autorização (E1.07-D3 e E1.07-D4; a persistência de E1.07-D2 está implementada e por rever) e recuperação de conta (E1.07-E); origem autenticada do `TenantContext` (E1.07-D4). O modelo de identidade e associações está definido desde E1.07-A, a autenticação local desde E1.07-B e as sessões locais desde E1.07-C; o transporte da sessão até à interface fica para E1.08 (PD-42).
 - Hosting, observabilidade, backups, recuperação de desastre e topologia de implantação.
 - Biblioteca de componentes e sistema visual definitivo.
 - Versões e arquitectura concretas do React Native quando começar o monitor móvel.
@@ -427,4 +448,4 @@ decisão = associação empresarial ∩ associação local ∩ âmbito da atribu
 
 ## Restrições da fundação
 
-E1.01 a E1.07-C não criam bases de produção, endpoints de negócio, POS, facturação, contabilidade ou módulos sectoriais. E1.07-A cria identidades e associações. E1.07-B acrescenta credenciais e autenticação local. E1.07-C acrescenta sessões locais revogáveis, sem permissões, RBAC, JWT nem qualquer exposição externa. E1.07-X impõe um único serviço por base, sem HTTP, IPC nem dependências novas. E1.07-D1 acrescenta só contratos e regras puras de autorização, sem persistência, migração nem integração. A persistência SQLite é gerida pelo serviço local, sem servidor HTTP e sem localização de produção definida. Os indicadores visuais da aplicação desktop são explicitamente demonstrativos. Os pacotes de domínio contêm apenas contratos e validações estruturais, sem regras fiscais, contabilísticas ou sectoriais.
+E1.01 a E1.07-C não criam bases de produção, endpoints de negócio, POS, facturação, contabilidade ou módulos sectoriais. E1.07-A cria identidades e associações. E1.07-B acrescenta credenciais e autenticação local. E1.07-C acrescenta sessões locais revogáveis, sem permissões, RBAC, JWT nem qualquer exposição externa. E1.07-X impõe um único serviço por base, sem HTTP, IPC nem dependências novas. E1.07-D1 acrescenta só contratos e regras puras de autorização, sem persistência, migração nem integração. E1.07-D2 acrescenta a migração 6, repositórios RBAC e um motor interno de domínio, sem perfis predefinidos, HTTP, IPC nem autorização operacional. A persistência SQLite é gerida pelo serviço local, sem servidor HTTP e sem localização de produção definida. Os indicadores visuais da aplicação desktop são explicitamente demonstrativos. Os pacotes de domínio contêm apenas contratos e validações estruturais, sem regras fiscais, contabilísticas ou sectoriais.
