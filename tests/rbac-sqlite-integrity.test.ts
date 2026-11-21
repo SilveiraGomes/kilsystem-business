@@ -1059,6 +1059,41 @@ describe('RBAC SQLite integrity (E1.07-D2/R1, migrations 6-7)', () => {
       }
       expect(snapshot()).toEqual(before);
     });
+
+    it('[RI05h] records the installation bootstrap once and never redirects the initial administrator (PD-73)', () => {
+      const record = () => database.prepare('SELECT rowid, * FROM installation_bootstrap').all();
+      expect(record()).toEqual([]);
+      const insert = (verb: string, administratorId: string, id = 1) =>
+        database
+          .prepare(`${verb} INTO installation_bootstrap (id, initial_administrator_id, completed_at) VALUES (?, ?, ?)`)
+          .run(id, administratorId, CREATED_AT);
+      // A inicialização legítima (uma única inserção, como em E1.07-B) continua aceite.
+      insert('INSERT', s.alice.id);
+      const before = record();
+      const attempts: Record<string, () => unknown> = {
+        'INSERT again': () => insert('INSERT', s.carol.id),
+        'INSERT OR IGNORE': () => insert('INSERT OR IGNORE', s.carol.id),
+        'INSERT OR REPLACE': () => insert('INSERT OR REPLACE', s.carol.id),
+        'REPLACE INTO': () => insert('REPLACE', s.carol.id),
+        'INSERT id 2': () => insert('INSERT', s.carol.id, 2),
+        'UPDATE administrator': () => database.prepare('UPDATE installation_bootstrap SET initial_administrator_id = ?').run(s.carol.id),
+        'UPDATE OR REPLACE administrator': () =>
+          database.prepare('UPDATE OR REPLACE installation_bootstrap SET initial_administrator_id = ?').run(s.carol.id),
+        'UPDATE completion': () => database.prepare('UPDATE installation_bootstrap SET completed_at = ?').run(UPDATED_AT),
+        'UPDATE id': () => database.prepare('UPDATE installation_bootstrap SET id = 2').run(),
+        'DELETE': () => database.prepare('DELETE FROM installation_bootstrap').run(),
+        'DELETE + INSERT': () =>
+          database
+            .transaction(() => {
+              database.prepare('DELETE FROM installation_bootstrap').run();
+              insert('INSERT', s.carol.id);
+            })
+            .immediate(),
+      };
+      for (const [label, attempt] of Object.entries(attempts)) expect(attempt, label).toThrow(REFUSED);
+      expect(record()).toEqual(before);
+      expect(database.prepare('SELECT initial_administrator_id FROM installation_bootstrap WHERE id = 1').pluck().get()).toBe(s.alice.id);
+    });
   });
 
   it('[RI06] enforces each uniqueness layer independently: partial indexes without triggers and triggers without indexes', async () => {

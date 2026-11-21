@@ -576,6 +576,10 @@ END;
 //   de um rowid -1 explicito. As guardas por rowid so comparam rowids positivos, e o AFTER INSERT,
 //   onde NEW.rowid e o valor real, recusa rowids nao positivos. Assim um rowid explicito ocupado e
 //   sempre recusado, e uma linha com rowid -1 nao bloqueia as insercoes normais.
+// E1.07-D2-R3 (PD-73): o registo da inicializacao e escrito uma unica vez pela aplicacao e nunca
+// alterado. Os triggers impedem que UPDATE, REPLACE ou DELETE + INSERT redireccionem
+// initial_administrator_id para outra identidade antes de E1.07-D3 o usar como fonte de autoridade.
+// A guarda de insercao nao depende de rowid: a tabela tem uma unica linha (id = 1).
 const V7_HARDEN_RBAC_REPLACEMENT_AND_PARENT_BINDINGS = `
 CREATE TRIGGER companies_insert_requires_new_company
 BEFORE INSERT ON companies
@@ -790,6 +794,25 @@ END;
 CREATE TRIGGER role_assignments_rowid_positive AFTER INSERT ON role_assignments WHEN NEW.rowid <= 0
 BEGIN
   SELECT RAISE(ABORT, 'constraint failed: role_assignments rowid must be positive');
+END;
+
+CREATE TRIGGER installation_bootstrap_recorded_once
+BEFORE INSERT ON installation_bootstrap
+WHEN EXISTS (SELECT 1 FROM installation_bootstrap)
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: installation_bootstrap is recorded once and never re-inserted');
+END;
+
+CREATE TRIGGER installation_bootstrap_immutable
+BEFORE UPDATE ON installation_bootstrap
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: installation_bootstrap is immutable');
+END;
+
+CREATE TRIGGER installation_bootstrap_never_deleted
+BEFORE DELETE ON installation_bootstrap
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: installation_bootstrap is never deleted');
 END;
 `;
 
