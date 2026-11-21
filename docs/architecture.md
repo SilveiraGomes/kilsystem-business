@@ -6,6 +6,12 @@ Este documento regista a fundação E1.01, a primeira aplicação desktop E1.02,
 
 ## Visão geral
 
+### Correcção E1.07-D2-R1
+
+A migração 7 acrescenta somente triggers contra substituições por `rowid` e mudanças das ligações de empresas, estabelecimentos e associações. Preserva migrações 1–6, dados e isolamento por tenant. O motor captura o pedido uma vez; nada é exposto por HTTP/IPC e não há autorização operacional. Revista em [E1.07-D2-R2](tasks/E1.07-D2-R2.md): NO-GO (D-190) — com `foreign_keys` desligado, a eliminação e reinserção de uma associação empresarial ainda transfere atribuições (D-191, PD-70), e as guardas de `rowid` dependem de `NEW.rowid` indefinido (D-192, PD-72). Não integrada em `main`.
+
+Complementada por [E1.07-D2-R3](tasks/E1.07-D2-R3.md), que corrige a própria migração 7 (não integrada, sem bases não descartáveis dependentes; D-194): associações empresariais desactivadas, nunca eliminadas (D-195, PD-70); guardas de `rowid` só para `rowid` explícitos positivos e recusa de `rowid` não positivo num AFTER INSERT (D-196, PD-72); `installation_bootstrap` gravado uma vez, imutável e não eliminável (D-197, PD-73; política de identidades do administrador inicial em PD-75, Gate D3). Revista em [E1.07-D2-R4](tasks/E1.07-D2-R4.md): **GO** para o merge (D-200). Fronteira confirmada: os triggers protegem as ligações de autoridade contra escritas SQL pela ligação normal em qualquer configuração de `foreign_keys`/`recursive_triggers`, mas não a autenticação: um escritor SQL pode substituir credenciais. Com FK desligado, as linhas `users` e `branch_memberships` continuam elimináveis. Nenhuma autoridade baseada em `installation_bootstrap` fica operacional antes da política da PD-75 (D-201).
+
 O KIL Business será um ERP híbrido e modular. A aplicação desktop operará com serviços e dados locais, enquanto serviços centrais em PostgreSQL suportarão capacidades centralizadas e sincronização. O monitor móvel será opcional e apenas consultará indicadores sincronizados quando for implementado.
 
 ```text
@@ -370,6 +376,7 @@ LocalService.internalAuthorization (interno, não autenticado, READY)
 ```
 
 - **Migração 6 (D-180):** `roles`, `role_permissions`, `role_assignments` (`STRICT`, sem dados iniciais); FK compostas com `tenant_id`/`company_id`; índices únicos parciais para `COMPANY_WIDE` (`branch_id` nulo) e `BRANCH`; `CHECK` de gramática, estados e âmbitos; triggers que recusam reinserções, referências de outro tenant, atribuições inelegíveis (criação e reactivação), alterações de referências e eliminação de perfis e atribuições, com `foreign_keys` ligado ou desligado. **Limite (D-185, PD-69):** com `recursive_triggers` desligado (configuração do serviço), `REPLACE`/`UPDATE OR REPLACE` por conflito de `rowid` contorna a não eliminação e a imutabilidade das ligações; a correcção é uma migração aditiva futura. As ligações das tabelas-pai (associações, estabelecimentos, empresas) não são imutáveis na base (PD-70).
+- **Migração 7 (D-188, D-194 a D-197; branch, não integrada):** só triggers. Guardas de inserção e de alteração de `rowid` em 10 tabelas (identidades, credenciais, sessões, empresas, estabelecimentos, associações e RBAC), comparando apenas `rowid` explícitos positivos, e recusa de `rowid` não positivo depois da inserção; ligações imutáveis e não reinserção de empresas, estabelecimentos e associações; associações empresariais nunca eliminadas; `installation_bootstrap` gravado uma vez, imutável e não eliminável. Eficaz com qualquer configuração de `foreign_keys`/`recursive_triggers`; não protege contra quem controla o esquema ou o ficheiro.
 - **Catálogo (D-181):** continua em código, sem tabela de permissões; só o oficial é admitido; `catalog_version` por concessão; códigos não reconhecidos nunca concedem, ficam identificáveis e só saem por `remove` explícito.
 - **Motor (D-182):** leitor de factos no pacote `database`, motor no serviço local; sem *cache* de permissões; pedidos da instalação recusados até D3; estados empresariais segundo D1: em qualquer estado o motor concede as permissões `ADMINISTRATION`, sem operação executável (D-186; aplicação de D-159 em D3/D4).
 - **Repositórios (D-183):** D-020, D-034, D-039; suites de contrato sobre SQLite e através do serviço.
@@ -432,7 +439,7 @@ LocalService.internalAuthorization (interno, não autenticado, READY)
 - Estratégia e protocolo de sincronização, resolução de conflitos, idempotência e operação offline.
 - Modelo de tenancy no PostgreSQL (colunas, schemas ou bases separadas), row-level security e driver PostgreSQL.
 - Framework de empacotamento, actualizações e assinatura de código do Electron.
-- Administração e integração da autorização (E1.07-D3 e E1.07-D4; a persistência de E1.07-D2 está integrada, com as ressalvas PD-69 a PD-71) e recuperação de conta (E1.07-E); origem autenticada do `TenantContext` (E1.07-D4). O modelo de identidade e associações está definido desde E1.07-A, a autenticação local desde E1.07-B e as sessões locais desde E1.07-C; o transporte da sessão até à interface fica para E1.08 (PD-42).
+- Administração e integração da autorização (E1.07-D3 e E1.07-D4; a persistência de E1.07-D2 está integrada, com as ressalvas PD-69 a PD-71; a correcção E1.07-D2-R1, complementada por E1.07-D2-R3 (PD-70, PD-72 a PD-74, D-194 a D-199), revista em E1.07-D2-R4 com GO (D-200) e a aguardar o merge autorizado; PD-75 no Gate D3 e condição de activação, D-201) e recuperação de conta (E1.07-E); origem autenticada do `TenantContext` (E1.07-D4). O modelo de identidade e associações está definido desde E1.07-A, a autenticação local desde E1.07-B e as sessões locais desde E1.07-C; o transporte da sessão até à interface fica para E1.08 (PD-42).
 - Hosting, observabilidade, backups, recuperação de desastre e topologia de implantação.
 - Biblioteca de componentes e sistema visual definitivo.
 - Versões e arquitectura concretas do React Native quando começar o monitor móvel.

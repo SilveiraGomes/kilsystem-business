@@ -71,13 +71,21 @@ export const createInternalDomainAuthorizationEvaluator = (
   const catalog = requireDomainEvaluationCatalog(OFFICIAL_PERMISSION_CATALOG);
 
   const evaluate = async (input: AuthorizationRequestInput): Promise<AuthorizationDecision> => {
-    if (typeof input !== 'object' || input === null || typeof input.scope !== 'object' || input.scope === null) {
+    if (typeof input !== 'object' || input === null) {
+      throw new DomainValidationError('request', 'não é um pedido de avaliação');
+    }
+    // Capture each boundary property exactly once. Getters, proxies or mutable caller objects cannot
+    // switch the identity, permission or target between validation and evaluation.
+    const userId = input.userId;
+    const permissionCode = input.permissionCode;
+    const scope = input.scope;
+    if (typeof scope !== 'object' || scope === null) {
       throw new DomainValidationError('request', 'não é um pedido de avaliação');
     }
     const request = createAuthorizationRequest({
-      permissionCode: input.permissionCode,
-      scope: input.scope,
-      userId: input.userId,
+      permissionCode,
+      scope,
+      userId,
     });
     const context = contextFor(request);
     // A autoridade da instalação (concessões `installation.*`) só será persistida em E1.07-D3: até
