@@ -409,6 +409,24 @@ LocalService.start ──▶ inspectMigrations ──▶ [pendentes] findNonPosi
 - **Fronteira (D-209):** o esquema impede eliminar, reutilizar e redireccionar; não impede editar no lugar (nome, estado, credencial) por SQL. Sem garantias contra quem controla o esquema, o ficheiro, o código ou o sistema operativo.
 - **PD-76 (D-211):** pré-verificação no serviço local antes de qualquer migração pendente; `runMigrations` continua primitiva (PD-79 para o instalador).
 
+## Recuperação do administrador inicial — R1 (E1.07-D3-R1)
+
+Implementada na branch `feat/e107-d3-r1-recovery` (D-233 a D-235), a rever em E1.07-D3-R1-M. Especificação em [tasks/E1.07-D3-R1-P.md](tasks/E1.07-D3-R1-P.md); detalhe em [tasks/E1.07-D3-R1.md](tasks/E1.07-D3-R1.md). **Não activa nenhuma autoridade** (PD-77 continua bloqueante).
+
+- **Componentes:**
+
+  | Ficheiro | Responsabilidade |
+  | --- | --- |
+  | `authentication/recovery-code.ts` | 160 bits, Base32 de Crockford com controlo, normalização, contrato de apresentação única |
+  | `authentication/recovery-throttle-policy.ts` | limitação própria sobre `evaluateAttempt` |
+  | `authentication/installation-recovery.ts` | rotação e recuperação |
+  | `packages/database/src/sqlite-installation-recovery-store.ts` | armazém síncrono sobre a migração 9 |
+  | `recovery-cli.ts` e `terminal.ts` | interface local por TTY |
+- **Superfície:** `LocalService.installationRecovery`, fora de `identityProvisioning` e de `TenantStores`, usado só pelos subcomandos `recovery rotate`/`recovery recover` da CLI, com a base em uso exclusivo (o serviço normal parado). Sem HTTP nem IPC; nunca cria base.
+- **Protocolo:** derivações Argon2id fora das transacções; limitação contada antes da derivação; transacção `IMMEDIATE` final que verifica de novo a âncora (`intact`), o estado (`ACTIVE`), o código activo e o hash da credencial, substitui a credencial (os triggers da migração 4 revogam as sessões), consome o código, emite o seguinte e regista o evento. O código só sai por `reveal()`, uma vez, depois do *commit*.
+- **Primeira emissão:** pela rotação autenticada; `initialise` não cria código (D-234, PD-84).
+- **Fronteira (D-209):** um escritor SQL pode acrescentar o seu verificador (equivale a substituir a credencial no lugar); quem controla o esquema remove os triggers.
+
 ## Decisões definidas
 
 - Monorepositório com pnpm workspaces e Git.
