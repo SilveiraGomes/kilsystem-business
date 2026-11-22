@@ -40,6 +40,7 @@ import { newBranchMembership, newCompanyMembership, newUser, uniqueUsername } fr
 import {
   createServiceUnderTest,
   inspectDatabase,
+  liveServiceConnection,
   serviceConfig,
   type ServiceUnderTest,
 } from './support/local-service-harness';
@@ -699,8 +700,12 @@ describe('E1.07-D3-G0 installation authority gate (PD-73, PD-75, PD-76)', () => 
         });
         expect(inspect(snapshot), configuration.label).toEqual(before);
       }
-      // Conhecer o identificador ou o username não dá nenhuma autoridade sobre a identidade.
-      await expect(provisioning.users.create(newUser({ id: administrator.id }))).rejects.toMatchObject({ reason: 'duplicate-id' });
+      // Conhecer o identificador ou o username não dá nenhuma autoridade sobre a identidade. Desde
+      // E1.07-D3-G0-R3 (PD-82, D-227), o identificador do administrador é recusado pela protecção antes
+      // da verificação `duplicate-id`, exista ou não a linha (antes: `duplicate-id`).
+      await expect(provisioning.users.create(newUser({ id: administrator.id }))).rejects.toBeInstanceOf(
+        InitialAdministratorProtectedError,
+      );
       await expect(provisioning.users.create(newUser({ username: administrator.username }))).rejects.toMatchObject({
         reason: 'duplicate-username',
       });
@@ -733,6 +738,257 @@ describe('E1.07-D3-G0 installation authority gate (PD-73, PD-75, PD-76)', () => 
 
       expect(administratorCredential()).toEqual(adminBefore);
       await expect(anchorOf(harness)).resolves.toMatchObject({ initialAdministratorId: administrator.id, state: 'intact' });
+    });
+
+    describe('initial administrator identity re-provisioning (PD-82, E1.07-D3-G0-R3)', () => {
+      /**
+       * Fora da fronteira D-209 (actor F): com a migração 8, só quem controla o esquema elimina uma
+       * identidade — `foreign_keys` desligado, `users_never_deleted` retirado e reposto com o SQL
+       * original. Corre na ligação do serviço em `READY` (os pragmas são repostos por `inspect`).
+       */
+      const removeIdentityOutsideTheBoundary = (userId: string): void =>
+        inspect((database) => {
+          const trigger = database
+            .prepare("SELECT sql FROM sqlite_schema WHERE type = 'trigger' AND name = 'users_never_deleted'")
+            .pluck()
+            .get() as string;
+          database.pragma('foreign_keys = OFF');
+          database.exec('DROP TRIGGER users_never_deleted');
+          expect(database.prepare('DELETE FROM users WHERE id = ?').run(userId).changes).toBe(1);
+          database.exec(trigger);
+        });
+
+      const completedAtOf = async ({ service }: ServiceUnderTest): Promise<string> => {
+        const status = await service.identityProvisioning.installation.status();
+        if (!status.initialised || status.completedAt === undefined) throw new Error('Instalação inicializada esperada.');
+        return status.completedAt;
+      };
+
+      /** Candidatos que recriariam o administrador inicial; nenhum pode ser aceite. */
+      const recreations = (administrator: User, completedAt: string, ordinary: User) => {
+        const impostor = uniqueUsername('impostor');
+        const same = { createdAt: completedAt, displayName: 'Impostor Fictício', id: administrator.id, status: 'ACTIVE', username: impostor };
+        return {
+          impostor,
+          attempts: [
+            ['same id and creation instant (would repair the anchor)', same],
+            ['same id, another creation instant', { ...same, createdAt: UPDATED_AT }],
+            ['same id, deactivated', { ...same, status: 'INACTIVE' }],
+            ['same id written in upper case (normalised by parseUserId)', { ...same, id: administrator.id.toUpperCase() }],
+            ['same id and the original username', { ...same, username: administrator.username }],
+            // A protecção vem antes da validação do candidato e da verificação de conflitos.
+            ['same id with an invalid username', { ...same, username: '' }],
+            ['same id with the username of another identity', { ...same, username: ordinary.username }],
+          ] as const,
+        };
+      };
+
+      const expectNoRecreation = async (harness: ServiceUnderTest, administrator: User, anchor: unknown): Promise<void> => {
+        const { users } = harness.service.identityProvisioning;
+        const ordinary = await provision(harness);
+        const { attempts, impostor } = recreations(administrator, await completedAtOf(harness), ordinary);
+        const before = inspect(snapshot);
+        for (const [label, candidate] of attempts) {
+          await expect(users.create(candidate as unknown as User), label).rejects.toBeInstanceOf(InitialAdministratorProtectedError);
+          expect(inspect(snapshot), label).toEqual(before);
+          await expect(anchorOf(harness), label).resolves.toEqual(anchor);
+        }
+        await expect(users.findById(administrator.id)).resolves.toBeUndefined();
+        for (const username of [impostor, administrator.username]) {
+          for (const password of [TEST_PASSWORD, OTHER_TEST_PASSWORD]) {
+            await expect(harness.service.authentication.authenticate(username, password)).resolves.toMatchObject({ ok: false });
+          }
+        }
+      };
+
+      it.each([
+        { credential: true, label: 'credential kept, without any session (the migration-5 guard cannot refuse)', session: false },
+        { credential: true, label: 'credential kept, with an earlier session', session: true },
+        { credential: false, label: 'credential missing, without any session', session: false },
+        { credential: false, label: 'credential missing, with an earlier session', session: true },
+      ])('[G22] refuses re-creating a missing initial administrator through users.create, $label', async ({ credential, session }) => {
+        const { administrator, harness } = await initialised({ session });
+        if (!credential) removeCredentialOutsideTheBoundary(administrator.id);
+        removeIdentityOutsideTheBoundary(administrator.id);
+        const remaining = inspect((database) => ({
+          credentials: database.prepare('SELECT count(*) FROM password_credentials WHERE user_id = ?').pluck().get(administrator.id),
+          sessions: database.prepare('SELECT count(*) FROM local_sessions WHERE user_id = ?').pluck().get(administrator.id),
+        }));
+        expect(remaining).toEqual({ credentials: credential ? 1 : 0, sessions: session ? 1 : 0 });
+        const anchor = { fault: 'administrator-missing', state: 'broken' };
+        await expect(anchorOf(harness)).resolves.toEqual(anchor);
+
+        await expectNoRecreation(harness, administrator, anchor);
+        // Também a credencial continua fora do provisionamento comum (PD-80).
+        await expect(harness.service.identityProvisioning.credentials.create(administrator.id, OTHER_TEST_PASSWORD)).rejects.toBeInstanceOf(
+          InitialAdministratorProtectedError,
+        );
+        const persisted = inspect(snapshot);
+        await harness.service.stop();
+
+        // Persistido: a base reaberta continua sem a identidade e a âncora continua fechada noutro arranque.
+        const reopened = temporary.open();
+        expect(snapshot(reopened)).toEqual(persisted);
+        expect(reopened.prepare('SELECT count(*) FROM users WHERE id = ?').pluck().get(administrator.id)).toBe(0);
+        expect(reopened.prepare('PRAGMA integrity_check').pluck().get()).toBe('ok');
+        reopened.close();
+        const restarted = await startedService();
+        await expect(anchorOf(restarted)).resolves.toEqual(anchor);
+        await expectNoRecreation(restarted, administrator, anchor);
+      });
+
+      it('[G23] refuses it on a legacy database tampered before migration 8 with foreign keys off only, in the four SQLite configurations', async () => {
+        // Base anterior à 8 escrita pelos repositórios; a remoção só exige `foreign_keys` desligado na
+        // ligação normal (sem controlo do esquema). Sem sessões do administrador.
+        const { database, temporary: own } = fresh(MIGRATED_TO_7);
+        const s = await seedIdentities(database);
+        applyPragmas(database, CONFIGURATIONS[1]);
+        database.prepare('DELETE FROM local_sessions WHERE user_id = ?').run(s.administrator.id);
+        database.exec(`DELETE FROM users WHERE id = '${s.administrator.id}'`);
+        database.close();
+
+        const harness = await startedService(own.filename);
+        expect(harness.service.startupReport).toMatchObject({ appliedMigrations: [8], schemaVersion: 8 });
+        const anchor = { fault: 'administrator-missing', state: 'broken' };
+        const { installation, users } = harness.service.identityProvisioning;
+        await expect(installation.verifyAnchor()).resolves.toEqual(anchor);
+        const completedAt = await completedAtOf(harness);
+        const live = liveServiceConnection(own.filename);
+        if (live === undefined) throw new Error('Ligação do serviço esperada.');
+        const before = inspectDatabase(own.filename, () => own.open(), snapshot);
+
+        for (const configuration of CONFIGURATIONS) {
+          applyPragmas(live, configuration);
+          try {
+            for (const [label, candidate] of recreations(s.administrator, completedAt, s.other).attempts) {
+              await expect(users.create(candidate as unknown as User), `${configuration.label}: ${label}`).rejects.toBeInstanceOf(
+                InitialAdministratorProtectedError,
+              );
+            }
+          } finally {
+            applyPragmas(live, CONFIGURATIONS[0]);
+          }
+          expect(inspectDatabase(own.filename, () => own.open(), snapshot), configuration.label).toEqual(before);
+          await expect(installation.verifyAnchor(), configuration.label).resolves.toEqual(anchor);
+        }
+        await expect(users.findById(s.administrator.id)).resolves.toBeUndefined();
+        await harness.service.stop();
+      });
+
+      it.each([
+        { label: 'identity absent', remove: true },
+        // Presente: sem a verificação na transacção, ou com ela depois dos conflitos, responderia `duplicate-id`.
+        { label: 'identity present, before the conflict checks', remove: false },
+      ])('[G24] re-checks the validated identity inside the transaction, not only the value read before it, $label', async ({ remove }) => {
+        const { administrator, harness } = await initialised();
+        if (remove) removeIdentityOutsideTheBoundary(administrator.id);
+        const completedAt = await completedAtOf(harness);
+        const anchor = await anchorOf(harness);
+        const before = inspect(snapshot);
+        // O identificador é lido uma vez pela verificação prévia e outra pela validação do candidato:
+        // só a verificação na transacção vê o valor que seria escrito.
+        let reads = 0;
+        const shifting = {
+          createdAt: completedAt,
+          displayName: 'Impostor Fictício',
+          get id(): string {
+            reads += 1;
+            return reads === 1 ? newId() : administrator.id;
+          },
+          status: 'ACTIVE',
+          username: uniqueUsername('impostor'),
+        };
+        await expect(harness.service.identityProvisioning.users.create(shifting as unknown as User)).rejects.toBeInstanceOf(
+          InitialAdministratorProtectedError,
+        );
+        expect(reads).toBe(2);
+        expect(inspect(snapshot)).toEqual(before);
+        await expect(anchorOf(harness)).resolves.toEqual(anchor);
+      });
+
+      it('[G25] refuses the identifier before validation and conflicts with the identity present, deactivated or absent', async () => {
+        const { administrator, harness } = await initialised({ session: true });
+        const { users } = harness.service.identityProvisioning;
+        const invalid = { ...administrator, username: '' } as unknown as User;
+        // A verificação prévia normaliza o identificador como `parseUserId`: também em maiúsculas vem primeiro.
+        const invalidUpperCase = { ...administrator, id: administrator.id.toUpperCase(), username: '' } as unknown as User;
+        const states: readonly (readonly [string, () => void])[] = [
+          ['present', () => undefined],
+          ['deactivated (status changed by SQL, D-209)', () => inspect((database) => database.prepare("UPDATE users SET status = 'INACTIVE' WHERE id = ?").run(administrator.id))],
+          ['absent', () => removeIdentityOutsideTheBoundary(administrator.id)],
+        ];
+        for (const [label, reach] of states) {
+          reach();
+          const before = inspect(snapshot);
+          const anchor = await anchorOf(harness);
+          // Sem a protecção prévia, `duplicate-id` (presente) ou a validação do candidato responderiam primeiro.
+          await expect(users.create(newUser({ id: administrator.id })), label).rejects.toBeInstanceOf(InitialAdministratorProtectedError);
+          await expect(users.create(invalid), label).rejects.toBeInstanceOf(InitialAdministratorProtectedError);
+          await expect(users.create(invalidUpperCase), label).rejects.toBeInstanceOf(InitialAdministratorProtectedError);
+          await expect(users.changeStatus(administrator.id, 'ACTIVE', clock.now().toISOString()), label).rejects.toBeInstanceOf(
+            InitialAdministratorProtectedError,
+          );
+          expect(inspect(snapshot), label).toEqual(before);
+          await expect(anchorOf(harness), label).resolves.toEqual(anchor);
+        }
+      });
+
+      it('[G26] keeps the legitimate bootstrap and ordinary identity and company provisioning unchanged', async () => {
+        const harness = await startedService();
+        const { installation, users } = harness.service.identityProvisioning;
+        // Antes da inicialização: criação comum e erros comuns, como sempre.
+        const earlier = await provision(harness);
+        await expect(users.create(newUser({ id: earlier.id }))).rejects.toMatchObject({ reason: 'duplicate-id' });
+        await expect(users.create(newUser({ username: earlier.username }))).rejects.toMatchObject({ reason: 'duplicate-username' });
+        await expect(users.create({ ...newUser(), username: '' })).rejects.toMatchObject({ name: 'DomainValidationError' });
+
+        const input = { displayName: 'Administrador Fictício', id: newId(), username: uniqueUsername('admin') };
+        const { initialAdministratorId } = await installation.initialise(input, TEST_PASSWORD);
+        await expect(anchorOf(harness)).resolves.toMatchObject({ initialAdministratorId, state: 'intact' });
+        await expect(harness.service.authentication.authenticate(input.username, TEST_PASSWORD)).resolves.toMatchObject({ ok: true });
+        await expect(installation.initialise({ ...input, id: newId(), username: uniqueUsername('admin') }, TEST_PASSWORD)).rejects.toMatchObject({
+          reason: 'already-initialised',
+        });
+
+        // Depois: identidades comuns e os seus erros inalterados; o username do administrador continua ocupado.
+        const ordinary = await provision(harness);
+        await expect(harness.service.authentication.authenticate(ordinary.username, TEST_PASSWORD)).resolves.toMatchObject({ ok: true });
+        await expect(users.create(newUser({ id: ordinary.id }))).rejects.toMatchObject({ reason: 'duplicate-id' });
+        await expect(users.create(newUser({ username: ordinary.username }))).rejects.toMatchObject({ reason: 'duplicate-username' });
+        await expect(users.create(newUser({ username: input.username }))).rejects.toMatchObject({ reason: 'duplicate-username' });
+        await users.changeStatus(ordinary.id, 'SUSPENDED', clock.now().toISOString());
+
+        // Identidades empresariais: empresa, estabelecimento e associações para uma identidade comum.
+        const company = newCompany();
+        const context = contextFor(company.tenantId);
+        await harness.service.companies.create(context, company);
+        const branch = createBranch(branchInput(company));
+        await harness.service.branches.create(context, branch);
+        const membership = newCompanyMembership(ordinary, company, { scope: 'BRANCH_RESTRICTED' });
+        await harness.service.companyMemberships.create(context, membership);
+        await harness.service.branchMemberships.create(context, newBranchMembership(membership, branch));
+        await expect(harness.service.companyMemberships.findById(context, membership.id)).resolves.toMatchObject({ userId: ordinary.id });
+        await expect(anchorOf(harness)).resolves.toMatchObject({ initialAdministratorId, state: 'intact' });
+      });
+
+      it('[G27] does not reconstruct the protected identity through another identifier (boundary)', async () => {
+        const { administrator, harness } = await initialised();
+        removeIdentityOutsideTheBoundary(administrator.id);
+        const anchor = { fault: 'administrator-missing', state: 'broken' };
+        // Com a linha ausente, o username fica livre; uma identidade NOVA (outro identificador) é uma
+        // identidade comum: não herda a credencial órfã nem repara a âncora.
+        const successor = newUser({ username: administrator.username });
+        await harness.service.identityProvisioning.users.create(successor);
+        await expect(anchorOf(harness)).resolves.toEqual(anchor);
+        await expect(harness.service.authentication.authenticate(administrator.username, TEST_PASSWORD)).resolves.toMatchObject({ ok: false });
+        expect(
+          inspect((database) => database.prepare('SELECT count(*) FROM password_credentials WHERE user_id = ?').pluck().get(successor.id)),
+        ).toBe(0);
+        await expect(
+          harness.service.identityProvisioning.users.create(newUser({ id: administrator.id, username: uniqueUsername('impostor') })),
+        ).rejects.toBeInstanceOf(InitialAdministratorProtectedError);
+        await expect(anchorOf(harness)).resolves.toEqual(anchor);
+      });
     });
   });
 

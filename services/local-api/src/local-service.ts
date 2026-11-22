@@ -54,7 +54,10 @@ import {
   createInternalDomainAuthorizationEvaluator,
   type InternalDomainAuthorizationEvaluator,
 } from './authorization/domain-authorization-engine.js';
-import { assertNotInitialAdministrator } from './authentication/initial-administrator-protection.js';
+import {
+  assertCandidateIsNotInitialAdministrator,
+  assertNotInitialAdministrator,
+} from './authentication/initial-administrator-protection.js';
 import { createInstallationBootstrap, type InstallationBootstrap } from './authentication/installation-bootstrap.js';
 import { createLocalAuthenticator, type LocalAuthenticator } from './authentication/local-authenticator.js';
 import { createPasswordHasher, type PasswordHasherOptions } from './authentication/password-hashing.js';
@@ -201,6 +204,10 @@ export interface LocalService {
    * Recusa operações fora de `READY`.
    */
   readonly identityProvisioning: {
+    /**
+     * `create` e `changeStatus` recusam o identificador do administrador inicial
+     * (`InitialAdministratorProtectedError`; D-208 e E1.07-D3-G0-R3, PD-82), exista ou não a linha.
+     */
     readonly users: UserDirectory;
     /** Gestão interna de credenciais (D-095). */
     readonly credentials: CredentialManager;
@@ -417,14 +424,18 @@ export const createLocalService = (
     const sessionStore = attempt('session-reset-failed', () => createSqliteSessionStore(connection));
     const reset = attempt('session-reset-failed', () => resetSessionsForRun(sessionStore, serviceRunId, sessionClock()));
     logger.log('info', 'service.sessions_reset', { ...reset, startupDeletion: 'suspended' });
+    const authenticationStore = createSqliteAuthenticationStore(connection);
     stores = {
-      authentication: createSqliteAuthenticationStore(connection),
+      authentication: authenticationStore,
       authorization: createSqliteAuthorizationPersistence(connection),
       memberships: createSqliteMembershipPersistence(connection),
       serviceRunId,
       sessions: sessionStore,
       tenant: createSqliteTenantPersistence(connection),
-      users: createSqliteUserDirectory(connection),
+      // E1.07-D3-G0-R3 (PD-82): repetida na transacção, sobre a identidade validada que vai ser escrita.
+      users: createSqliteUserDirectory(connection, {
+        guardCreate: (user) => assertNotInitialAdministrator(authenticationStore, user.id),
+      }),
     };
     return { appliedMigrations: result.applied, createdDatabase: !existed, schemaVersion: result.currentVersion };
   };
@@ -540,7 +551,13 @@ export const createLocalService = (
 
   const users: UserDirectory = {
     findById: (id) => guarded((current) => current.users.findById(id)),
-    create: (user) => guarded((current) => current.users.create(user)),
+    // E1.07-D3-G0-R3 (PD-82): o administrador inicial nunca é recriado pelo provisionamento comum,
+    // nem quando a linha falta; a recusa vem antes de qualquer validação, conflito ou escrita.
+    create: (user) =>
+      guarded((current) => {
+        assertCandidateIsNotInitialAdministrator(current.authentication, user);
+        return current.users.create(user);
+      }),
     // E1.07-D3-G0 (PD-75, D-201): o estado do administrador inicial só muda com autoridade da instalação.
     changeStatus: (id, status, at) =>
       guarded((current) => {
