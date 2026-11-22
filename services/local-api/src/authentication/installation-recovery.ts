@@ -157,6 +157,10 @@ const endInstant = (code: StoredRecoveryCode, at: string): string => (at < code.
 const sameCode = (left: StoredRecoveryCode | undefined, right: StoredRecoveryCode | undefined): boolean =>
   left !== undefined && right !== undefined && left.id === right.id && left.sequence === right.sequence && left.hash.equals(right.hash);
 
+/** Igual a `sameCode`, mas dois "sem código activo" também coincidem (primeira emissão). */
+const sameActiveCode = (left: StoredRecoveryCode | undefined, right: StoredRecoveryCode | undefined): boolean =>
+  (left === undefined && right === undefined) || sameCode(left, right);
+
 export const createInstallationRecovery = ({
   acquire,
   authentication: backend,
@@ -231,6 +235,9 @@ export const createInstallationRecovery = ({
     if (anchored.user.id !== userId) return refuse('not-initial-administrator');
     // Versões confirmadas depois da autenticação: uma substituição concorrente da credencial anula a rotação.
     const versions = store.readSecurityVersions(userId);
+    // Código activo que esta rotação substitui (RV-R1M-03, E1.07-D3-R1-C1): se outra rotação ou uma
+    // recuperação o mudar durante a derivação, esta rotação perde e não entrega código nenhum.
+    const expectedActive = recovery.readActiveCode();
 
     const generated = generateRecoveryCode(randomBytes);
     const verifier = await backend.hasher.hash(generated.normalized);
@@ -255,6 +262,7 @@ export const createInstallationRecovery = ({
           throw new RecordConflictError('credential-changed');
         }
         const active = recovery.readActiveCode();
+        if (!sameActiveCode(active, expectedActive)) throw new RecordConflictError('recovery-code-changed');
         const sequence = recovery.nextCodeSequence();
         if (active !== undefined) {
           recovery.endCode(active.id, active.hash, 'SUPERSEDED', endInstant(active, at));
