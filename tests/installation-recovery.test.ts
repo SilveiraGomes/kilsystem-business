@@ -8,7 +8,9 @@ import {
   inspectMigrations,
   MIGRATIONS,
   migrationChecksum,
+  openSqliteDatabase,
   runMigrations,
+  type OpenSqliteOptions,
   type SqliteDatabase,
 } from '../packages/database/src/index';
 import { contextFor, newCompany, newId } from './support/fixtures';
@@ -1264,8 +1266,11 @@ describe('E1.07-D3-R1 installation recovery of the initial administrator', () =>
 
     type Step = string | { readonly fail: RecoveryTerminalFailure | 'unexpected' } | { readonly confirm: true };
 
-    /** Terminal por passos (E1.07-D3-R1-C1): cada leitura consome um passo; a falha rejeita como o terminal real. */
-    const steppedTerminal = (steps: Step[]) => {
+    /**
+     * Terminal por passos (E1.07-D3-R1-C1): cada leitura consome um passo; a falha rejeita como o terminal real.
+     * `failWrite` (E1.07-D3-R1-C2) decide se uma escrita lança; as escritas falhadas não ficam em `writes`.
+     */
+    const steppedTerminal = (steps: Step[], failWrite: (text: string) => Error | undefined = () => undefined) => {
       const writes: string[] = [];
       const shown: string[] = [];
       const next = (): Promise<string> => {
@@ -1280,6 +1285,8 @@ describe('E1.07-D3-R1 installation recovery of the initial administrator', () =>
         readLine: next,
         readSecret: next,
         write: (text) => {
+          const failure = failWrite(text);
+          if (failure !== undefined) throw failure;
           const match = CODE_PATTERN.exec(text);
           if (match !== null) shown.push(match[0]);
           writes.push(text);
@@ -1342,5 +1349,195 @@ describe('E1.07-D3-R1 installation recovery of the initial administrator', () =>
       expect(repeated.shown).toHaveLength(2);
       expect(new Set(repeated.shown).size).toBe(1);
     }, 120_000);
+
+    /** E1.07-D3-R1-C2: execução com falhas injectadas no registo (`failLog`) ou na ligação (`openDatabase`). */
+    const runFaulty = async (
+      args: string[],
+      terminal: RecoveryTerminal,
+      lines: string[],
+      faults: {
+        readonly failLog?: (line: string) => boolean;
+        readonly openDatabase?: (options: OpenSqliteOptions) => SqliteDatabase;
+      } = {},
+    ) =>
+      runLocalServiceCli(
+        args,
+        cliEnv(temporary.filename),
+        {
+          sink: (line) => {
+            if (faults.failLog?.(line) === true) throw new Error('registo indisponível');
+            lines.push(line);
+          },
+          terminal,
+          waitForShutdownSignal: () => Promise.reject(new Error('não usado')),
+        },
+        {
+          protectedDirectories: PROTECTED_DIRECTORIES,
+          ...(faults.openDatabase === undefined ? {} : { openDatabase: faults.openDatabase }),
+        },
+      );
+
+    const eventsOf = (lines: readonly string[]): string[] => lines.map((line) => (JSON.parse(line) as { event: string }).event);
+    const NOTHING_CHANGED = /nada foi alterado/i;
+
+    /** Código emitido e confirmado pela CLI. */
+    const issuedThroughCli = async (administrator: User, lines: string[], password = TEST_PASSWORD): Promise<string> => {
+      const rotation = steppedTerminal([administrator.username, password, { confirm: true }]);
+      await expect(run(['recovery', 'rotate'], rotation.terminal, lines)).resolves.toBe(LOCAL_SERVICE_EXIT_CODES.ok);
+      const code = rotation.shown[0] ?? '';
+      expect(code).toMatch(CODE_PATTERN);
+      return code;
+    };
+
+    it('[R-F09d] after a committed recovery, a failing terminal write is a presentation failure (5), never "nothing changed"', async () => {
+      const administrator = await prepared();
+      const lines: string[] = [];
+      let code = await issuedThroughCli(administrator, lines);
+      const cases: readonly (readonly [string, RegExp, () => Error])[] = [
+        ['anúncio, erro genérico', /^Credencial do administrador inicial substituída/, () => new Error('terminal indisponível')],
+        ['anúncio, erro do terminal', /^Credencial do administrador inicial substituída/, () => new RecoveryTerminalError('terminal-error')],
+        ['apresentação do código novo', CODE_PATTERN, () => new Error('terminal indisponível')],
+      ];
+      for (const [index, [name, failingText, failure]] of cases.entries()) {
+        const password = `${OTHER_TEST_PASSWORD} ${index}`;
+        const version = inspect((database) => credentialVersion(database, administrator.id));
+        const logged = lines.length;
+        const terminal = steppedTerminal([code, password, password, { confirm: true }], (text) =>
+          failingText.test(text) ? failure() : undefined,
+        );
+        await expect(run(['recovery', 'recover'], terminal.terminal, lines), name).resolves.toBe(
+          LOCAL_SERVICE_EXIT_CODES.recoveryPresentationFailed,
+        );
+        // Confirmada na base: credencial substituída, código consumido, outro activo.
+        expect(inspect((database) => credentialVersion(database, administrator.id)), name).toBe(version + 1);
+        expect(inspect(codes).slice(-2).map((row) => row.state), name).toEqual(['CONSUMED', 'ACTIVE']);
+        const events = eventsOf(lines.slice(logged));
+        expect(events, name).toEqual(expect.arrayContaining(['recovery.completed', 'recovery.presentation_failed']));
+        expect(events, name).not.toContain('recovery.failed');
+        expect(events, name).not.toContain('recovery.input_aborted');
+        // O estado confirmado chega pelo canal que resta, sem o código e nunca como "nada foi alterado".
+        const written = terminal.writes.join('');
+        expect(written, name).toMatch(/FOI substituída/);
+        expect(written, name).not.toMatch(NOTHING_CHANGED);
+        expect(written, name).not.toMatch(CODE_PATTERN);
+        expect(terminal.shown, name).toEqual([]);
+        // A situação resolve-se com uma rotação com a NOVA palavra-passe.
+        code = await issuedThroughCli(administrator, lines, password);
+      }
+      // Sem repetição automática: uma recuperação por execução.
+      expect(inspect(eventKinds).filter((kind) => kind === 'recovery-succeeded')).toHaveLength(cases.length);
+      expect(lines.join('\n')).not.toContain(OTHER_TEST_PASSWORD);
+    }, 180_000);
+
+    it('[R-F09e] after the commit, a failing log, every channel failing or a failing service stop keep the committed outcome', async () => {
+      const administrator = await prepared();
+      const lines: string[] = [];
+      // Registo indisponível depois do commit: o código é apresentado e confirmado na mesma.
+      const rotation = steppedTerminal([administrator.username, TEST_PASSWORD, { confirm: true }]);
+      await expect(
+        runFaulty(['recovery', 'rotate'], rotation.terminal, lines, { failLog: (line) => line.includes('"recovery.code_issued"') }),
+      ).resolves.toBe(LOCAL_SERVICE_EXIT_CODES.ok);
+      const first = rotation.shown[0] ?? '';
+      expect(first).toMatch(CODE_PATTERN);
+      const recovery = steppedTerminal([first, OTHER_TEST_PASSWORD, OTHER_TEST_PASSWORD, { confirm: true }]);
+      await expect(
+        runFaulty(['recovery', 'recover'], recovery.terminal, lines, { failLog: (line) => line.includes('"recovery.completed"') }),
+      ).resolves.toBe(LOCAL_SERVICE_EXIT_CODES.ok);
+      expect(recovery.writes.join('')).toMatch(/substituída/);
+      expect(recovery.shown).toHaveLength(1);
+
+      // Nenhum canal: depois do commit falham todas as escritas do terminal e todos os registos da recuperação.
+      let committed = false;
+      const silent = steppedTerminal([administrator.username, OTHER_TEST_PASSWORD, { confirm: true }], () =>
+        committed ? new Error('terminal indisponível') : undefined,
+      );
+      const issuedBefore = inspect(codes).length;
+      await expect(
+        runFaulty(['recovery', 'rotate'], silent.terminal, lines, {
+          failLog: (line) => {
+            if (line.includes('"recovery.code_issued"')) committed = true;
+            return committed && line.includes('"recovery.');
+          },
+        }),
+      ).resolves.toBe(LOCAL_SERVICE_EXIT_CODES.recoveryPresentationFailed);
+      expect(inspect(codes)).toHaveLength(issuedBefore + 1);
+      expect(silent.shown).toEqual([]);
+
+      // Encerramento do serviço falhado: depois do commit prevalece o desfecho confirmado; antes, continua 1.
+      const closeFails = (options: OpenSqliteOptions): SqliteDatabase => {
+        const connection = openSqliteDatabase(options);
+        const close = connection.close.bind(connection);
+        return Object.assign(connection, {
+          close: () => {
+            close();
+            throw new Error('falha ao fechar');
+          },
+        });
+      };
+      const confirmed = steppedTerminal([administrator.username, OTHER_TEST_PASSWORD, { confirm: true }]);
+      await expect(runFaulty(['recovery', 'rotate'], confirmed.terminal, lines, { openDatabase: closeFails })).resolves.toBe(
+        LOCAL_SERVICE_EXIT_CODES.ok,
+      );
+      const unconfirmed = steppedTerminal([administrator.username, OTHER_TEST_PASSWORD, { fail: 'end-of-input' }]);
+      await expect(runFaulty(['recovery', 'rotate'], unconfirmed.terminal, lines, { openDatabase: closeFails })).resolves.toBe(
+        LOCAL_SERVICE_EXIT_CODES.recoveryPresentationFailed,
+      );
+      const refused = steppedTerminal([administrator.username, TEST_PASSWORD]);
+      await expect(runFaulty(['recovery', 'rotate'], refused.terminal, lines, { openDatabase: closeFails })).resolves.toBe(
+        LOCAL_SERVICE_EXIT_CODES.startupFailed,
+      );
+      expect(lines.join('\n')).toContain('service.stop_failed');
+
+      // A base foi libertada em todos os casos e ficou um único código activo.
+      await issuedThroughCli(administrator, lines, OTHER_TEST_PASSWORD);
+      expect(inspect(codes).filter((row) => row.state === 'ACTIVE')).toHaveLength(1);
+      const log = lines.join('\n');
+      expect(log).not.toContain(OTHER_TEST_PASSWORD);
+      expect(log).not.toContain(TEST_PASSWORD);
+      for (const fragment of fragmentsOf(first)) expect(log).not.toContain(fragment);
+    }, 180_000);
+
+    it('[R-S17d] a failure inside the confirming transaction exits 3 with nothing changed; a failing log before the commit still releases the database', async () => {
+      const administrator = await prepared();
+      const lines: string[] = [];
+      const code = await issuedThroughCli(administrator, lines);
+      const state = () => inspect((database) => rows(database, ['password_credentials', 'installation_recovery_codes']));
+      const before = state();
+      // Trigger temporário só na ligação deste serviço: a inserção do novo código falha dentro da transacção,
+      // depois da substituição da credencial e do consumo do código.
+      const failingInsertion = (options: OpenSqliteOptions): SqliteDatabase => {
+        const connection = openSqliteDatabase(options);
+        connection.exec(`CREATE TEMP TRIGGER test_fail_code_insertion BEFORE INSERT ON main.installation_recovery_codes
+          BEGIN SELECT RAISE(ABORT, 'ensaio: falha antes do commit'); END`);
+        return connection;
+      };
+      const logged = lines.length;
+      const failing = steppedTerminal([code, OTHER_TEST_PASSWORD, OTHER_TEST_PASSWORD, { confirm: true }]);
+      await expect(runFaulty(['recovery', 'recover'], failing.terminal, lines, { openDatabase: failingInsertion })).resolves.toBe(
+        LOCAL_SERVICE_EXIT_CODES.recoveryRefused,
+      );
+      const events = eventsOf(lines.slice(logged));
+      expect(events).toContain('recovery.failed');
+      expect(events).not.toContain('recovery.completed');
+      expect(failing.shown).toEqual([]);
+      expect(state()).toEqual(before);
+
+      // Registo indisponível antes do commit: o código de saída próprio mantém-se e o serviço é parado.
+      const interrupted = steppedTerminal([{ fail: 'interrupted' }]);
+      await expect(
+        runFaulty(['recovery', 'rotate'], interrupted.terminal, lines, { failLog: (line) => line.includes('"recovery.input_aborted"') }),
+      ).resolves.toBe(LOCAL_SERVICE_EXIT_CODES.recoveryCancelled);
+      expect(interrupted.writes.join('')).toMatch(NOTHING_CHANGED);
+      await expect(
+        runFaulty(['recovery', 'rotate'], steppedTerminal([{ fail: 'unexpected' }]).terminal, lines, {
+          failLog: (line) => line.includes('"recovery.failed"'),
+        }),
+      ).resolves.toBe(LOCAL_SERVICE_EXIT_CODES.recoveryRefused);
+      expect(state()).toEqual(before);
+
+      // O código não foi consumido: a recuperação seguinte, sem falhas, conclui.
+      const retry = steppedTerminal([code, OTHER_TEST_PASSWORD, OTHER_TEST_PASSWORD, { confirm: true }]);
+      await expect(run(['recovery', 'recover'], retry.terminal, lines)).resolves.toBe(LOCAL_SERVICE_EXIT_CODES.ok);
+    }, 180_000);
   });
 });

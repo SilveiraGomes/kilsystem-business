@@ -6,10 +6,12 @@ import {
 import { createLocalService, type LocalServiceDependencies } from './local-service.js';
 import { createJsonLogger } from './logger.js';
 import {
+  logBestEffort,
   RECOVERY_COMMANDS,
   RecoveryTerminalError,
   runRecoveryCommand,
   type RecoveryCommand,
+  type RecoveryOutcome,
   type RecoveryTerminal,
   type RecoveryTerminalFailure,
 } from './recovery-cli.js';
@@ -27,6 +29,8 @@ export const LOCAL_SERVICE_EXIT_CODES = Object.freeze({
   /**
    * Operação confirmada, mas o novo código não foi apresentado ou confirmado (incluindo cancelamento,
    * fim da entrada ou erro do terminal durante a confirmação): emitir outro com `recovery rotate`.
+   * E1.07-D3-R1-C2: também quando, depois do *commit*, falham as escritas do terminal ou o registo,
+   * mesmo que nenhum canal reste para o dizer.
    */
   recoveryPresentationFailed: 5,
   /** E1.07-D3-R1-C1: Ctrl+C durante a introdução de dados; nada foi alterado. */
@@ -80,6 +84,9 @@ const RECOVERY_EXIT_CODES = Object.freeze({
   refused: LOCAL_SERVICE_EXIT_CODES.recoveryRefused,
   throttled: LOCAL_SERVICE_EXIT_CODES.recoveryThrottled,
 });
+
+/** Desfechos que só existem depois do *commit* da operação (E1.07-D3-R1-C2). */
+const COMMITTED_OUTCOMES: ReadonlySet<RecoveryOutcome> = new Set(['ok', 'presentation-failed']);
 
 /** Leituras interrompidas ANTES de qualquer operação (as da confirmação são tratadas na apresentação). */
 const TERMINAL_FAILURES: Readonly<Record<RecoveryTerminalFailure, { readonly exitCode: number; readonly message: string }>> =
@@ -148,13 +155,18 @@ export const runLocalServiceCli = async (
   }
 
   let exitCode: number = LOCAL_SERVICE_EXIT_CODES.ok;
+  let committed = false;
   if (parsed.kind === 'recovery' && io.terminal !== undefined) {
     try {
-      exitCode = RECOVERY_EXIT_CODES[await runRecoveryCommand(parsed.command, service, io.terminal, logger)];
+      const outcome = await runRecoveryCommand(parsed.command, service, io.terminal, logger);
+      committed = COMMITTED_OUTCOMES.has(outcome);
+      exitCode = RECOVERY_EXIT_CODES[outcome];
     } catch (error) {
+      // `runRecoveryCommand` só rejeita antes do commit: aqui "nada foi alterado" é exacto. Os registos
+      // são de melhor esforço para que o serviço seja sempre parado e a base libertada.
       if (error instanceof RecoveryTerminalError) {
         const { exitCode: terminalExitCode, message } = TERMINAL_FAILURES[error.failure];
-        logger.log('warn', 'recovery.input_aborted', { command: parsed.command, terminalFailure: error.failure });
+        logBestEffort(logger, 'warn', 'recovery.input_aborted', { command: parsed.command, terminalFailure: error.failure });
         try {
           io.terminal.write(`${message}\n`);
         } catch {
@@ -163,7 +175,7 @@ export const runLocalServiceCli = async (
         exitCode = terminalExitCode;
       } else {
         // Falha inesperada antes da confirmação: as transacções são atómicas, nada foi alterado.
-        logger.log('error', 'recovery.failed', {
+        logBestEffort(logger, 'error', 'recovery.failed', {
           causeName: error instanceof Error ? error.name : null,
           command: parsed.command,
         });
@@ -179,7 +191,8 @@ export const runLocalServiceCli = async (
   try {
     await service.stop();
   } catch {
-    return LOCAL_SERVICE_EXIT_CODES.startupFailed;
+    // Depois do commit, 1 diria "base inalterada": o desfecho confirmado (0 ou 5) prevalece (RV-C1M-01).
+    return committed ? exitCode : LOCAL_SERVICE_EXIT_CODES.startupFailed;
   }
   return exitCode;
 };
