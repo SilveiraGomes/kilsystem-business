@@ -636,7 +636,14 @@ describe('Domain contract immutability (E1.07-D1-H, PD-64)', () => {
       expectLockedRecord(SESSION_POLICY_LIMITS.idleTimeoutSeconds, { max: 28800, min: 60 });
       expectLockedRecord(PASSWORD_HASHING_PARAMETERS, { memoryKiB: 65536, parallelism: 4, passes: 3 });
       expectLockedRecord(MINIMUM_PASSWORD_HASHING_PARAMETERS, { memoryKiB: 19456, parallelism: 1, passes: 2 });
-      expectLockedRecord(LOCAL_SERVICE_EXIT_CODES, { invalidConfiguration: 2, ok: 0, startupFailed: 1 });
+      expectLockedRecord(LOCAL_SERVICE_EXIT_CODES, {
+        invalidConfiguration: 2,
+        ok: 0,
+        recoveryPresentationFailed: 5,
+        recoveryRefused: 3,
+        recoveryThrottled: 4,
+        startupFailed: 1,
+      });
       expectLockedRecord(AUTHENTICATION_THROTTLE_POLICY, {
         baseLockSeconds: 30,
         clockSkewToleranceSeconds: 60,
@@ -655,7 +662,7 @@ describe('Domain contract immutability (E1.07-D1-H, PD-64)', () => {
         }).toThrow(TypeError);
       }
       // E1.07-D2 acrescenta a migração 6; a lista continua congelada.
-      expect(MIGRATIONS.map((migration) => migration.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+      expect(MIGRATIONS.map((migration) => migration.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
 
       expect(() => {
         (EMPTY_COMMON_PASSWORD_LIST as unknown as Record<string, unknown>)['includes'] = () => true;

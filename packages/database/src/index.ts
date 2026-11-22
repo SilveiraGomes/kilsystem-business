@@ -7,6 +7,7 @@ export * from './location.js';
 export * from './migrations.js';
 export * from './sqlite-authentication-store.js';
 export * from './sqlite-authorization-persistence.js';
+export * from './sqlite-installation-recovery-store.js';
 export * from './sqlite-membership-persistence.js';
 export * from './sqlite-session-store.js';
 export * from './sqlite-tenant-persistence.js';

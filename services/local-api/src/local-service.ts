@@ -5,6 +5,7 @@ import {
   assertNoNonPositiveRowids,
   createSqliteAuthenticationStore,
   createSqliteAuthorizationPersistence,
+  createSqliteInstallationRecoveryStore,
   createSqliteMembershipPersistence,
   createSqliteSessionStore,
   createSqliteTenantPersistence,
@@ -26,6 +27,7 @@ import {
   type SqliteAuthenticationStore,
   type SqliteAuthorizationPersistence,
   type SqliteDatabase,
+  type SqliteInstallationRecoveryStore,
   type SqliteMembershipPersistence,
   type SqliteSessionStore,
   type SqliteTenantPersistence,
@@ -59,6 +61,7 @@ import {
   assertNotInitialAdministrator,
 } from './authentication/initial-administrator-protection.js';
 import { createInstallationBootstrap, type InstallationBootstrap } from './authentication/installation-bootstrap.js';
+import { createInstallationRecovery, type InstallationRecovery } from './authentication/installation-recovery.js';
 import { createLocalAuthenticator, type LocalAuthenticator } from './authentication/local-authenticator.js';
 import { createPasswordHasher, type PasswordHasherOptions } from './authentication/password-hashing.js';
 import type { LocalServiceConfig } from './config.js';
@@ -238,6 +241,12 @@ export interface LocalService {
    * arranque anterior são recusadas (`LocalServiceStateError('not-ready')`).
    */
   readonly sessions: LocalSessions;
+  /**
+   * Recuperação local do administrador inicial — R1 (E1.07-D3-R1; PD-77, D-233). Só para a CLI local
+   * do serviço, com a base em uso exclusivo; nunca exposta por HTTP, IPC Electron nem interface
+   * pública, e fora de `identityProvisioning` e de `TenantStores`. Não concede autoridade nenhuma.
+   */
+  readonly installationRecovery: InstallationRecovery;
 }
 
 /** Repositórios activos enquanto a ligação está aberta; descartados no encerramento. */
@@ -247,6 +256,8 @@ interface ServiceStores {
   readonly memberships: SqliteMembershipPersistence;
   readonly authorization: SqliteAuthorizationPersistence;
   readonly authentication: SqliteAuthenticationStore;
+  /** Recuperação do administrador inicial (migração 9), sobre a mesma ligação de `authentication`. */
+  readonly recovery: SqliteInstallationRecoveryStore;
   readonly sessions: SqliteSessionStore;
   /** Identificador aleatório deste arranque efectivo; não é o identificador da instalação. */
   readonly serviceRunId: string;
@@ -427,6 +438,7 @@ export const createLocalService = (
     const authenticationStore = createSqliteAuthenticationStore(connection);
     stores = {
       authentication: authenticationStore,
+      recovery: createSqliteInstallationRecoveryStore(connection),
       authorization: createSqliteAuthorizationPersistence(connection),
       memberships: createSqliteMembershipPersistence(connection),
       serviceRunId,
@@ -663,6 +675,9 @@ export const createLocalService = (
     },
   });
 
+  // Uma única instância: a rotação do código de recuperação usa a mesma autenticação completa (D-233).
+  const authenticator = createLocalAuthenticator(authenticationBackend);
+
   // Sessões (E1.07-C): as operações ficam ligadas ao arranque em que foram obtidas. Fora de
   // `READY`, ou depois de um novo arranque, são recusadas com `not-ready` (D-114).
   const sessionBackendFor = (serviceRunId: string | undefined): SessionBackend =>
@@ -727,9 +742,17 @@ export const createLocalService = (
     branchMemberships,
     membershipScopes,
     internalAuthorization,
-    authentication: createLocalAuthenticator(authenticationBackend),
+    authentication: authenticator,
     get sessions() {
       return currentSessions().sessions;
     },
+    installationRecovery: createInstallationRecovery({
+      acquire: () => {
+        const current = ready();
+        return { authentication: current.authentication, recovery: current.recovery };
+      },
+      authentication: authenticationBackend,
+      authenticator,
+    }),
   };
 };

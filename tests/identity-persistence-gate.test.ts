@@ -848,7 +848,7 @@ describe('E1.07-D3-G0 installation authority gate (PD-73, PD-75, PD-76)', () => 
         database.close();
 
         const harness = await startedService(own.filename);
-        expect(harness.service.startupReport).toMatchObject({ appliedMigrations: [8], schemaVersion: 8 });
+        expect(harness.service.startupReport).toMatchObject({ appliedMigrations: [8, 9], schemaVersion: 9 });
         const anchor = { fault: 'administrator-missing', state: 'broken' };
         const { installation, users } = harness.service.identityProvisioning;
         await expect(installation.verifyAnchor()).resolves.toEqual(anchor);
@@ -902,6 +902,36 @@ describe('E1.07-D3-G0 installation authority gate (PD-73, PD-75, PD-76)', () => 
           InitialAdministratorProtectedError,
         );
         expect(reads).toBe(2);
+        expect(inspect(snapshot)).toEqual(before);
+        await expect(anchorOf(harness)).resolves.toEqual(anchor);
+      });
+
+      it.each([
+        { label: 'identity absent', remove: true },
+        { label: 'identity present', remove: false },
+      ])('[G24b] the prior check reads the identifier once: administrator first, ordinary afterwards is refused (RV-R4-01), $label', async ({ remove }) => {
+        const { administrator, harness } = await initialised();
+        if (remove) removeIdentityOutsideTheBoundary(administrator.id);
+        const completedAt = await completedAtOf(harness);
+        const anchor = await anchorOf(harness);
+        const before = inspect(snapshot);
+        // Com a verificação prévia a ler `id` duas vezes (mutação R4e), veria o administrador e depois um
+        // identificador comum e deixaria passar a criação de uma identidade comum.
+        let reads = 0;
+        const shifting = {
+          createdAt: completedAt,
+          displayName: 'Impostor Fictício',
+          get id(): string {
+            reads += 1;
+            return reads === 1 ? administrator.id : newId();
+          },
+          status: 'ACTIVE',
+          username: uniqueUsername('impostor'),
+        };
+        await expect(harness.service.identityProvisioning.users.create(shifting as unknown as User)).rejects.toBeInstanceOf(
+          InitialAdministratorProtectedError,
+        );
+        expect(reads).toBe(1);
         expect(inspect(snapshot)).toEqual(before);
         await expect(anchorOf(harness)).resolves.toEqual(anchor);
       });
@@ -1012,7 +1042,7 @@ describe('E1.07-D3-G0 installation authority gate (PD-73, PD-75, PD-76)', () => 
         applyPragmas(database, CONFIGURATIONS[1]);
         tamper(database, s);
         applyPragmas(database, CONFIGURATIONS[0]);
-        expect(runMigrations(database)).toEqual({ applied: [8], currentVersion: 8 });
+        expect(runMigrations(database)).toEqual({ applied: [8, 9], currentVersion: 9 });
         const store = createSqliteAuthenticationStore(database);
         // O registo descritivo continua a mostrar o identificador; só a âncora o recusa.
         expect(store.readBootstrap()?.initialAdministratorId).toBe(s.administrator.id);
@@ -1057,7 +1087,7 @@ describe('E1.07-D3-G0 installation authority gate (PD-73, PD-75, PD-76)', () => 
         database.close();
 
         const harness = await startedService(own.filename);
-        expect(harness.service.startupReport, fault).toMatchObject({ appliedMigrations: [8], schemaVersion: 8 });
+        expect(harness.service.startupReport, fault).toMatchObject({ appliedMigrations: [8, 9], schemaVersion: 9 });
         const { installation, credentials } = harness.service.identityProvisioning;
         await expect(installation.verifyAnchor(), fault).resolves.toEqual({ fault, state: 'broken' });
         // O registo descritivo continua a mostrar o identificador; não é prova de nada.
@@ -1113,10 +1143,13 @@ describe('E1.07-D3-G0 installation authority gate (PD-73, PD-75, PD-76)', () => 
       const triggers = () => database.prepare("SELECT name FROM sqlite_schema WHERE type = 'trigger' ORDER BY name").pluck().all();
       const before = { rows: snapshot(database), triggers: triggers() };
 
-      expect(inspectMigrations(database)).toMatchObject({ appliedVersions: [1, 2, 3, 4, 5, 6, 7], pendingVersions: [8] });
-      expect(runMigrations(database)).toEqual({ applied: [8], currentVersion: 8 });
+      expect(inspectMigrations(database)).toMatchObject({ appliedVersions: [1, 2, 3, 4, 5, 6, 7], pendingVersions: [8, 9] });
+      // Só a migração 8 (E1.07-D3-R1 acrescenta a 9, verificada à parte em installation-recovery.test.ts).
+      expect(runMigrations(database, MIGRATIONS.slice(0, 8))).toEqual({ applied: [8], currentVersion: 8 });
       expect(snapshot(database)).toEqual(before.rows);
       expect(triggers()).toEqual([...before.triggers, ...MIGRATION_8_TRIGGERS].sort());
+      expect(runMigrations(database)).toEqual({ applied: [9], currentVersion: 9 });
+      expect(snapshot(database)).toEqual(before.rows);
       expect(database.prepare('SELECT checksum FROM schema_migrations WHERE version <= 7 ORDER BY version').pluck().all()).toEqual(
         PUBLISHED_CHECKSUMS_1_TO_7,
       );
@@ -1125,7 +1158,7 @@ describe('E1.07-D3-G0 installation authority gate (PD-73, PD-75, PD-76)', () => 
       expect(database.prepare('SELECT revoked_at FROM local_sessions WHERE id = ?').pluck().get(s.sessionId)).toBeNull();
       expect(database.prepare('PRAGMA integrity_check').pluck().get()).toBe('ok');
       expect(database.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
-      expect(runMigrations(database)).toEqual({ applied: [], currentVersion: 8 });
+      expect(runMigrations(database)).toEqual({ applied: [], currentVersion: 9 });
       // A migração 8 só acrescenta triggers; não cria tabelas, colunas nem dados.
       expect(MIGRATIONS[7]?.sql.replace(/--.*$/gm, '')).not.toMatch(/\b(CREATE TABLE|ALTER TABLE|INSERT INTO|DROP)\b/i);
     });
@@ -1139,10 +1172,10 @@ describe('E1.07-D3-G0 installation authority gate (PD-73, PD-75, PD-76)', () => 
       expect(() => runMigrations(database, [...MIGRATED_TO_7, { ...latest, sql: `${latest.sql}\nSELECT * FROM missing_table;` }])).toThrow(
         /missing_table/,
       );
-      expect(inspectMigrations(database)).toMatchObject({ appliedVersions: [1, 2, 3, 4, 5, 6, 7], pendingVersions: [8] });
+      expect(inspectMigrations(database)).toMatchObject({ appliedVersions: [1, 2, 3, 4, 5, 6, 7], pendingVersions: [8, 9] });
       expect(triggers()).toEqual(before.triggers);
       expect(snapshot(database)).toEqual(before.rows);
-      expect(runMigrations(database)).toEqual({ applied: [8], currentVersion: 8 });
+      expect(runMigrations(database)).toEqual({ applied: [8, 9], currentVersion: 9 });
       expect(() => inspectMigrations(database, [...MIGRATED_TO_7, { ...latest, sql: `${latest.sql}\n` }])).toThrow(
         /migration-checksum-mismatch/,
       );
@@ -1207,7 +1240,7 @@ describe('E1.07-D3-G0 installation authority gate (PD-73, PD-75, PD-76)', () => 
 
       expect(createHash('sha256').update(readFileSync(temporary.filename)).digest('hex')).toBe(hashBefore);
       const reopened = temporary.open();
-      expect(inspectMigrations(reopened)).toMatchObject({ appliedVersions: [1, 2, 3, 4, 5, 6], pendingVersions: [7, 8] });
+      expect(inspectMigrations(reopened)).toMatchObject({ appliedVersions: [1, 2, 3, 4, 5, 6], pendingVersions: [7, 8, 9] });
       expect(reopened.prepare('SELECT id FROM users WHERE rowid = -1').pluck().get()).toBe(legacyUser.id);
       reopened.close();
     });
@@ -1232,7 +1265,7 @@ describe('E1.07-D3-G0 installation authority gate (PD-73, PD-75, PD-76)', () => 
       await expect(applying.service.start()).rejects.toMatchObject({ reason: 'legacy-rowid-incompatible' });
       await applying.service.stop();
       const reopened = temporary.open();
-      expect(inspectMigrations(reopened)).toMatchObject({ pendingVersions: [8] });
+      expect(inspectMigrations(reopened)).toMatchObject({ pendingVersions: [8, 9] });
       reopened.close();
     });
 
@@ -1242,7 +1275,7 @@ describe('E1.07-D3-G0 installation authority gate (PD-73, PD-75, PD-76)', () => 
       await seedIdentities(connection);
       connection.close();
       const harness = await startedService();
-      expect(harness.service.startupReport).toMatchObject({ appliedMigrations: [8], schemaVersion: 8 });
+      expect(harness.service.startupReport).toMatchObject({ appliedMigrations: [8, 9], schemaVersion: 9 });
       expect(harness.records().some((record) => record['event'] === 'service.migration_preflight_refused')).toBe(false);
     });
   });

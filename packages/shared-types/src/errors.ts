@@ -63,6 +63,7 @@ export type RecordConflictReason =
   | 'membership-not-branch-restricted'
   | 'duplicate-credential'
   | 'credential-changed'
+  | 'recovery-code-changed'
   | 'duplicate-role-code'
   | 'duplicate-role-permission'
   | 'duplicate-role-assignment';
