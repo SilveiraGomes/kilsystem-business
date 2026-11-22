@@ -26,7 +26,8 @@ export const AUTHENTICATION_THROTTLE_POLICY = Object.freeze({
   clockSkewToleranceSeconds: 60,
 });
 
-export type ThrottlePolicy = typeof AUTHENTICATION_THROTTLE_POLICY;
+/** Forma de uma política (valores numéricos); a da recuperação (E1.07-D3-R1) usa outros valores. */
+export type ThrottlePolicy = { readonly [Key in keyof typeof AUTHENTICATION_THROTTLE_POLICY]: number };
 
 export const INSTANCE_THROTTLE_KEY = 'instance';
 

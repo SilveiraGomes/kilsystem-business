@@ -30,7 +30,10 @@ export class InitialAdministratorProtectedError extends Error {
  * nunca passa a ser o administrador inicial depois desta verificação.
  */
 export const assertNotInitialAdministrator = (store: SqliteAuthenticationStore, userId: UserId): void => {
-  if (store.readBootstrap()?.initialAdministratorId === userId) throw new InitialAdministratorProtectedError();
+  // E1.07-D3-R1 (RV-R4-03, D-233 DP-10): compara o identificador normalizado como `parseUserId`
+  // (UUID em minúsculas), para que a protecção responda antes de qualquer `RecordNotFoundError`.
+  const normalized: unknown = typeof userId === 'string' ? userId.toLowerCase() : userId;
+  if (store.readBootstrap()?.initialAdministratorId === normalized) throw new InitialAdministratorProtectedError();
 };
 
 /**

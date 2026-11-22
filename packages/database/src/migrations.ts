@@ -859,6 +859,170 @@ BEGIN
 END;
 `;
 
+// E1.07-D3-R1 (PD-77; D-215, D-223, D-233): recuperação local da credencial do administrador inicial.
+// Só acrescenta tabelas, um índice e triggers; não altera dados nem as migrações 1 a 8.
+// - `installation_recovery_codes`: só o verificador Argon2id de cada código (nunca o código), ligado
+//   ao registo da instalação. No máximo um `ACTIVE`; cada código passa uma única vez a `CONSUMED`
+//   (recuperação) ou `SUPERSEDED` (rotação) e nunca é eliminado. A sequência é contínua e o motivo
+//   de emissão tem de corresponder ao fim do código anterior.
+// - `installation_recovery_throttle`: uma única linha com a limitação própria da recuperação.
+// - `installation_recovery_events`: registo só acrescentado, sem segredos nem dados pessoais.
+// As guardas correm em BEFORE INSERT/UPDATE, antes da resolução de conflitos, e por isso fecham
+// `REPLACE`/`UPDATE OR REPLACE` em qualquer configuração de foreign_keys/recursive_triggers
+// (D-126, PD-69). As guardas de `rowid` seguem a migração 7 (PD-72). Fronteira (D-209): quem
+// escreve SQL pode acrescentar um verificador seu (equivale a substituir a credencial no lugar) e
+// quem controla o esquema pode remover os triggers.
+const V9_INSTALLATION_RECOVERY = `
+CREATE TABLE installation_recovery_codes (
+  id TEXT PRIMARY KEY NOT NULL CHECK (length(id) = 36),
+  sequence INTEGER NOT NULL UNIQUE CHECK (sequence >= 1),
+  initial_administrator_id TEXT NOT NULL REFERENCES users (id) ON UPDATE RESTRICT ON DELETE RESTRICT,
+  anchor_completed_at TEXT NOT NULL,
+  algorithm TEXT NOT NULL CHECK (algorithm = 'argon2id'),
+  algorithm_version INTEGER NOT NULL CHECK (algorithm_version = 19),
+  memory_kib INTEGER NOT NULL CHECK (memory_kib BETWEEN 19456 AND 1048576),
+  passes INTEGER NOT NULL CHECK (passes BETWEEN 1 AND 16),
+  parallelism INTEGER NOT NULL CHECK (parallelism BETWEEN 1 AND 16),
+  salt BLOB NOT NULL CHECK (length(salt) BETWEEN 16 AND 64),
+  hash BLOB NOT NULL CHECK (length(hash) BETWEEN 32 AND 64),
+  issued_at TEXT NOT NULL,
+  issued_reason TEXT NOT NULL CHECK (issued_reason IN ('first-issuance', 'rotation', 'recovery')),
+  state TEXT NOT NULL CHECK (state IN ('ACTIVE', 'CONSUMED', 'SUPERSEDED')),
+  ended_at TEXT,
+  CONSTRAINT installation_recovery_codes_memory_per_lane CHECK (memory_kib >= 8 * parallelism),
+  CONSTRAINT installation_recovery_codes_end CHECK ((state = 'ACTIVE') = (ended_at IS NULL)),
+  CONSTRAINT installation_recovery_codes_chronology CHECK (ended_at IS NULL OR ended_at >= issued_at)
+) STRICT;
+
+CREATE UNIQUE INDEX installation_recovery_codes_single_active
+  ON installation_recovery_codes (state) WHERE state = 'ACTIVE';
+
+CREATE TABLE installation_recovery_throttle (
+  id INTEGER PRIMARY KEY NOT NULL CHECK (id = 1),
+  failures INTEGER NOT NULL CHECK (failures >= 0),
+  refused_count INTEGER NOT NULL CHECK (refused_count >= 0),
+  window_started_at TEXT NOT NULL,
+  locked_until TEXT,
+  last_attempt_at TEXT NOT NULL
+) STRICT;
+
+CREATE TABLE installation_recovery_events (
+  id TEXT PRIMARY KEY NOT NULL CHECK (length(id) = 36),
+  sequence INTEGER NOT NULL UNIQUE CHECK (sequence >= 1),
+  occurred_at TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN (
+    'code-issued', 'code-rotated', 'rotation-refused',
+    'recovery-attempted', 'recovery-refused', 'recovery-failed', 'recovery-succeeded'
+  )),
+  reason TEXT CHECK (reason IS NULL OR reason IN (
+    'anchor-not-intact', 'administrator-not-active', 'not-initial-administrator',
+    'invalid-recovery-code', 'recovery-code-changed', 'credential-changed'
+  )),
+  consumed_code_sequence INTEGER CHECK (consumed_code_sequence IS NULL OR consumed_code_sequence >= 1),
+  issued_code_sequence INTEGER CHECK (issued_code_sequence IS NULL OR issued_code_sequence >= 1),
+  resulting_credential_version INTEGER CHECK (resulting_credential_version IS NULL OR resulting_credential_version >= 1),
+  CONSTRAINT installation_recovery_events_issued
+    CHECK ((kind IN ('code-issued', 'code-rotated', 'recovery-succeeded')) = (issued_code_sequence IS NOT NULL)),
+  CONSTRAINT installation_recovery_events_credential
+    CHECK ((kind = 'recovery-succeeded') = (resulting_credential_version IS NOT NULL)),
+  CONSTRAINT installation_recovery_events_reason
+    CHECK ((kind IN ('rotation-refused', 'recovery-refused', 'recovery-failed')) = (reason IS NOT NULL))
+) STRICT;
+
+CREATE TRIGGER installation_recovery_codes_insert_requires_new_active_code
+BEFORE INSERT ON installation_recovery_codes
+WHEN NEW.state IS NOT 'ACTIVE' OR NEW.ended_at IS NOT NULL
+  OR EXISTS (SELECT 1 FROM installation_recovery_codes WHERE id = NEW.id OR state = 'ACTIVE')
+  OR NEW.sequence IS NOT (SELECT coalesce(max(sequence), 0) + 1 FROM installation_recovery_codes)
+  OR NOT EXISTS (
+    SELECT 1 FROM installation_bootstrap
+    WHERE initial_administrator_id = NEW.initial_administrator_id AND completed_at = NEW.anchor_completed_at
+  )
+  OR (NEW.issued_reason = 'first-issuance' AND NEW.sequence IS NOT 1)
+  OR (NEW.issued_reason = 'rotation' AND NOT EXISTS (
+    SELECT 1 FROM installation_recovery_codes WHERE sequence = NEW.sequence - 1 AND state = 'SUPERSEDED'
+  ))
+  OR (NEW.issued_reason = 'recovery' AND NOT EXISTS (
+    SELECT 1 FROM installation_recovery_codes WHERE sequence = NEW.sequence - 1 AND state = 'CONSUMED'
+  ))
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: installation_recovery_codes accepts only the next active code of the installation');
+END;
+
+CREATE TRIGGER installation_recovery_codes_end_once
+BEFORE UPDATE ON installation_recovery_codes
+WHEN OLD.state IS NOT 'ACTIVE' OR NEW.state NOT IN ('CONSUMED', 'SUPERSEDED') OR NEW.ended_at IS NULL
+  OR NEW.id IS NOT OLD.id OR NEW.sequence IS NOT OLD.sequence
+  OR NEW.initial_administrator_id IS NOT OLD.initial_administrator_id
+  OR NEW.anchor_completed_at IS NOT OLD.anchor_completed_at
+  OR NEW.algorithm IS NOT OLD.algorithm OR NEW.algorithm_version IS NOT OLD.algorithm_version
+  OR NEW.memory_kib IS NOT OLD.memory_kib OR NEW.passes IS NOT OLD.passes OR NEW.parallelism IS NOT OLD.parallelism
+  OR NEW.salt IS NOT OLD.salt OR NEW.hash IS NOT OLD.hash
+  OR NEW.issued_at IS NOT OLD.issued_at OR NEW.issued_reason IS NOT OLD.issued_reason
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: installation_recovery_codes only end once, from ACTIVE');
+END;
+
+CREATE TRIGGER installation_recovery_codes_never_deleted
+BEFORE DELETE ON installation_recovery_codes
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: installation_recovery_codes are never deleted');
+END;
+
+CREATE TRIGGER installation_recovery_codes_rowid_insert_requires_new_code
+BEFORE INSERT ON installation_recovery_codes
+WHEN NEW.rowid > 0 AND EXISTS (SELECT 1 FROM installation_recovery_codes WHERE rowid = NEW.rowid)
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: installation_recovery_codes rowid is never re-used');
+END;
+
+CREATE TRIGGER installation_recovery_codes_rowid_immutable
+BEFORE UPDATE ON installation_recovery_codes
+WHEN NEW.rowid IS NOT OLD.rowid
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: installation_recovery_codes rowid is immutable');
+END;
+
+CREATE TRIGGER installation_recovery_codes_rowid_positive
+AFTER INSERT ON installation_recovery_codes WHEN NEW.rowid <= 0
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: installation_recovery_codes rowid must be positive');
+END;
+
+CREATE TRIGGER installation_recovery_events_insert_requires_new_event
+BEFORE INSERT ON installation_recovery_events
+WHEN EXISTS (SELECT 1 FROM installation_recovery_events WHERE id = NEW.id)
+  OR NEW.sequence IS NOT (SELECT coalesce(max(sequence), 0) + 1 FROM installation_recovery_events)
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: installation_recovery_events are appended, never re-inserted');
+END;
+
+CREATE TRIGGER installation_recovery_events_immutable
+BEFORE UPDATE ON installation_recovery_events
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: installation_recovery_events are immutable');
+END;
+
+CREATE TRIGGER installation_recovery_events_never_deleted
+BEFORE DELETE ON installation_recovery_events
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: installation_recovery_events are never deleted');
+END;
+
+CREATE TRIGGER installation_recovery_events_rowid_insert_requires_new_event
+BEFORE INSERT ON installation_recovery_events
+WHEN NEW.rowid > 0 AND EXISTS (SELECT 1 FROM installation_recovery_events WHERE rowid = NEW.rowid)
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: installation_recovery_events rowid is never re-used');
+END;
+
+CREATE TRIGGER installation_recovery_events_rowid_positive
+AFTER INSERT ON installation_recovery_events WHEN NEW.rowid <= 0
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: installation_recovery_events rowid must be positive');
+END;
+`;
+
 export const MIGRATIONS: readonly Migration[] = Object.freeze([
   Object.freeze({ name: 'create_companies_and_branches', sql: V1_COMPANIES_AND_BRANCHES, version: 1 }),
   Object.freeze({ name: 'create_users_and_memberships', sql: V2_USERS_AND_MEMBERSHIPS, version: 2 }),
@@ -872,6 +1036,7 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
     version: 7,
   }),
   Object.freeze({ name: 'protect_persistent_identities', sql: V8_PERSISTENT_IDENTITIES, version: 8 }),
+  Object.freeze({ name: 'create_installation_recovery', sql: V9_INSTALLATION_RECOVERY, version: 9 }),
 ]);
 
 export const migrationChecksum = (migration: Migration): string =>

@@ -2,6 +2,7 @@ import { fileURLToPath } from 'node:url';
 
 import { runLocalServiceCli } from './cli.js';
 import { resolveProtectedDirectories } from './protected-directories.js';
+import { createProcessTerminal } from './terminal.js';
 
 // Ponto de entrada do serviço local. Lê a configuração de `process.env` (nenhum `.env` é carregado)
 // e não abre portas de rede.
@@ -23,6 +24,6 @@ const waitForShutdownSignal = (): Promise<string> =>
 process.exitCode = await runLocalServiceCli(
   process.argv.slice(2),
   process.env,
-  { sink: (line) => process.stdout.write(`${line}\n`), waitForShutdownSignal },
+  { sink: (line) => process.stdout.write(`${line}\n`), terminal: createProcessTerminal(), waitForShutdownSignal },
   { protectedDirectories: resolveProtectedDirectories(fileURLToPath(new URL('.', import.meta.url))) },
 );

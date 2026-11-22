@@ -1449,7 +1449,7 @@ describe('Local sessions (E1.07-C)', () => {
 
       const harness = await startedService();
       // E1.07-C-R1: uma base E1.07-B recebe as migrações 4 e 5 (e, desde E1.07-D2, a 6).
-      expect(harness.service.startupReport).toMatchObject({ appliedMigrations: [4, 5, 6, 7, 8], schemaVersion: 8 });
+      expect(harness.service.startupReport).toMatchObject({ appliedMigrations: [4, 5, 6, 7, 8, 9], schemaVersion: 9 });
       const session = await openSession(harness, user);
       await expect(harness.service.sessions.validate(session.token)).resolves.toMatchObject({ session: { userId: user.id } });
     });
@@ -1462,7 +1462,7 @@ describe('Local sessions (E1.07-C)', () => {
       expect(() => runMigrations(database, [...MIGRATIONS.slice(0, 3), broken])).toThrow(/missing_table/);
 
       // E1.07-C-R1: com a migração 5, ficam pendentes a 4 (revertida) e a 5 (e, desde E1.07-D2, a 6).
-      expect(inspectMigrations(database)).toMatchObject({ appliedVersions: [1, 2, 3], pendingVersions: [4, 5, 6, 7, 8] });
+      expect(inspectMigrations(database)).toMatchObject({ appliedVersions: [1, 2, 3], pendingVersions: [4, 5, 6, 7, 8, 9] });
       expect(database.prepare("SELECT count(*) FROM pragma_table_info('users') WHERE name = 'security_version'").pluck().get()).toBe(0);
       expect(database.prepare("SELECT count(*) FROM sqlite_master WHERE name = 'local_sessions'").pluck().get()).toBe(0);
       database.close();
@@ -1948,7 +1948,7 @@ describe('Local sessions (E1.07-C)', () => {
       const upgraded = temporary.open();
 
       // E1.07-D2: a actualização directa aplica também a migração 6.
-      expect(runMigrations(upgraded)).toEqual({ applied: [4, 5, 6, 7, 8], currentVersion: 8 });
+      expect(runMigrations(upgraded)).toEqual({ applied: [4, 5, 6, 7, 8, 9], currentVersion: 9 });
       expect(snapshot(upgraded)).toEqual(before);
       expect(upgraded.prepare('SELECT version, checksum FROM schema_migrations WHERE version <= 4 ORDER BY version').all()).toEqual([
         ...PUBLISHED_CHECKSUMS,
@@ -1956,7 +1956,7 @@ describe('Local sessions (E1.07-C)', () => {
       ]);
       expect(MIGRATIONS[3] && migrationChecksum(MIGRATIONS[3])).toBe(PUBLISHED_V4_CHECKSUM);
       expect(MIGRATIONS[4]).toMatchObject({ name: 'protect_security_versions_against_reinsertion', version: 5 });
-      expect(runMigrations(upgraded)).toEqual({ applied: [], currentVersion: 8 });
+      expect(runMigrations(upgraded)).toEqual({ applied: [], currentVersion: 9 });
     });
 
     it('[S67] migrates an E1.07-C database to version 5 preserving data, versions, sessions and checksums', async () => {
@@ -1973,7 +1973,7 @@ describe('Local sessions (E1.07-C)', () => {
 
       const upgraded = temporary.open();
       // E1.07-D2: a 6 também fica pendente; aqui aplica-se só até à 5, para verificar a 5 isoladamente.
-      expect(inspectMigrations(upgraded)).toMatchObject({ appliedVersions: [1, 2, 3, 4], pendingVersions: [5, 6, 7, 8] });
+      expect(inspectMigrations(upgraded)).toMatchObject({ appliedVersions: [1, 2, 3, 4], pendingVersions: [5, 6, 7, 8, 9] });
       expect(runMigrations(upgraded, MIGRATIONS.slice(0, 5))).toEqual({ applied: [5], currentVersion: 5 });
       expect(snapshot(upgraded)).toEqual(before);
       const latest = MIGRATIONS[4];
@@ -1988,7 +1988,7 @@ describe('Local sessions (E1.07-C)', () => {
 
       const harness = await startedService();
       // E1.07-D2: o arranque aplica a migração 6, que não toca nas versões nem nas sessões.
-      expect(harness.service.startupReport).toMatchObject({ appliedMigrations: [6, 7, 8], schemaVersion: 8 });
+      expect(harness.service.startupReport).toMatchObject({ appliedMigrations: [6, 7, 8, 9], schemaVersion: 9 });
       expect(versionsOf(user.id)).toEqual({ credential: 2, security: 3 });
       expect(sessionCount('revoked_at IS NULL')).toBe(0);
       const session = await openSession(harness, user);
@@ -2000,7 +2000,7 @@ describe('Local sessions (E1.07-C)', () => {
       const harness = await startedService();
 
       // E1.07-D2: aplica também a migração 6, que não altera dados existentes.
-      expect(harness.service.startupReport).toMatchObject({ appliedMigrations: [5, 6, 7, 8], schemaVersion: 8 });
+      expect(harness.service.startupReport).toMatchObject({ appliedMigrations: [5, 6, 7, 8, 9], schemaVersion: 9 });
       const after = inspect(snapshot);
       expect(after.credentials).toEqual(before.credentials);
       expect(after.users).toEqual(before.users);
