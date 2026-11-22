@@ -639,8 +639,12 @@ describe('Domain contract immutability (E1.07-D1-H, PD-64)', () => {
       expectLockedRecord(LOCAL_SERVICE_EXIT_CODES, {
         invalidConfiguration: 2,
         ok: 0,
+        recoveryCancelled: 6,
+        recoveryInputEnded: 7,
+        recoveryInputRejected: 9,
         recoveryPresentationFailed: 5,
         recoveryRefused: 3,
+        recoveryTerminalFailed: 8,
         recoveryThrottled: 4,
         startupFailed: 1,
       });

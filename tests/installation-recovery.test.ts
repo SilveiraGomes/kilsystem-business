@@ -30,7 +30,13 @@ import {
   type ServiceUnderTest,
 } from './support/local-service-harness';
 import { createTemporaryDatabase, type TemporaryDatabase } from './support/sqlite-harness';
-import { LOCAL_SERVICE_EXIT_CODES, runLocalServiceCli, type RecoveryTerminal } from '../services/local-api/src/cli';
+import {
+  LOCAL_SERVICE_EXIT_CODES,
+  RecoveryTerminalError,
+  runLocalServiceCli,
+  type RecoveryTerminal,
+  type RecoveryTerminalFailure,
+} from '../services/local-api/src/cli';
 import { LOCAL_SERVICE_ENV } from '../services/local-api/src/config';
 import { InitialAdministratorProtectedError } from '../services/local-api/src/authentication/initial-administrator-protection';
 import type { Argon2idDerive } from '../services/local-api/src/authentication/password-hashing';
@@ -692,6 +698,19 @@ describe('E1.07-D3-R1 installation recovery of the initial administrator', () =>
       expect(inspect(codes).map((row) => row.state)).toEqual(['CONSUMED', 'ACTIVE']);
       expect(inspect(eventKinds).filter((kind) => kind === 'recovery-succeeded')).toHaveLength(1);
       expect(inspect(eventKinds)).toContain('recovery-failed');
+      // R1-M01 (E1.07-D3-R1-C1): o perdedor perdeu o código, não a credencial. Sem a comparação do código
+      // activo, a transacção falharia na substituição da credencial e registaria `credential-changed`.
+      expect(
+        inspect((database) =>
+          database
+            .prepare(
+              `SELECT kind, reason, consumed_code_sequence AS consumed, issued_code_sequence AS issued,
+                      resulting_credential_version AS credentialVersion
+                 FROM installation_recovery_events WHERE kind = 'recovery-failed'`,
+            )
+            .all(),
+        ),
+      ).toEqual([{ consumed: null, credentialVersion: null, issued: null, kind: 'recovery-failed', reason: 'recovery-code-changed' }]);
     });
 
     it('[R-S04b] a rotation concurrent with a recovery leaves exactly one consistent outcome', async () => {
@@ -707,6 +726,56 @@ describe('E1.07-D3-R1 installation recovery of the initial administrator', () =>
       await expect(recovery).resolves.toEqual({ ok: false, reason: 'recovery-conflict' });
       expect(inspect(codes).map((row) => row.state)).toEqual(['SUPERSEDED', 'ACTIVE']);
       await expect(authenticates(installation, TEST_PASSWORD)).resolves.toBe(true);
+      expect(
+        inspect((database) => database.prepare("SELECT reason FROM installation_recovery_events WHERE kind = 'recovery-failed'").pluck().all()),
+      ).toEqual(['recovery-code-changed']);
+    });
+
+    /**
+     * RV-R1M-03 (E1.07-D3-R1-C1): a rotação A fica parada depois da derivação do verificador, antes
+     * da transacção; a rotação B corre inteira entretanto. A já não pode entregar um código.
+     */
+    const rotationHeldBeforeCommit = async (installation: Installation) => {
+      const gate = deferred();
+      let held = false;
+      // Derivações da rotação: 1) autenticação, 2) verificador do novo código. O gancho fica na 2.ª.
+      hashing.afterNext(() => {
+        hashing.afterNext(() => {
+          held = true;
+          return gate.promise;
+        });
+      });
+      const pending = installation.harness.service.installationRecovery.rotate(installation.administrator.username, TEST_PASSWORD);
+      await expect.poll(() => held).toBe(true);
+      return { pending, release: () => gate.resolve() };
+    };
+
+    it('[R-S04d] concurrent rotations: only the last committed code is delivered; the loser gets rotation-conflict', async () => {
+      const installation = await initialised();
+      await issue(installation);
+      const loser = await rotationHeldBeforeCommit(installation);
+      const winner = await installation.harness.service.installationRecovery.rotate(installation.administrator.username, TEST_PASSWORD);
+      if (!winner.ok) throw new Error(`Rotação esperada: ${winner.reason}`);
+      const before = inspect((database) => rows(database, RECOVERY_TABLES));
+      loser.release();
+
+      await expect(loser.pending).resolves.toEqual({ ok: false, reason: 'rotation-conflict' });
+      expect(inspect((database) => rows(database, RECOVERY_TABLES))).toEqual(before);
+      expect(inspect(codes).map((row) => row.state)).toEqual(['SUPERSEDED', 'ACTIVE']);
+      // O código entregue ao vencedor é o activo: recupera.
+      await expect(recoverWith(installation, winner.code.reveal())).resolves.toMatchObject({ consumedSequence: 2, ok: true });
+    });
+
+    it('[R-S04e] concurrent first issuances: one code is issued, the other rotation is refused without writing', async () => {
+      const installation = await initialised();
+      const loser = await rotationHeldBeforeCommit(installation);
+      const winner = await installation.harness.service.installationRecovery.rotate(installation.administrator.username, TEST_PASSWORD);
+      expect(winner).toMatchObject({ issuedReason: 'first-issuance', ok: true });
+      loser.release();
+
+      await expect(loser.pending).resolves.toEqual({ ok: false, reason: 'rotation-conflict' });
+      expect(inspect(codes)).toEqual([{ issuedReason: 'first-issuance', sequence: 1, state: 'ACTIVE' }]);
+      expect(inspect(eventKinds)).toEqual(['code-issued']);
     });
 
     it('[R-S04c] a rotation whose password was replaced during its derivation is refused without writing', async () => {
@@ -1191,6 +1260,87 @@ describe('E1.07-D3-R1 installation recovery of the initial administrator', () =>
       await expect(
         run(['recovery', 'recover'], scriptedTerminal([generateRecoveryCode().formatted, OTHER_TEST_PASSWORD, OTHER_TEST_PASSWORD]).terminal, lines),
       ).resolves.toBe(LOCAL_SERVICE_EXIT_CODES.recoveryThrottled);
+    }, 120_000);
+
+    type Step = string | { readonly fail: RecoveryTerminalFailure | 'unexpected' } | { readonly confirm: true };
+
+    /** Terminal por passos (E1.07-D3-R1-C1): cada leitura consome um passo; a falha rejeita como o terminal real. */
+    const steppedTerminal = (steps: Step[]) => {
+      const writes: string[] = [];
+      const shown: string[] = [];
+      const next = (): Promise<string> => {
+        const step = steps.shift();
+        if (step === undefined) return Promise.reject(new RecoveryTerminalError('end-of-input'));
+        if (typeof step === 'string') return Promise.resolve(step);
+        if ('confirm' in step) return Promise.resolve(shown.at(-1)?.split('-').at(-2) ?? '');
+        return Promise.reject(step.fail === 'unexpected' ? new Error('falha inesperada') : new RecoveryTerminalError(step.fail));
+      };
+      const terminal: RecoveryTerminal = {
+        interactive: true,
+        readLine: next,
+        readSecret: next,
+        write: (text) => {
+          const match = CODE_PATTERN.exec(text);
+          if (match !== null) shown.push(match[0]);
+          writes.push(text);
+        },
+      };
+      return { shown, terminal, writes };
+    };
+
+    it('[R-S17c] a terminal failure before the operation exits with its own documented code and writes nothing', async () => {
+      const administrator = await prepared();
+      const lines: string[] = [];
+      const state = () => inspect((database) => rows(database, ['password_credentials', 'authentication_throttle', ...RECOVERY_TABLES]));
+      const before = state();
+      const cases: readonly (readonly [Step[], number, string])[] = [
+        [[{ fail: 'interrupted' }], LOCAL_SERVICE_EXIT_CODES.recoveryCancelled, 'interrupted'],
+        [[administrator.username, { fail: 'end-of-input' }], LOCAL_SERVICE_EXIT_CODES.recoveryInputEnded, 'end-of-input'],
+        [[administrator.username, { fail: 'terminal-error' }], LOCAL_SERVICE_EXIT_CODES.recoveryTerminalFailed, 'terminal-error'],
+        [[administrator.username, { fail: 'unsupported-key' }], LOCAL_SERVICE_EXIT_CODES.recoveryInputRejected, 'unsupported-key'],
+      ];
+      for (const [steps, exitCode, failure] of cases) {
+        const terminal = steppedTerminal(steps);
+        const logged = lines.length;
+        await expect(run(['recovery', 'rotate'], terminal.terminal, lines)).resolves.toBe(exitCode);
+        const entries = lines.slice(logged).map((line) => JSON.parse(line) as { event: string; terminalFailure?: string });
+        expect(entries.filter((entry) => entry.event === 'recovery.input_aborted').map((entry) => entry.terminalFailure)).toEqual([failure]);
+        expect(terminal.writes.join('')).toMatch(/nada foi alterado/i);
+      }
+      // Recuperação: a confirmação incompleta da nova palavra-passe (fim da entrada) não executa nada.
+      const recover = steppedTerminal([generateRecoveryCode().formatted, OTHER_TEST_PASSWORD, { fail: 'end-of-input' }]);
+      await expect(run(['recovery', 'recover'], recover.terminal, lines)).resolves.toBe(LOCAL_SERVICE_EXIT_CODES.recoveryInputEnded);
+      // Falha que não é do terminal: recusa genérica (3), também sem escrita.
+      await expect(run(['recovery', 'rotate'], steppedTerminal([{ fail: 'unexpected' }]).terminal, lines)).resolves.toBe(
+        LOCAL_SERVICE_EXIT_CODES.recoveryRefused,
+      );
+      expect(lines.join('\n')).toContain('recovery.failed');
+
+      expect(state()).toEqual(before);
+      expect(lines.join('\n')).not.toContain(TEST_PASSWORD);
+      expect(lines.join('\n')).not.toContain(OTHER_TEST_PASSWORD);
+      // A base foi libertada (serviço parado, nenhuma transacção pendente): a operação seguinte corre.
+      await expect(run(['recovery', 'rotate'], steppedTerminal([administrator.username, TEST_PASSWORD, { confirm: true }]).terminal, lines)).resolves.toBe(
+        LOCAL_SERVICE_EXIT_CODES.ok,
+      );
+    }, 120_000);
+
+    it('[R-F09c] after the commit, an incomplete confirmation is never a confirmation; an unsupported key only repeats it', async () => {
+      const administrator = await prepared();
+      const lines: string[] = [];
+      for (const failure of ['end-of-input', 'interrupted', 'terminal-error'] as const) {
+        const terminal = steppedTerminal([administrator.username, TEST_PASSWORD, { fail: failure }]);
+        await expect(run(['recovery', 'rotate'], terminal.terminal, lines)).resolves.toBe(LOCAL_SERVICE_EXIT_CODES.recoveryPresentationFailed);
+        expect(terminal.shown).toHaveLength(1);
+      }
+      expect(lines.join('\n')).toContain('recovery.presentation_failed');
+      // Três rotações confirmadas na base, nenhuma confirmada pelo titular.
+      expect(inspect(codes).map((row) => row.state)).toEqual(['SUPERSEDED', 'SUPERSEDED', 'ACTIVE']);
+
+      const repeated = steppedTerminal([administrator.username, TEST_PASSWORD, { fail: 'unsupported-key' }, { confirm: true }]);
+      await expect(run(['recovery', 'rotate'], repeated.terminal, lines)).resolves.toBe(LOCAL_SERVICE_EXIT_CODES.ok);
+      expect(repeated.shown).toHaveLength(2);
+      expect(new Set(repeated.shown).size).toBe(1);
     }, 120_000);
   });
 });

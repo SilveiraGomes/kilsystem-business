@@ -5,20 +5,38 @@ import {
 } from './config.js';
 import { createLocalService, type LocalServiceDependencies } from './local-service.js';
 import { createJsonLogger } from './logger.js';
-import { RECOVERY_COMMANDS, runRecoveryCommand, type RecoveryCommand, type RecoveryTerminal } from './recovery-cli.js';
+import {
+  RECOVERY_COMMANDS,
+  RecoveryTerminalError,
+  runRecoveryCommand,
+  type RecoveryCommand,
+  type RecoveryTerminal,
+  type RecoveryTerminalFailure,
+} from './recovery-cli.js';
 
-export type { RecoveryTerminal } from './recovery-cli.js';
+export { RecoveryTerminalError, type RecoveryTerminal, type RecoveryTerminalFailure } from './recovery-cli.js';
 
 export const LOCAL_SERVICE_EXIT_CODES = Object.freeze({
   ok: 0,
   startupFailed: 1,
   invalidConfiguration: 2,
-  /** Recuperação ou rotação recusadas (E1.07-D3-R1); nada foi alterado. */
+  /** Recuperação ou rotação recusadas, ou falhadas antes de confirmar (E1.07-D3-R1); nada foi alterado. */
   recoveryRefused: 3,
   /** Limitação de tentativas da recuperação ou da autenticação. */
   recoveryThrottled: 4,
-  /** Operação confirmada, mas o novo código não foi apresentado ou confirmado: emitir outro com `recovery rotate`. */
+  /**
+   * Operação confirmada, mas o novo código não foi apresentado ou confirmado (incluindo cancelamento,
+   * fim da entrada ou erro do terminal durante a confirmação): emitir outro com `recovery rotate`.
+   */
   recoveryPresentationFailed: 5,
+  /** E1.07-D3-R1-C1: Ctrl+C durante a introdução de dados; nada foi alterado. */
+  recoveryCancelled: 6,
+  /** E1.07-D3-R1-C1: a entrada terminou (Ctrl+D, Ctrl+Z, *stream* fechada) antes de concluída; nada foi alterado. */
+  recoveryInputEnded: 7,
+  /** E1.07-D3-R1-C1: erro de leitura ou de escrita do terminal durante a introdução de dados; nada foi alterado. */
+  recoveryTerminalFailed: 8,
+  /** E1.07-D3-R1-C1: tecla ou sequência não suportada (setas, Delete, Tab, Esc…); entrada anulada, nada foi alterado. */
+  recoveryInputRejected: 9,
 });
 
 export interface LocalServiceCliIo {
@@ -62,6 +80,22 @@ const RECOVERY_EXIT_CODES = Object.freeze({
   refused: LOCAL_SERVICE_EXIT_CODES.recoveryRefused,
   throttled: LOCAL_SERVICE_EXIT_CODES.recoveryThrottled,
 });
+
+/** Leituras interrompidas ANTES de qualquer operação (as da confirmação são tratadas na apresentação). */
+const TERMINAL_FAILURES: Readonly<Record<RecoveryTerminalFailure, { readonly exitCode: number; readonly message: string }>> =
+  Object.freeze({
+    'end-of-input': {
+      exitCode: LOCAL_SERVICE_EXIT_CODES.recoveryInputEnded,
+      message: 'A entrada terminou antes de concluída. Nada foi alterado.',
+    },
+    interrupted: { exitCode: LOCAL_SERVICE_EXIT_CODES.recoveryCancelled, message: 'Operação cancelada. Nada foi alterado.' },
+    'terminal-error': { exitCode: LOCAL_SERVICE_EXIT_CODES.recoveryTerminalFailed, message: 'Erro do terminal. Nada foi alterado.' },
+    'unsupported-key': {
+      exitCode: LOCAL_SERVICE_EXIT_CODES.recoveryInputRejected,
+      message:
+        'Tecla não suportada (setas, Home, End, Delete, Tab, Esc ou combinações com Ctrl/Alt): a entrada foi anulada e nada foi alterado. Escreva só os caracteres e use o retrocesso para corrigir.',
+    },
+  });
 
 /**
  * Executa o serviço local. Sem argumentos, mantém-se em `READY` até ao pedido de encerramento;
@@ -118,11 +152,23 @@ export const runLocalServiceCli = async (
     try {
       exitCode = RECOVERY_EXIT_CODES[await runRecoveryCommand(parsed.command, service, io.terminal, logger)];
     } catch (error) {
-      logger.log('error', 'recovery.interrupted', {
-        causeName: error instanceof Error ? error.name : null,
-        command: parsed.command,
-      });
-      exitCode = LOCAL_SERVICE_EXIT_CODES.recoveryRefused;
+      if (error instanceof RecoveryTerminalError) {
+        const { exitCode: terminalExitCode, message } = TERMINAL_FAILURES[error.failure];
+        logger.log('warn', 'recovery.input_aborted', { command: parsed.command, terminalFailure: error.failure });
+        try {
+          io.terminal.write(`${message}\n`);
+        } catch {
+          // Terminal indisponível: o código de saída já indica a causa.
+        }
+        exitCode = terminalExitCode;
+      } else {
+        // Falha inesperada antes da confirmação: as transacções são atómicas, nada foi alterado.
+        logger.log('error', 'recovery.failed', {
+          causeName: error instanceof Error ? error.name : null,
+          command: parsed.command,
+        });
+        exitCode = LOCAL_SERVICE_EXIT_CODES.recoveryRefused;
+      }
     }
   } else if (parsed.kind === 'serve' && !parsed.check) {
     logger.log('info', 'service.waiting_for_shutdown');

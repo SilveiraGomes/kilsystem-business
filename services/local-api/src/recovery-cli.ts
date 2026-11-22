@@ -11,7 +11,29 @@ import type { Logger } from './logger.js';
 export const RECOVERY_COMMANDS = Object.freeze(['rotate', 'recover'] as const);
 export type RecoveryCommand = (typeof RECOVERY_COMMANDS)[number];
 
-/** Terminal interactivo. `interactive` só é verdadeiro com entrada e saída TTY. */
+/**
+ * Motivos por que uma leitura do terminal termina sem valor (E1.07-D3-R1-C1, RV-R1M-01/02):
+ * - `interrupted`: Ctrl+C;
+ * - `end-of-input`: fim da entrada (Ctrl+D, Ctrl+Z ou *stream* terminada/fechada);
+ * - `terminal-error`: erro de leitura ou de escrita do terminal;
+ * - `unsupported-key`: tecla ou sequência não suportada (setas, Delete, Tab, Esc, …); a entrada é anulada.
+ */
+export const RECOVERY_TERMINAL_FAILURES = Object.freeze(['interrupted', 'end-of-input', 'terminal-error', 'unsupported-key'] as const);
+export type RecoveryTerminalFailure = (typeof RECOVERY_TERMINAL_FAILURES)[number];
+
+/** Nunca transporta o que foi escrito: só o motivo. */
+export class RecoveryTerminalError extends Error {
+  override readonly name = 'RecoveryTerminalError';
+
+  constructor(readonly failure: RecoveryTerminalFailure) {
+    super(`Leitura do terminal terminada: ${failure}.`);
+  }
+}
+
+/**
+ * Terminal interactivo. `interactive` só é verdadeiro com entrada e saída TTY. As leituras resolvem
+ * com o valor escrito até Enter, ou rejeitam com `RecoveryTerminalError`; nunca ficam pendentes.
+ */
 export interface RecoveryTerminal {
   readonly interactive: boolean;
   readLine(prompt: string): Promise<string>;
@@ -65,8 +87,16 @@ const present = async (
     show();
     const expected = lastDataGroup(formatted);
     for (let attempt = 1; attempt <= CONFIRMATION_ATTEMPTS; attempt += 1) {
-      const typed = await terminal.readLine('Para confirmar que o guardou, escreva o último grupo de 4 símbolos (antes do controlo): ');
-      if (normalizeGroup(typed) === expected) {
+      let typed: string;
+      try {
+        typed = await terminal.readLine('Para confirmar que o guardou, escreva o último grupo de 4 símbolos (antes do controlo): ');
+      } catch (error) {
+        // Tecla não suportada: conta como confirmação falhada. Cancelamento, fim da entrada ou erro do
+        // terminal terminam a apresentação: uma entrada incompleta nunca é uma confirmação.
+        if (!(error instanceof RecoveryTerminalError) || error.failure !== 'unsupported-key') throw error;
+        typed = '';
+      }
+      if (typed !== '' && normalizeGroup(typed) === expected) {
         terminal.write('Confirmado.\n');
         logger.log('info', 'recovery.code_presented', { codeSequence: sequence, command, confirmed: true });
         return 'ok';
@@ -87,6 +117,7 @@ const present = async (
       causeName: error instanceof Error ? error.name : null,
       codeSequence: sequence,
       command,
+      terminalFailure: error instanceof RecoveryTerminalError ? error.failure : null,
     });
     try {
       terminal.write(
