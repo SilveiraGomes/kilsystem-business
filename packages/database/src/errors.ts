@@ -6,6 +6,7 @@ export type PersistenceErrorReason =
   | 'exclusive-lock-unverified'
   | 'foreign-keys-disabled'
   | 'invalid-stored-record'
+  | 'legacy-nonpositive-rowid'
   | 'location-access-denied'
   | 'location-hard-linked'
   | 'location-inside-protected-directory'

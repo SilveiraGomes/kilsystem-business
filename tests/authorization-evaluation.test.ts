@@ -392,7 +392,8 @@ describe('E1.07-D1 boundaries', () => {
   // Actualizado em E1.07-D2: D1 não acrescentou migrações; a 6 (RBAC) é de D2. As migrações 1 a 5
   // mantêm as somas publicadas e continuam sem objectos RBAC.
   it('D60 keeps the checksums of migrations 1 to 5; RBAC tables only from migration 6 (E1.07-D2)', () => {
-    expect(MIGRATIONS.map((migration) => migration.version)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    // E1.07-D3-G0 acrescenta a migração 8 (identidades persistentes, PD-75) sem alterar as anteriores.
+    expect(MIGRATIONS.map((migration) => migration.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
     expect(MIGRATIONS.slice(0, 5).map(migrationChecksum)).toEqual([
       'c70164d253bed3637177a1a434282a3fb9e4d16c294134dd2f6ec61dbf734b61',
       'b05636332e82baa7250873473b7c91fd0a571ec07e2b90b7ee2d236fd9bfc2d0',

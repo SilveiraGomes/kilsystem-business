@@ -816,6 +816,49 @@ BEGIN
 END;
 `;
 
+// E1.07-D3-G0 (PD-75, D-201): identidades persistentes. As identidades locais e as associações locais
+// são desactivadas, nunca eliminadas, em qualquer configuração de foreign_keys/recursive_triggers:
+// - com foreign_keys desligado, DELETE (+ INSERT com o mesmo id) de `users` deixava
+//   `installation_bootstrap` a apontar para uma identidade inexistente ou para outra identidade
+//   com o mesmo id; `branch_memberships` não tem filhos, pelo que era eliminável e o seu id
+//   reutilizável mesmo com foreign_keys ligado;
+// - `UPDATE OR REPLACE users SET username = <de outra identidade>` eliminava implicitamente essa
+//   identidade sem executar triggers DELETE (recursive_triggers desligado) e, com foreign_keys
+//   desligado ou sem linhas filhas, sem recusa referencial. A guarda corre antes da resolução
+//   de conflitos;
+// - `users.created_at` passa a imutável, como nas restantes entidades, para que a ligação do
+//   registo da instalação à identidade gravada (`created_at = completed_at`) seja verificável.
+// Só acrescenta triggers: não altera tabelas, dados nem as migrações 1 a 7. Editar o nome, o estado
+// e a credencial no lugar continua possível pela ligação normal: a fronteira de confiança mantém-se
+// (D-126, D-201) e quem controla o esquema ou o ficheiro pode remover triggers.
+const V8_PERSISTENT_IDENTITIES = `
+CREATE TRIGGER users_never_deleted
+BEFORE DELETE ON users
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: users are deactivated, never deleted');
+END;
+
+CREATE TRIGGER users_username_never_taken_over
+BEFORE UPDATE OF username ON users
+WHEN EXISTS (SELECT 1 FROM users WHERE username = NEW.username AND id IS NOT OLD.id)
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: users username belongs to another identity');
+END;
+
+CREATE TRIGGER users_creation_immutable
+BEFORE UPDATE OF created_at ON users
+WHEN NEW.created_at IS NOT OLD.created_at
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: users creation is immutable');
+END;
+
+CREATE TRIGGER branch_memberships_never_deleted
+BEFORE DELETE ON branch_memberships
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: branch_memberships are deactivated, never deleted');
+END;
+`;
+
 export const MIGRATIONS: readonly Migration[] = Object.freeze([
   Object.freeze({ name: 'create_companies_and_branches', sql: V1_COMPANIES_AND_BRANCHES, version: 1 }),
   Object.freeze({ name: 'create_users_and_memberships', sql: V2_USERS_AND_MEMBERSHIPS, version: 2 }),
@@ -828,6 +871,7 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
     sql: V7_HARDEN_RBAC_REPLACEMENT_AND_PARENT_BINDINGS,
     version: 7,
   }),
+  Object.freeze({ name: 'protect_persistent_identities', sql: V8_PERSISTENT_IDENTITIES, version: 8 }),
 ]);
 
 export const migrationChecksum = (migration: Migration): string =>
