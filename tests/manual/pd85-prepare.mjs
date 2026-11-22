@@ -1,5 +1,6 @@
 // E1.07-D3-R1-C1 — preparação de uma base FICTÍCIA e descartável para o ensaio físico da PD-85
-// (CLI de recuperação numa consola real do Windows). Protocolo: docs/tasks/E1.07-D3-R1-C1.md §6.
+// (CLI de recuperação numa consola real do Windows). Protocolo: docs/tasks/E1.07-D3-R1-C2.md §6
+// (W-01 a W-28; substitui o de E1.07-D3-R1-C1 §6).
 //
 // Cria uma pasta nova em %TEMP% (E107-D3-R1-C1-PD85-<data>), inicializa a instalação com um
 // administrador fictício e uma palavra-passe aleatória, e mostra os comandos do PowerShell para o
@@ -64,6 +65,9 @@ console.log(
     "  $env:LOCAL_SERVICE_ON_MISSING_DATABASE = 'fail'",
     "  $env:LOCAL_SERVICE_ON_PENDING_MIGRATIONS = 'fail'",
     '  node services\\local-api\\dist\\main.js recovery rotate; "SAIDA=$LASTEXITCODE"',
+    '',
+    'W-14 (serviço normal noutra consola): definir as MESMAS variáveis também nessa segunda consola.',
+    'Protocolo completo (W-01 a W-28): docs/tasks/E1.07-D3-R1-C2.md §6.',
     '',
     'No fim, remover a pasta (caminho literal, confirmado):',
     `  node -e "require('node:fs').rmSync(${JSON.stringify(directory).replace(/"/g, "'")}, { recursive: true })"`,

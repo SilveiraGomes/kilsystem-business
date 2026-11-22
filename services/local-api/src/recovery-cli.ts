@@ -56,20 +56,46 @@ const normalizeGroup = (value: string): string =>
   value.toUpperCase().replace(/\s/g, '').replace(/O/g, '0').replace(/[IL]/g, '1');
 
 /**
+ * Registo depois do *commit* (E1.07-D3-R1-C2, RV-C1M-01): melhor esforço. A operação já está
+ * confirmada na base; uma falha do registo nunca pode fazê-la parecer não executada.
+ */
+export const logBestEffort = (logger: Logger, ...record: Parameters<Logger['log']>): void => {
+  try {
+    logger.log(...record);
+  } catch {
+    // Canal secundário: o estado confirmado continua no terminal (se existir) e no código de saída.
+  }
+};
+
+/** Estado confirmado, comunicado quando o código não chega a ser apresentado (nunca contém o código). */
+const UNPRESENTED_MESSAGES: Readonly<Record<RecoveryCommand, string>> = Object.freeze({
+  recover:
+    '\nA credencial do administrador inicial FOI substituída e as sessões dele foram revogadas, mas não foi possível apresentar o novo código de recuperação. Execute "recovery rotate" com a NOVA palavra-passe para emitir outro.\n',
+  rotate:
+    '\nO novo código de recuperação FOI emitido e já está activo, mas não foi possível apresentá-lo. Execute "recovery rotate" com a palavra-passe do administrador inicial para emitir outro.\n',
+});
+
+/**
  * Apresenta o código uma vez (DP-08), já depois do *commit*. Pede a confirmação do último grupo de
  * dados; uma confirmação errada volta a mostrar o código, só neste processo. Qualquer falha do
  * terminal deixa o código por apresentar: o titular conhece a palavra-passe e pode emitir outro com
  * `recovery rotate` (E1.07-D3-R1-P §5). Nunca regista o código.
+ *
+ * E1.07-D3-R1-C2 (RV-C1M-01): nunca rejeita. Tudo o que se escreve depois do *commit* (incluindo o
+ * anúncio da credencial substituída) passa por aqui; qualquer falha resulta em `presentation-failed`
+ * (saída 5), nunca numa recusa ou num "nada foi alterado".
  */
 const present = async (
   presentation: RecoveryCodePresentation,
   terminal: RecoveryTerminal,
   logger: Logger,
   command: RecoveryCommand,
+  announcement?: string,
 ): Promise<RecoveryOutcome> => {
   const sequence = presentation.sequence;
   let formatted = '';
   try {
+    if (announcement !== undefined) terminal.write(announcement);
     formatted = presentation.reveal();
     const show = (): void => {
       terminal.write(
@@ -98,7 +124,7 @@ const present = async (
       }
       if (typed !== '' && normalizeGroup(typed) === expected) {
         terminal.write('Confirmado.\n');
-        logger.log('info', 'recovery.code_presented', { codeSequence: sequence, command, confirmed: true });
+        logBestEffort(logger, 'info', 'recovery.code_presented', { codeSequence: sequence, command, confirmed: true });
         return 'ok';
       }
       if (attempt < CONFIRMATION_ATTEMPTS) {
@@ -109,22 +135,20 @@ const present = async (
     terminal.write(
       'A confirmação falhou. O código já está activo; se não o guardou, execute "recovery rotate" com a palavra-passe do administrador inicial para emitir outro.\n',
     );
-    logger.log('warn', 'recovery.code_presented', { codeSequence: sequence, command, confirmed: false });
+    logBestEffort(logger, 'warn', 'recovery.code_presented', { codeSequence: sequence, command, confirmed: false });
     return 'presentation-failed';
   } catch (error) {
     // O código não é registado; só a sequência e o tipo de falha.
-    logger.log('error', 'recovery.presentation_failed', {
+    logBestEffort(logger, 'error', 'recovery.presentation_failed', {
       causeName: error instanceof Error ? error.name : null,
       codeSequence: sequence,
       command,
       terminalFailure: error instanceof RecoveryTerminalError ? error.failure : null,
     });
     try {
-      terminal.write(
-        '\nNão foi possível apresentar o código. Execute "recovery rotate" com a palavra-passe do administrador inicial para emitir outro.\n',
-      );
+      terminal.write(UNPRESENTED_MESSAGES[command]);
     } catch {
-      // Terminal indisponível: o resultado já indica a falha.
+      // Terminal indisponível: o código de saída 5 comunica o estado confirmado.
     }
     return 'presentation-failed';
   } finally {
@@ -139,7 +163,8 @@ const runRotate = async (service: LocalService, terminal: RecoveryTerminal, logg
   const password = await terminal.readSecret('Palavra-passe: ');
   const result = await service.installationRecovery.rotate(username, password);
   if (result.ok) {
-    logger.log('info', 'recovery.code_issued', {
+    // Depois do commit: nada a partir daqui pode rejeitar (RV-C1M-01).
+    logBestEffort(logger, 'info', 'recovery.code_issued', {
       codeSequence: result.code.sequence,
       command: 'rotate',
       issuedReason: result.issuedReason,
@@ -179,13 +204,19 @@ const runRecover = async (service: LocalService, terminal: RecoveryTerminal, log
   }
   const result = await service.installationRecovery.recover(code, password);
   if (result.ok) {
-    logger.log('info', 'recovery.completed', {
+    // Depois do commit: nada a partir daqui pode rejeitar (RV-C1M-01).
+    logBestEffort(logger, 'info', 'recovery.completed', {
       codeSequence: result.code.sequence,
       command: 'recover',
       consumedSequence: result.consumedSequence,
     });
-    terminal.write('Credencial do administrador inicial substituída. As sessões dele foram revogadas.\n');
-    return present(result.code, terminal, logger, 'recover');
+    return present(
+      result.code,
+      terminal,
+      logger,
+      'recover',
+      'Credencial do administrador inicial substituída. As sessões dele foram revogadas.\n',
+    );
   }
   if (result.reason === 'throttled') {
     terminal.write(`Demasiadas tentativas. Tente de novo dentro de ${result.retryAfterSeconds} s.\n`);
@@ -210,6 +241,11 @@ const runRecover = async (service: LocalService, terminal: RecoveryTerminal, log
   return 'refused';
 };
 
+/**
+ * Só rejeita ANTES do *commit*: durante a leitura dos dados, ou porque a operação falhou (é atómica:
+ * nada da credencial nem dos códigos fica alterado). Depois do *commit* resolve sempre, com `ok` ou
+ * `presentation-failed` (E1.07-D3-R1-C2, RV-C1M-01).
+ */
 export const runRecoveryCommand = (
   command: RecoveryCommand,
   service: LocalService,

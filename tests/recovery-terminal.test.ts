@@ -12,8 +12,8 @@ import { createProcessTerminal } from '../services/local-api/src/terminal';
 
 const SECRET = 'segredo-fictício';
 
-const fakeTty = (options: { readonly rawModeFailsOnReset?: boolean } = {}) => {
-  const input = new PassThrough();
+const fakeTty = (options: { readonly rawModeFailsOnReset?: boolean; readonly autoDestroy?: boolean } = {}) => {
+  const input = new PassThrough({ autoDestroy: options.autoDestroy ?? true });
   const rawModes: boolean[] = [];
   const refs: ('ref' | 'unref')[] = [];
   Object.assign(input, {
@@ -222,6 +222,53 @@ describe('E1.07-D3-R1-C1 recovery CLI terminal', () => {
     tty.type('\u0003');
     await expectFailure(read, 'interrupted');
     expect(tty.input.listenerCount('keypress')).toBe(0);
+  });
+
+  it('[T-12] (RV-C1M-02) every read takes the input reference and releases it when it ends', async () => {
+    const tty = fakeTty();
+    const first = tty.terminal.readLine('> ');
+    expect(tty.refs).toEqual(['ref']);
+    tty.type('um\r');
+    await expect(first).resolves.toBe('um');
+    const second = tty.terminal.readSecret('> ');
+    // A segunda leitura volta a segurar o processo: sem isto, o processo termina à espera da resposta.
+    expect(tty.refs).toEqual(['ref', 'unref', 'ref']);
+    tty.type('dois\r');
+    await expect(second).resolves.toBe('dois');
+    expect(tty.refs).toEqual(['ref', 'unref', 'ref', 'unref']);
+  });
+
+  it('[T-13] (OM-04) an input that ended or closed before the first read fails it at once instead of leaving it pending', async () => {
+    /** Desfecho já decidido antes da volta seguinte do ciclo de eventos, ou `pending`. */
+    const settledAtOnce = (read: Promise<string>): Promise<string> =>
+      Promise.race([
+        read.then(
+          () => 'resolved',
+          (error: unknown) => (error instanceof RecoveryTerminalError ? error.failure : 'other'),
+        ),
+        new Promise<string>((resolve) => {
+          setImmediate(() => resolve('pending'));
+        }),
+      ]);
+
+    // Terminada sem ser destruída: o evento `end` já passou quando o terminal começa a observar.
+    const ended = fakeTty({ autoDestroy: false });
+    const endEmitted = new Promise((resolve) => ended.input.once('end', resolve));
+    ended.input.end();
+    ended.input.resume();
+    await endEmitted;
+    ended.input.pause();
+    expect(ended.input.readableEnded).toBe(true);
+    expect(ended.input.destroyed).toBe(false);
+    await expect(settledAtOnce(ended.terminal.readSecret('> '))).resolves.toBe('end-of-input');
+
+    // Destruída e já fechada: nem `end` nem `close` voltam a ser emitidos.
+    const closed = fakeTty();
+    const closeEmitted = new Promise((resolve) => closed.input.once('close', resolve));
+    closed.input.destroy();
+    await closeEmitted;
+    expect(closed.input.readableEnded).toBe(false);
+    await expect(settledAtOnce(closed.terminal.readLine('> '))).resolves.toBe('end-of-input');
   });
 
   it('[T-11] is interactive only when both input and output are TTY', () => {
