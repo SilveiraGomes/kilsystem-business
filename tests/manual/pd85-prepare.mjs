@@ -1,6 +1,6 @@
 // E1.07-D3-R1-C1 — preparação de uma base FICTÍCIA e descartável para o ensaio físico da PD-85
 // (CLI de recuperação numa consola real do Windows). Protocolo: docs/tasks/E1.07-D3-R1-C3.md §8
-// (W-01 a W-28 com as saídas 0/5/10 da C3; substitui E1.07-D3-R1-C2 §6 e E1.07-D3-R1-C1 §6).
+// (W-01 a W-30 com as saídas 0/5/10 da C3; substitui E1.07-D3-R1-C2 §6 e E1.07-D3-R1-C1 §6).
 //
 // Cria uma pasta nova em %TEMP% (E107-D3-R1-C1-PD85-<data>), inicializa a instalação com um
 // administrador fictício e uma palavra-passe aleatória, e mostra os comandos do PowerShell para o
@@ -67,7 +67,7 @@ console.log(
     '  node services\\local-api\\dist\\main.js recovery rotate; "SAIDA=$LASTEXITCODE"',
     '',
     'W-14 (serviço normal noutra consola): definir as MESMAS variáveis também nessa segunda consola.',
-    'Protocolo completo (W-01 a W-28; saídas 0, 5 e 10 depois do commit): docs/tasks/E1.07-D3-R1-C3.md §8.',
+    'Protocolo completo (W-01 a W-30; saídas 0, 5 e 10 depois do commit): docs/tasks/E1.07-D3-R1-C3.md §8.',
     '',
     'No fim, remover a pasta (caminho literal, confirmado):',
     `  node -e "require('node:fs').rmSync(${JSON.stringify(directory).replace(/"/g, "'")}, { recursive: true })"`,
