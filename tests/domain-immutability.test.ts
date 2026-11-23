@@ -640,6 +640,8 @@ describe('Domain contract immutability (E1.07-D1-H, PD-64)', () => {
         invalidConfiguration: 2,
         ok: 0,
         recoveryCancelled: 6,
+        // E1.07-D3-R1-C3 (D-241): código acrescentado ao registo congelado; 0–9 inalterados.
+        recoveryCommittedIncomplete: 10,
         recoveryInputEnded: 7,
         recoveryInputRejected: 9,
         recoveryPresentationFailed: 5,

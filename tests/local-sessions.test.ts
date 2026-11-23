@@ -963,9 +963,11 @@ describe('Local sessions (E1.07-C)', () => {
 
   describe('service lifecycle', () => {
     it('[S41] never yields a usable session when the service stops during creation', async () => {
-      // a) criação e validação pedidas enquanto o serviço está em STOPPING. O registo da transição
-      // STOPPING → STOPPED é emitido com o estado ainda em STOPPING e a ligação já libertada.
-      const attempts: Promise<unknown>[] = [];
+      // a) criação e validação pedidas durante o encerramento. Desde E1.07-D3-R1-C3 (D-241) o estado
+      // muda ANTES do registo da transição: no registo READY → STOPPING o serviço já está em STOPPING
+      // (ligação ainda aberta) e no registo STOPPING → STOPPED já está em STOPPED (ligação libertada).
+      // Em ambos os pontos as operações são recusadas com o estado desse momento.
+      const attempts: { readonly state: string; readonly outcome: Promise<unknown> }[] = [];
       const hook: { service?: LocalService; identity?: AuthenticatedIdentity } = {};
       const logger = createJsonLogger({
         instanceId: 'stopping',
@@ -973,9 +975,19 @@ describe('Local sessions (E1.07-C)', () => {
         sink: (line) => {
           const record = JSON.parse(line) as { event: string; to?: string };
           const { identity, service } = hook;
-          if (record.event === 'service.state_changed' && record.to === 'STOPPED' && service && identity && attempts.length === 0) {
-            attempts.push(service.sessions.create(identity).then(() => 'created', (error: unknown) => error));
-            attempts.push(service.sessions.validate(generateSessionToken().token).then(() => 'validated', (error: unknown) => error));
+          const point = record.to;
+          if (
+            record.event === 'service.state_changed' &&
+            (point === 'STOPPING' || point === 'STOPPED') &&
+            service &&
+            identity &&
+            !attempts.some((attempt) => attempt.state === point)
+          ) {
+            attempts.push({ outcome: service.sessions.create(identity).then(() => 'created', (error: unknown) => error), state: point });
+            attempts.push({
+              outcome: service.sessions.validate(generateSessionToken().token).then(() => 'validated', (error: unknown) => error),
+              state: point,
+            });
           }
         },
       });
@@ -993,9 +1005,9 @@ describe('Local sessions (E1.07-C)', () => {
       const identity = await login({ service }, user);
       hook.identity = identity;
       await service.stop();
-      expect(attempts).toHaveLength(2);
-      for (const outcome of await Promise.all(attempts)) {
-        expect(outcome).toMatchObject({ name: LocalServiceStateError.name, reason: 'not-ready', state: 'STOPPING' });
+      expect(attempts.map((attempt) => attempt.state)).toEqual(['STOPPING', 'STOPPING', 'STOPPED', 'STOPPED']);
+      for (const { outcome, state } of attempts) {
+        await expect(outcome).resolves.toMatchObject({ name: LocalServiceStateError.name, reason: 'not-ready', state });
       }
       await service.start();
       await expect(service.sessions.create(identity)).resolves.toEqual(REQUIRED);

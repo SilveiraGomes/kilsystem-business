@@ -113,6 +113,27 @@ export class LocalServiceStateError extends Error {
   }
 }
 
+/**
+ * `stop()` não concluiu de forma limpa (E1.07-D3-R1-C3, RV-C2M-01/03). O estado final é sempre
+ * `STOPPED` (`record-failed`) ou `FAILED` (`release-failed`) e a libertação da ligação foi sempre
+ * tentada antes de qualquer registo poder falhar:
+ * - `record-failed`: a ligação foi fechada; só um registo do encerramento falhou;
+ * - `release-failed`: o fecho da ligação lançou; a base pode continuar detida até ao fim do processo.
+ * As causas ficam em `causes` (nunca contêm dados da base); `cause` é a primeira.
+ */
+export type LocalServiceStopFailure = 'record-failed' | 'release-failed';
+
+export class LocalServiceStopError extends Error {
+  override readonly name = 'LocalServiceStopError';
+
+  constructor(
+    readonly reason: LocalServiceStopFailure,
+    readonly causes: readonly unknown[],
+  ) {
+    super(`Encerramento do serviço local incompleto: ${reason}.`, { cause: causes[0] });
+  }
+}
+
 export type StartupFailureReason =
   | 'database-access-denied'
   | 'database-corrupt'
@@ -195,7 +216,11 @@ export interface LocalService {
   readonly lastFailure: StartupFailureReason | undefined;
   /** Idempotente: em `READY` não faz nada; durante `STARTING` devolve o arranque em curso. */
   start(): Promise<void>;
-  /** Idempotente: em `STOPPED` não faz nada; liberta sempre a ligação SQLite. */
+  /**
+   * Idempotente: em `STOPPED` não faz nada; tenta sempre libertar a ligação SQLite, mesmo que o
+   * registo falhe. Rejeita com `LocalServiceStopError` se um registo ou o fecho falharem, já com o
+   * estado final (`STOPPED` ou `FAILED`) aplicado (E1.07-D3-R1-C3).
+   */
   stop(): Promise<void>;
   /** Repositórios multiempresa; recusam operações fora de `READY` (`LocalServiceStateError`). */
   readonly companies: CompanyRepository;
@@ -353,6 +378,30 @@ export const createLocalService = (
     state = next;
   };
 
+  /** Registo que não interrompe a libertação: a falha fica em `failures` para ser comunicada no fim. */
+  const record = (failures: unknown[], ...entry: Parameters<Logger['log']>): void => {
+    try {
+      logger.log(...entry);
+    } catch (error) {
+      failures.push(error);
+    }
+  };
+
+  /**
+   * Transição dos caminhos de libertação (falha do arranque e encerramento; E1.07-D3-R1-C3,
+   * RV-C2M-03): o estado muda ANTES do registo, para que uma falha do registo nunca deixe o
+   * serviço num estado intermédio nem impeça o fecho da ligação. Uma transição inválida continua a
+   * lançar (erro de programação, não de registo).
+   */
+  const settleState = (next: LocalServiceState, failures: unknown[]): void => {
+    if (!LOCAL_SERVICE_TRANSITIONS[state].includes(next)) {
+      throw new LocalServiceStateError('invalid-transition', state);
+    }
+    const from = state;
+    state = next;
+    record(failures, 'info', 'service.state_changed', { from, to: next });
+  };
+
   const release = (): void => {
     stores = undefined;
     const connection = database;
@@ -453,13 +502,14 @@ export const createLocalService = (
   };
 
   const run = async (): Promise<void> => {
-    logger.log('info', 'service.starting', {
-      databaseFile,
-      environment: config.environment,
-      onMissingDatabase: config.startupPolicy.onMissingDatabase,
-      onPendingMigrations: config.startupPolicy.onPendingMigrations,
-    });
     try {
+      // Dentro do `try` (E1.07-D3-R1-C3): uma falha deste registo termina em `FAILED`, não em `STARTING`.
+      logger.log('info', 'service.starting', {
+        databaseFile,
+        environment: config.environment,
+        onMissingDatabase: config.startupPolicy.onMissingDatabase,
+        onPendingMigrations: config.startupPolicy.onPendingMigrations,
+      });
       startupReport = await initialise();
       lastFailure = undefined;
       transition('READY');
@@ -469,15 +519,18 @@ export const createLocalService = (
         error instanceof LocalServiceStartupError
           ? error
           : new LocalServiceStartupError('unexpected', { cause: error });
+      // A falha do arranque é a que se comunica; os registos daqui em diante são secundários e nunca
+      // impedem a libertação nem a passagem a `FAILED` (E1.07-D3-R1-C3).
+      const secondary: unknown[] = [];
       try {
         release();
       } catch (closeError) {
         database = undefined;
-        logger.log('error', 'service.release_failed', describeCause(closeError));
+        record(secondary, 'error', 'service.release_failed', describeCause(closeError));
       }
       lastFailure = failure.reason;
-      transition('FAILED');
-      logger.log('error', 'service.start_failed', { reason: failure.reason, ...describeCause(failure.cause) });
+      settleState('FAILED', secondary);
+      record(secondary, 'error', 'service.start_failed', { reason: failure.reason, ...describeCause(failure.cause) });
       throw failure;
     }
   };
@@ -498,17 +551,26 @@ export const createLocalService = (
     }
   };
 
+  /**
+   * Encerramento (E1.07-D3-R1-C3, RV-C2M-01/03): a ligação é sempre fechada, ou o fecho tentado,
+   * antes de qualquer registo que possa falhar a impedir; o estado final é sempre aplicado. Nada
+   * fica em silêncio: as falhas de registo ou de fecho são comunicadas no fim por
+   * `LocalServiceStopError`, com o motivo que distingue "base libertada" de "base possivelmente detida".
+   */
   const shutdown = (): void => {
+    const recordFailures: unknown[] = [];
+    settleState('STOPPING', recordFailures);
     try {
       release();
-      transition('STOPPED');
-      logger.log('info', 'service.stopped');
-    } catch (error) {
+    } catch (releaseFailure) {
       database = undefined;
-      transition('FAILED');
-      logger.log('error', 'service.stop_failed', describeCause(error));
-      throw error;
+      settleState('FAILED', recordFailures);
+      record(recordFailures, 'error', 'service.stop_failed', describeCause(releaseFailure));
+      throw new LocalServiceStopError('release-failed', [releaseFailure, ...recordFailures]);
     }
+    settleState('STOPPED', recordFailures);
+    record(recordFailures, 'info', 'service.stopped');
+    if (recordFailures.length > 0) throw new LocalServiceStopError('record-failed', recordFailures);
   };
 
   const stop = async (): Promise<void> => {
@@ -519,11 +581,12 @@ export const createLocalService = (
     }
     if (state === 'STOPPED') return;
     if (state === 'FAILED') {
-      // Os recursos já foram libertados quando o arranque falhou.
-      transition('STOPPED');
+      // A libertação já foi tentada quando o arranque (ou um encerramento anterior) falhou.
+      const recordFailures: unknown[] = [];
+      settleState('STOPPED', recordFailures);
+      if (recordFailures.length > 0) throw new LocalServiceStopError('record-failed', recordFailures);
       return;
     }
-    transition('STOPPING');
     stopping = new Promise<void>((resolve) => {
       shutdown();
       resolve();

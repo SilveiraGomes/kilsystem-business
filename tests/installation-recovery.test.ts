@@ -1429,6 +1429,7 @@ describe('E1.07-D3-R1 installation recovery of the initial administrator', () =>
       expect(lines.join('\n')).not.toContain(OTHER_TEST_PASSWORD);
     }, 180_000);
 
+    // E1.07-D3-R1-C3 (RV-C2M-01): o código é confirmado na mesma, mas a finalização incompleta já não é 0 — é 10.
     it('[R-F09e] after the commit, a failing log, every channel failing or a failing service stop keep the committed outcome', async () => {
       const administrator = await prepared();
       const lines: string[] = [];
@@ -1436,13 +1437,13 @@ describe('E1.07-D3-R1 installation recovery of the initial administrator', () =>
       const rotation = steppedTerminal([administrator.username, TEST_PASSWORD, { confirm: true }]);
       await expect(
         runFaulty(['recovery', 'rotate'], rotation.terminal, lines, { failLog: (line) => line.includes('"recovery.code_issued"') }),
-      ).resolves.toBe(LOCAL_SERVICE_EXIT_CODES.ok);
+      ).resolves.toBe(LOCAL_SERVICE_EXIT_CODES.recoveryCommittedIncomplete);
       const first = rotation.shown[0] ?? '';
       expect(first).toMatch(CODE_PATTERN);
       const recovery = steppedTerminal([first, OTHER_TEST_PASSWORD, OTHER_TEST_PASSWORD, { confirm: true }]);
       await expect(
         runFaulty(['recovery', 'recover'], recovery.terminal, lines, { failLog: (line) => line.includes('"recovery.completed"') }),
-      ).resolves.toBe(LOCAL_SERVICE_EXIT_CODES.ok);
+      ).resolves.toBe(LOCAL_SERVICE_EXIT_CODES.recoveryCommittedIncomplete);
       expect(recovery.writes.join('')).toMatch(/substituída/);
       expect(recovery.shown).toHaveLength(1);
 
@@ -1463,7 +1464,7 @@ describe('E1.07-D3-R1 installation recovery of the initial administrator', () =>
       expect(inspect(codes)).toHaveLength(issuedBefore + 1);
       expect(silent.shown).toEqual([]);
 
-      // Encerramento do serviço falhado: depois do commit prevalece o desfecho confirmado; antes, continua 1.
+      // Encerramento do serviço falhado: depois do commit prevalece o desfecho confirmado (10 ou 5); antes, continua 1.
       const closeFails = (options: OpenSqliteOptions): SqliteDatabase => {
         const connection = openSqliteDatabase(options);
         const close = connection.close.bind(connection);
@@ -1476,7 +1477,7 @@ describe('E1.07-D3-R1 installation recovery of the initial administrator', () =>
       };
       const confirmed = steppedTerminal([administrator.username, OTHER_TEST_PASSWORD, { confirm: true }]);
       await expect(runFaulty(['recovery', 'rotate'], confirmed.terminal, lines, { openDatabase: closeFails })).resolves.toBe(
-        LOCAL_SERVICE_EXIT_CODES.ok,
+        LOCAL_SERVICE_EXIT_CODES.recoveryCommittedIncomplete,
       );
       const unconfirmed = steppedTerminal([administrator.username, OTHER_TEST_PASSWORD, { fail: 'end-of-input' }]);
       await expect(runFaulty(['recovery', 'rotate'], unconfirmed.terminal, lines, { openDatabase: closeFails })).resolves.toBe(
@@ -1539,5 +1540,309 @@ describe('E1.07-D3-R1 installation recovery of the initial administrator', () =>
       const retry = steppedTerminal([code, OTHER_TEST_PASSWORD, OTHER_TEST_PASSWORD, { confirm: true }]);
       await expect(run(['recovery', 'recover'], retry.terminal, lines)).resolves.toBe(LOCAL_SERVICE_EXIT_CODES.ok);
     }, 180_000);
+
+    /*
+     * E1.07-D3-R1-C3 — contrato pós-commit: 0 sucesso completo; 5 código não entregue ou não
+     * confirmado (rotação necessária); 10 código entregue e confirmado com finalização incompleta
+     * (sem rotação). Precedência 5 > 10 > 0.
+     */
+    const COMMITTED_INCOMPLETE = /não é necessário emitir outro código/;
+    const ROTATION_NEEDED = /É necessário emitir outro/;
+    const failingWrite = (pattern: RegExp) => (text: string): Error | undefined =>
+      pattern.test(text) ? new Error('terminal indisponível') : undefined;
+    const codesShownIn = (text: string): number => text.match(new RegExp(CODE_PATTERN.source, 'g'))?.length ?? 0;
+    const statesOf = (rows: readonly CodeRow[]): string[] => rows.map((row) => row.state);
+    /** Estados esperados depois de uma operação confirmada: o activo anterior termina como `ended`, mais um `ACTIVE`. */
+    const afterOne = (before: readonly CodeRow[], ended: 'SUPERSEDED' | 'CONSUMED'): string[] => [
+      ...before.map((row) => (row.state === 'ACTIVE' ? ended : row.state)),
+      'ACTIVE',
+    ];
+    const recordsOf = (lines: readonly string[]) => lines.map((line) => JSON.parse(line) as Record<string, unknown>);
+    /** Nenhuma ligação detém a base: uma ligação nova obtém de imediato a posse exclusiva (sem espera). */
+    const reopensExclusively = (): boolean => {
+      try {
+        openSqliteDatabase({ busyTimeoutMs: 0, exclusive: true, fileMustExist: true, filename: temporary.filename }).close();
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    const activeSessions = (): number =>
+      inspect((database) => database.prepare('SELECT count(*) FROM local_sessions WHERE revoked_at IS NULL').pluck().get() as number);
+    const expectNoSecrets = (lines: readonly string[], secrets: readonly string[], codesToHide: readonly string[]): void => {
+      const log = lines.join('\n');
+      for (const secret of secrets) expect(log).not.toContain(secret);
+      for (const code of codesToHide) for (const fragment of fragmentsOf(code)) expect(log).not.toContain(fragment);
+    };
+
+    it('[R-F09f] (RV-C2M-01/07) a code delivered and confirmed with a failing post-commit record or final message exits 10, never rotated nor repeated', async () => {
+      const administrator = await prepared();
+      const lines: string[] = [];
+      const secrets: string[] = [TEST_PASSWORD];
+      const delivered: string[] = [await issuedThroughCli(administrator, lines)];
+      let password = TEST_PASSWORD;
+      const rotations: readonly (readonly [string, { readonly failLog?: string; readonly failWrite?: RegExp }])[] = [
+        // P7: o registo do código JÁ confirmado pelo titular (RV-C2M-07).
+        ['registo recovery.code_presented confirmado (P7)', { failLog: '"recovery.code_presented"' }],
+        ['registo recovery.code_issued', { failLog: '"recovery.code_issued"' }],
+        ['mensagem "Confirmado." não escrita', { failWrite: /^Confirmado\./ }],
+      ];
+      for (const [index, [name, fault]] of rotations.entries()) {
+        const before = inspect(codes);
+        const eventsBefore = inspect(eventKinds).length;
+        const logged = lines.length;
+        const marker = fault.failLog;
+        const terminal = steppedTerminal(
+          [administrator.username, password, { confirm: true }],
+          fault.failWrite === undefined ? undefined : failingWrite(fault.failWrite),
+        );
+        await expect(
+          runFaulty(['recovery', 'rotate'], terminal.terminal, lines, marker === undefined ? {} : { failLog: (line) => line.includes(marker) }),
+          name,
+        ).resolves.toBe(LOCAL_SERVICE_EXIT_CODES.recoveryCommittedIncomplete);
+        // Uma única rotação confirmada: o anterior SUPERSEDED, o entregue é o único ACTIVE; sem segunda rotação.
+        expect(statesOf(inspect(codes)), name).toEqual(afterOne(before, 'SUPERSEDED'));
+        expect(inspect(eventKinds).slice(eventsBefore), name).toEqual(['code-rotated']);
+        expect(terminal.shown, name).toHaveLength(1);
+        const code = terminal.shown[0] ?? '';
+        delivered.push(code);
+        const written = terminal.writes.join('');
+        expect(written.includes('Confirmado.'), name).toBe(fault.failWrite === undefined);
+        expect(written, name).toMatch(COMMITTED_INCOMPLETE);
+        expect(written, name).not.toMatch(ROTATION_NEEDED);
+        expect(written, name).not.toMatch(NOTHING_CHANGED);
+        // O aviso nunca repete o código: só a apresentação o contém.
+        expect(codesShownIn(written), name).toBe(1);
+        const events = eventsOf(lines.slice(logged));
+        expect(events, name).toContain('recovery.finalization_incomplete');
+        expect(events, name).not.toContain('recovery.presentation_failed');
+        expect(events, name).not.toContain('recovery.failed');
+        expect(reopensExclusively(), name).toBe(true);
+        // O código entregue é o activo: a recuperação com ele conclui (0) e consome exactamente esse.
+        const next = `${OTHER_TEST_PASSWORD} ${index}`;
+        secrets.push(next);
+        const recovery = steppedTerminal([code, next, next, { confirm: true }]);
+        await expect(run(['recovery', 'recover'], recovery.terminal, lines), name).resolves.toBe(LOCAL_SERVICE_EXIT_CODES.ok);
+        delivered.push(recovery.shown[0] ?? '');
+        password = next;
+      }
+
+      // F: o registo falha depois de a credencial ser substituída.
+      const version = inspect((database) => credentialVersion(database, administrator.id));
+      const before = inspect(codes);
+      const eventsBefore = inspect(eventKinds).length;
+      const replaced = `${OTHER_TEST_PASSWORD} F`;
+      secrets.push(replaced);
+      const recovery = steppedTerminal([delivered.at(-1) ?? '', replaced, replaced, { confirm: true }]);
+      await expect(
+        runFaulty(['recovery', 'recover'], recovery.terminal, lines, { failLog: (line) => line.includes('"recovery.completed"') }),
+      ).resolves.toBe(LOCAL_SERVICE_EXIT_CODES.recoveryCommittedIncomplete);
+      expect(inspect((database) => credentialVersion(database, administrator.id))).toBe(version + 1);
+      expect(statesOf(inspect(codes))).toEqual(afterOne(before, 'CONSUMED'));
+      expect(inspect(eventKinds).slice(eventsBefore)).toEqual(['recovery-attempted', 'recovery-succeeded']);
+      expect(activeSessions()).toBe(0);
+      const written = recovery.writes.join('');
+      expect(written).toMatch(/substituída/);
+      expect(written).toMatch(/NOVA palavra-passe/);
+      expect(written).toMatch(COMMITTED_INCOMPLETE);
+      expect(written).not.toMatch(ROTATION_NEEDED);
+      expect(written).not.toMatch(NOTHING_CHANGED);
+      expect(reopensExclusively()).toBe(true);
+      delivered.push(recovery.shown[0] ?? '');
+      // A NOVA palavra-passe está em vigor e o código entregue continua a ser o activo.
+      await expect(run(['recovery', 'rotate'], steppedTerminal([administrator.username, replaced, { confirm: true }]).terminal, lines)).resolves.toBe(
+        LOCAL_SERVICE_EXIT_CODES.ok,
+      );
+      // Sem repetição: uma recuperação confirmada por execução de `recover`.
+      expect(inspect(eventKinds).filter((kind) => kind === 'recovery-succeeded')).toHaveLength(rotations.length + 1);
+      expectNoSecrets(lines, secrets, delivered);
+    }, 240_000);
+
+    it('[R-F09g] (RV-C2M-01/03/04) a failing service stop after a confirmed code exits 10 and still releases the database; before the commit it stays 1', async () => {
+      const administrator = await prepared();
+      const lines: string[] = [];
+      let code = await issuedThroughCli(administrator, lines);
+      let password = TEST_PASSWORD;
+      const secrets: string[] = [TEST_PASSWORD];
+      const delivered: string[] = [code];
+      // Caminho real de RV-C2M-04: o registo da transição para STOPPING falha ANTES da libertação.
+      const stops: readonly (readonly [string, 'rotate' | 'recover', string])[] = [
+        ['rotate, registo da transição para STOPPING (antes da libertação)', 'rotate', '"to":"STOPPING"'],
+        ['rotate, registo service.stopped (depois da libertação)', 'rotate', '"service.stopped"'],
+        ['recover, registo da transição para STOPPING', 'recover', '"to":"STOPPING"'],
+      ];
+      for (const [index, [name, command, marker]] of stops.entries()) {
+        const logged = lines.length;
+        const next = `${OTHER_TEST_PASSWORD} ${index}`;
+        const steps: Step[] = command === 'rotate' ? [administrator.username, password, { confirm: true }] : [code, next, next, { confirm: true }];
+        const terminal = steppedTerminal(steps);
+        await expect(runFaulty(['recovery', command], terminal.terminal, lines, { failLog: (line) => line.includes(marker) }), name).resolves.toBe(
+          LOCAL_SERVICE_EXIT_CODES.recoveryCommittedIncomplete,
+        );
+        // Na mesma execução: nenhuma ligação ficou aberta, apesar de o registo ter falhado.
+        expect(reopensExclusively(), name).toBe(true);
+        expect(recordsOf(lines.slice(logged)).find((record) => record['event'] === 'recovery.finalization_incomplete'), name).toMatchObject({
+          command,
+          secondaryChannels: 'complete',
+          serviceStop: 'record-failed',
+        });
+        const written = terminal.writes.join('');
+        expect(written, name).toContain('Confirmado.');
+        expect(written, name).toMatch(/libertou a base/);
+        expect(written, name).toMatch(COMMITTED_INCOMPLETE);
+        expect(written, name).not.toMatch(NOTHING_CHANGED);
+        expect(inspect(codes).filter((row) => row.state === 'ACTIVE'), name).toHaveLength(1);
+        code = terminal.shown[0] ?? '';
+        delivered.push(code);
+        if (command === 'recover') {
+          password = next;
+          secrets.push(next);
+        }
+      }
+
+      // `close()` lança sem fechar: a libertação NÃO é confirmada e a mensagem di-lo, sem fingir que a base ficou livre.
+      const realCloses: (() => void)[] = [];
+      const closeLeaks = (options: OpenSqliteOptions): SqliteDatabase => {
+        const connection = openSqliteDatabase(options);
+        const close = connection.close.bind(connection);
+        realCloses.push(() => {
+          close();
+        });
+        return Object.assign(connection, {
+          close: () => {
+            throw new Error('falha ao fechar');
+          },
+        });
+      };
+      const leaking = steppedTerminal([administrator.username, password, { confirm: true }]);
+      const leaked = lines.length;
+      await expect(runFaulty(['recovery', 'rotate'], leaking.terminal, lines, { openDatabase: closeLeaks })).resolves.toBe(
+        LOCAL_SERVICE_EXIT_CODES.recoveryCommittedIncomplete,
+      );
+      expect(leaking.writes.join('')).toMatch(/fica livre quando este processo terminar/);
+      expect(recordsOf(lines.slice(leaked)).find((record) => record['event'] === 'recovery.finalization_incomplete')).toMatchObject({
+        serviceStop: 'release-failed',
+      });
+      expect(reopensExclusively()).toBe(false);
+      for (const close of realCloses.splice(0)) close();
+      expect(reopensExclusively()).toBe(true);
+      delivered.push(leaking.shown[0] ?? '');
+
+      // Precedência: código não confirmado com `stop()` falhado continua 5; recusa antes do commit continua 1.
+      const failingStop = { failLog: (line: string) => line.includes('"to":"STOPPING"') };
+      const unconfirmed = steppedTerminal([administrator.username, password, { fail: 'end-of-input' }]);
+      await expect(runFaulty(['recovery', 'rotate'], unconfirmed.terminal, lines, failingStop)).resolves.toBe(
+        LOCAL_SERVICE_EXIT_CODES.recoveryPresentationFailed,
+      );
+      expect(unconfirmed.writes.join('')).toMatch(ROTATION_NEEDED);
+      expect(unconfirmed.writes.join('')).not.toMatch(COMMITTED_INCOMPLETE);
+      delivered.push(unconfirmed.shown[0] ?? '');
+      const before = inspect((database) => rows(database, ['password_credentials', ...RECOVERY_TABLES]));
+      await expect(runFaulty(['recovery', 'rotate'], steppedTerminal([administrator.username, 'palavra errada']).terminal, lines, failingStop)).resolves.toBe(
+        LOCAL_SERVICE_EXIT_CODES.startupFailed,
+      );
+      // A recusa só acrescenta a contagem da limitação da autenticação; os códigos e a credencial não mudam.
+      expect(inspect((database) => rows(database, ['password_credentials', 'installation_recovery_codes']))).toEqual({
+        installation_recovery_codes: before['installation_recovery_codes'],
+        password_credentials: before['password_credentials'],
+      });
+      expect(reopensExclusively()).toBe(true);
+
+      // Arranque recusado (base detida) com o registo do encerramento a falhar: continua 1, sem rejeitar.
+      const owner = await startedService();
+      await expect(
+        runFaulty(['recovery', 'rotate'], steppedTerminal([administrator.username, password]).terminal, lines, {
+          failLog: (line) => line.includes('"to":"STOPPED"'),
+        }),
+      ).resolves.toBe(LOCAL_SERVICE_EXIT_CODES.startupFailed);
+      await owner.service.stop();
+
+      // Recuperação posterior: a rotação seguinte, sem falhas, conclui com um único ACTIVE.
+      await issuedThroughCli(administrator, lines, password);
+      expect(inspect(codes).filter((row) => row.state === 'ACTIVE')).toHaveLength(1);
+      expectNoSecrets(lines, secrets, delivered);
+    }, 240_000);
+
+    it('[R-F09h] (RV-C2M-02) an undelivered or unconfirmed code exits 5 with the exact phase reached, never "confirmed" nor "nothing changed"', async () => {
+      const administrator = await prepared();
+      const lines: string[] = [];
+      const code = await issuedThroughCli(administrator, lines);
+      const delivered: string[] = [code];
+
+      // `recover` com o anúncio falhado: o código nem chega a ser revelado.
+      const replaced = `${OTHER_TEST_PASSWORD} H`;
+      const announcement = steppedTerminal([code, replaced, replaced, { confirm: true }], failingWrite(/^Credencial do administrador inicial substituída/));
+      const logged = lines.length;
+      await expect(run(['recovery', 'recover'], announcement.terminal, lines)).resolves.toBe(LOCAL_SERVICE_EXIT_CODES.recoveryPresentationFailed);
+      const unpresented = announcement.writes.join('');
+      expect(unpresented).toMatch(/FOI substituída[^\n]*mas o novo código de recuperação não foi apresentado\. É necessário emitir outro[^\n]*NOVA palavra-passe/);
+      expect(codesShownIn(unpresented)).toBe(0);
+      expect(recordsOf(lines.slice(logged)).find((record) => record['event'] === 'recovery.presentation_failed')).toMatchObject({
+        presentation: 'not-presented',
+      });
+
+      const cases: readonly (readonly [string, Step[], RegExp | undefined, RegExp, string, number])[] = [
+        ['código não escrito', [{ confirm: true }], CODE_PATTERN, /FOI emitido e já está activo, mas a apresentação falhou e pode ter ficado incompleta no ecrã\./, 'partially-presented', 0],
+        ['fim da entrada na confirmação', [{ fail: 'end-of-input' }], undefined, /foi apresentado, mas não foi confirmado que ficou guardado\./, 'presented-unconfirmed', 1],
+        ['Ctrl+C na confirmação', [{ fail: 'interrupted' }], undefined, /foi apresentado, mas não foi confirmado que ficou guardado\./, 'presented-unconfirmed', 1],
+        ['erro do terminal na confirmação', [{ fail: 'terminal-error' }], undefined, /foi apresentado, mas não foi confirmado que ficou guardado\./, 'presented-unconfirmed', 1],
+        ['três confirmações erradas', ['', '', ''], undefined, /A confirmação falhou\.\n[^\n]*foi apresentado, mas não foi confirmado que ficou guardado\./, 'presented-unconfirmed', 3],
+        ['nova apresentação falha depois de uma confirmação errada', ['', { confirm: true }], /^Não coincide/, /foi apresentado, mas não foi confirmado que ficou guardado\./, 'presented-unconfirmed', 1],
+      ];
+      for (const [name, confirmation, failWrite, expected, gap, shownTimes] of cases) {
+        const before = inspect(codes);
+        const logged = lines.length;
+        const terminal = steppedTerminal(
+          [administrator.username, replaced, ...confirmation],
+          failWrite === undefined ? undefined : failingWrite(failWrite),
+        );
+        await expect(run(['recovery', 'rotate'], terminal.terminal, lines), name).resolves.toBe(LOCAL_SERVICE_EXIT_CODES.recoveryPresentationFailed);
+        expect(statesOf(inspect(codes)), name).toEqual(afterOne(before, 'SUPERSEDED'));
+        const written = terminal.writes.join('');
+        expect(written, name).toMatch(expected);
+        expect(written, name).toMatch(ROTATION_NEEDED);
+        expect(written, name).not.toContain('Confirmado.');
+        expect(written, name).not.toMatch(COMMITTED_INCOMPLETE);
+        expect(written, name).not.toMatch(NOTHING_CHANGED);
+        expect(written, name).not.toContain('não foi possível apresentá-lo');
+        // A mensagem nunca contém o código: só as apresentações completas o contêm.
+        expect(codesShownIn(written), name).toBe(shownTimes);
+        expect(terminal.shown, name).toHaveLength(shownTimes);
+        const record = recordsOf(lines.slice(logged)).find(
+          (entry) => entry['event'] === 'recovery.presentation_failed' || (entry['event'] === 'recovery.code_presented' && entry['confirmed'] === false),
+        );
+        expect(record, name).toMatchObject({ presentation: gap });
+        expect(eventsOf(lines.slice(logged)), name).not.toContain('recovery.finalization_incomplete');
+        delivered.push(...terminal.shown);
+      }
+
+      // Precedência: um registo falhado (seria 10) com a confirmação incompleta continua 5.
+      const both = steppedTerminal([administrator.username, replaced, { fail: 'end-of-input' }]);
+      await expect(
+        runFaulty(['recovery', 'rotate'], both.terminal, lines, { failLog: (line) => line.includes('"recovery.code_issued"') }),
+      ).resolves.toBe(LOCAL_SERVICE_EXIT_CODES.recoveryPresentationFailed);
+      delivered.push(...both.shown);
+
+      // C: depois do commit falham todas as escritas e todos os registos, incluindo os do encerramento.
+      let committed = false;
+      const silent = steppedTerminal([administrator.username, replaced, { confirm: true }], () => (committed ? new Error('terminal indisponível') : undefined));
+      const issuedBefore = inspect(codes).length;
+      await expect(
+        runFaulty(['recovery', 'rotate'], silent.terminal, lines, {
+          failLog: (line) => {
+            if (line.includes('"recovery.code_issued"')) committed = true;
+            return committed;
+          },
+        }),
+      ).resolves.toBe(LOCAL_SERVICE_EXIT_CODES.recoveryPresentationFailed);
+      expect(inspect(codes)).toHaveLength(issuedBefore + 1);
+      expect(silent.writes.join('')).not.toMatch(CODE_PATTERN);
+      expect(reopensExclusively()).toBe(true);
+
+      // Recuperação posterior com a palavra-passe em vigor.
+      await issuedThroughCli(administrator, lines, replaced);
+      expect(inspect(codes).filter((row) => row.state === 'ACTIVE')).toHaveLength(1);
+      expectNoSecrets(lines, [TEST_PASSWORD, replaced], delivered);
+    }, 240_000);
   });
 });

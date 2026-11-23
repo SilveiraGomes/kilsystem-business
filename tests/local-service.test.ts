@@ -4,7 +4,7 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { MIGRATIONS, openSqliteDatabase, type OpenSqliteOptions } from '../packages/database/src/index';
+import { MIGRATIONS, openSqliteDatabase, type OpenSqliteOptions, type SqliteDatabase } from '../packages/database/src/index';
 import { createBranch } from '../packages/shared-types/src/index';
 import { LOCAL_SERVICE_EXIT_CODES, runLocalServiceCli } from '../services/local-api/src/cli';
 import {
@@ -14,9 +14,11 @@ import {
   parseLocalServiceConfig,
 } from '../services/local-api/src/config';
 import {
+  createLocalService,
   LOCAL_SERVICE_TRANSITIONS,
   LocalServiceStartupError,
   LocalServiceStateError,
+  LocalServiceStopError,
   type LocalService,
   type LocalServiceState,
 } from '../services/local-api/src/local-service';
@@ -239,6 +241,130 @@ describe('Local service lifecycle (E1.05)', () => {
 
       expect(harness.service.state).toBe('STOPPED');
       expect(harness.connections).toHaveLength(0);
+    });
+  });
+
+  describe('release independent of the log (E1.07-D3-R1-C3, RV-C2M-01/03)', () => {
+    /**
+     * Serviço cujo registo lança nas linhas escolhidas. Fica fora de `running`: o `stop()` destes
+     * serviços pode rejeitar de propósito, e cada teste termina-os ele próprio.
+     */
+    const faultyService = (
+      failLine: (line: string) => boolean,
+      open: (options: OpenSqliteOptions) => SqliteDatabase = openSqliteDatabase,
+      overrides: Readonly<Record<string, unknown>> = {},
+    ) => {
+      const lines: string[] = [];
+      const connections: SqliteDatabase[] = [];
+      const service = createLocalService(serviceConfig(temporary.filename, overrides), {
+        logger: createJsonLogger({
+          instanceId: 'release-test',
+          level: 'debug',
+          sink: (line) => {
+            if (failLine(line)) throw new Error('registo indisponível');
+            lines.push(line);
+          },
+        }),
+        openDatabase: (options) => {
+          const connection = open(options);
+          connections.push(connection);
+          return connection;
+        },
+        protectedDirectories: PROTECTED_DIRECTORIES,
+      });
+      return { connections, events: () => lines.map((line) => (JSON.parse(line) as { event: string }).event), service };
+    };
+
+    /** Uma ligação nova obtém de imediato a posse exclusiva da base (sem espera): ninguém a detém. */
+    const reopensExclusively = (): boolean => {
+      try {
+        openSqliteDatabase({ busyTimeoutMs: 0, exclusive: true, fileMustExist: true, filename: temporary.filename }).close();
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    const rejection = (promise: Promise<void>): Promise<unknown> => promise.then(() => undefined, (error: unknown) => error);
+
+    it.each([
+      ['before the release (transition to STOPPING)', '"to":"STOPPING"'],
+      ['after the release (transition to STOPPED)', '"to":"STOPPED"'],
+      ['after the release (service.stopped)', '"service.stopped"'],
+    ])('[L-C3-01] a failing record %s never keeps the database: STOPPED, closed, record-failed', async (_name, marker) => {
+      const { connections, service } = faultyService((line) => line.includes(marker));
+      await service.start();
+      expect(reopensExclusively()).toBe(false);
+
+      const failure = await rejection(service.stop());
+
+      expect(failure).toBeInstanceOf(LocalServiceStopError);
+      expect(failure).toMatchObject({ name: 'LocalServiceStopError', reason: 'record-failed' });
+      expect((failure as LocalServiceStopError).causes).toHaveLength(1);
+      expect(service.state).toBe('STOPPED');
+      expect(connections.map((connection) => connection.open)).toEqual([false]);
+      expect(reopensExclusively()).toBe(true);
+      await expectNotReady(service, 'STOPPED');
+      // Idempotente depois da falha, e a mesma instância volta a arrancar e a parar.
+      await service.stop();
+      await service.start();
+      expect(service.state).toBe('READY');
+      await rejection(service.stop());
+      expect(service.state).toBe('STOPPED');
+      expect(reopensExclusively()).toBe(true);
+    });
+
+    it('[L-C3-02] a close that throws without closing is release-failed and FAILED, distinct from a released database', async () => {
+      const realCloses: (() => void)[] = [];
+      const { events, service } = faultyService(
+        () => false,
+        (options) => {
+          const connection = openSqliteDatabase(options);
+          const close = connection.close.bind(connection);
+          realCloses.push(() => {
+            close();
+          });
+          return Object.assign(connection, {
+            close: () => {
+              throw new Error('falha ao fechar');
+            },
+          });
+        },
+      );
+      await service.start();
+
+      const failure = await rejection(service.stop());
+
+      expect(failure).toMatchObject({ name: 'LocalServiceStopError', reason: 'release-failed' });
+      expect(service.state).toBe('FAILED');
+      expect(events().slice(-2)).toEqual(['service.state_changed', 'service.stop_failed']);
+      // O serviço não finge ter libertado a base: ela continua detida pela ligação que não fechou.
+      expect(reopensExclusively()).toBe(false);
+      await service.stop();
+      expect(service.state).toBe('STOPPED');
+      for (const close of realCloses) close();
+      expect(reopensExclusively()).toBe(true);
+    });
+
+    it('[L-C3-03] a failing record on the startup failure path still releases, reaches FAILED and reports the startup failure', async () => {
+      // Base vazia, sem migrações, com a política `fail`: o arranque obtém a posse e só depois falha.
+      openSqliteDatabase({ filename: temporary.filename }).close();
+      const strict = { startupPolicy: { onMissingDatabase: 'fail', onPendingMigrations: 'fail' } };
+      const cases: readonly (readonly [string, string, string, number])[] = [
+        ['service.starting', '"service.starting"', 'unexpected', 0],
+        ['transition to FAILED', '"to":"FAILED"', 'pending-migrations', 1],
+        ['service.start_failed', '"service.start_failed"', 'pending-migrations', 1],
+      ];
+      for (const [name, marker, reason, opened] of cases) {
+        const { connections, service } = faultyService((line) => line.includes(marker), openSqliteDatabase, strict);
+
+        await expect(service.start(), name).rejects.toMatchObject({ name: 'LocalServiceStartupError', reason });
+        expect(service.state, name).toBe('FAILED');
+        expect(connections.map((connection) => connection.open), name).toEqual(Array.from({ length: opened }, () => false));
+        expect(reopensExclusively(), name).toBe(true);
+        await service.stop();
+        expect(service.state, name).toBe('STOPPED');
+      }
     });
   });
 
