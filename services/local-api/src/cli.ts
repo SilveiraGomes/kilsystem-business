@@ -3,7 +3,13 @@ import {
   LocalServiceConfigError,
   type LocalServiceConfig,
 } from './config.js';
-import { createLocalService, type LocalServiceDependencies } from './local-service.js';
+import {
+  createLocalService,
+  LocalServiceStopError,
+  type LocalService,
+  type LocalServiceDependencies,
+  type LocalServiceStopFailure,
+} from './local-service.js';
 import { createJsonLogger } from './logger.js';
 import {
   logBestEffort,
@@ -27,10 +33,10 @@ export const LOCAL_SERVICE_EXIT_CODES = Object.freeze({
   /** Limitação de tentativas da recuperação ou da autenticação. */
   recoveryThrottled: 4,
   /**
-   * Operação confirmada, mas o novo código não foi apresentado ou confirmado (incluindo cancelamento,
-   * fim da entrada ou erro do terminal durante a confirmação): emitir outro com `recovery rotate`.
-   * E1.07-D3-R1-C2: também quando, depois do *commit*, falham as escritas do terminal ou o registo,
-   * mesmo que nenhum canal reste para o dizer.
+   * Operação confirmada, mas o novo código não foi entregue ou não foi confirmado pelo titular
+   * (incluindo cancelamento, fim da entrada ou erro do terminal durante a confirmação, e falha de
+   * todos os canais depois do *commit*): é necessário emitir outro com `recovery rotate` autenticado,
+   * logo que possível; a rotação nunca é automática. Prevalece sobre 10 e 0 (E1.07-D3-R1-C3).
    */
   recoveryPresentationFailed: 5,
   /** E1.07-D3-R1-C1: Ctrl+C durante a introdução de dados; nada foi alterado. */
@@ -41,6 +47,13 @@ export const LOCAL_SERVICE_EXIT_CODES = Object.freeze({
   recoveryTerminalFailed: 8,
   /** E1.07-D3-R1-C1: tecla ou sequência não suportada (setas, Delete, Tab, Esc…); entrada anulada, nada foi alterado. */
   recoveryInputRejected: 9,
+  /**
+   * E1.07-D3-R1-C3 (RV-C2M-01): operação confirmada e código entregue e confirmado pelo titular, mas
+   * a finalização ficou incompleta — falhou um registo, a mensagem final ou o encerramento do
+   * serviço. Não houve *rollback* nem repetição; o código confirmado é o activo e **não** deve ser
+   * substituído por causa desta falha. Nunca usado se a entrega do código for incerta (então 5).
+   */
+  recoveryCommittedIncomplete: 10,
 });
 
 export interface LocalServiceCliIo {
@@ -78,15 +91,50 @@ const parseArguments = (args: readonly string[]): ParsedArguments => {
   return unsupported.length > 0 ? { kind: 'invalid', unsupported: unsupported.length } : { check: args.includes('--check'), kind: 'serve' };
 };
 
-const RECOVERY_EXIT_CODES = Object.freeze({
+const RECOVERY_EXIT_CODES: Readonly<Record<RecoveryOutcome, number>> = Object.freeze({
+  'committed-incomplete': LOCAL_SERVICE_EXIT_CODES.recoveryCommittedIncomplete,
   ok: LOCAL_SERVICE_EXIT_CODES.ok,
   'presentation-failed': LOCAL_SERVICE_EXIT_CODES.recoveryPresentationFailed,
   refused: LOCAL_SERVICE_EXIT_CODES.recoveryRefused,
   throttled: LOCAL_SERVICE_EXIT_CODES.recoveryThrottled,
 });
 
-/** Desfechos que só existem depois do *commit* da operação (E1.07-D3-R1-C2). */
-const COMMITTED_OUTCOMES: ReadonlySet<RecoveryOutcome> = new Set(['ok', 'presentation-failed']);
+/** Desfechos que só existem depois do *commit* da operação (E1.07-D3-R1-C2/C3). */
+const COMMITTED_OUTCOMES: ReadonlySet<RecoveryOutcome> = new Set(['ok', 'committed-incomplete', 'presentation-failed']);
+
+/** Resultado do encerramento do serviço, separado do resultado da operação (E1.07-D3-R1-C3). */
+type ServiceStopResult = 'stopped' | LocalServiceStopFailure | 'unexpected';
+
+const stopService = async (service: LocalService): Promise<ServiceStopResult> => {
+  try {
+    await service.stop();
+    return 'stopped';
+  } catch (error) {
+    // O próprio serviço registou a falha quando o registo estava disponível; aqui só se classifica.
+    return error instanceof LocalServiceStopError ? error.reason : 'unexpected';
+  }
+};
+
+/** Código confirmado activo, por comando, no aviso da saída 10 (nunca contém o código). */
+const COMMITTED_INCOMPLETE_STATE: Readonly<Record<RecoveryCommand, string>> = Object.freeze({
+  recover:
+    'A credencial do administrador inicial FOI substituída (use a NOVA palavra-passe) e o novo código de recuperação que confirmou é o código activo: guarde-o.',
+  rotate: 'O novo código de recuperação FOI emitido e o código que confirmou é o código activo: guarde-o.',
+});
+
+const STOP_DETAILS: Readonly<Record<Exclude<ServiceStopResult, 'stopped'>, string>> = Object.freeze({
+  'record-failed': 'o serviço parou e libertou a base, mas o registo do encerramento falhou',
+  'release-failed': 'o encerramento do serviço não confirmou a libertação da base; ela fica livre quando este processo terminar',
+  unexpected: 'o encerramento do serviço falhou; a base fica livre quando este processo terminar',
+});
+
+const committedIncompleteMessage = (command: RecoveryCommand, outcome: RecoveryOutcome, stop: ServiceStopResult): string => {
+  const details = [
+    ...(outcome === 'committed-incomplete' ? ['o registo da operação ou a mensagem de confirmação não foram escritos'] : []),
+    ...(stop === 'stopped' ? [] : [STOP_DETAILS[stop]]),
+  ];
+  return `\nAtenção: ${COMMITTED_INCOMPLETE_STATE[command]} A finalização ficou incompleta (${details.join('; ')}). A operação não foi revertida nem repetida e não é necessário emitir outro código por causa deste aviso.\n`;
+};
 
 /** Leituras interrompidas ANTES de qualquer operação (as da confirmação são tratadas na apresentação). */
 const TERMINAL_FAILURES: Readonly<Record<RecoveryTerminalFailure, { readonly exitCode: number; readonly message: string }>> =
@@ -150,16 +198,17 @@ export const runLocalServiceCli = async (
   try {
     await service.start();
   } catch {
-    await service.stop();
+    // Nada foi executado: 1 tanto se o encerramento concluir como se falhar (a libertação é sempre tentada).
+    await stopService(service);
     return LOCAL_SERVICE_EXIT_CODES.startupFailed;
   }
 
   let exitCode: number = LOCAL_SERVICE_EXIT_CODES.ok;
-  let committed = false;
+  let committedOutcome: RecoveryOutcome | undefined;
   if (parsed.kind === 'recovery' && io.terminal !== undefined) {
     try {
       const outcome = await runRecoveryCommand(parsed.command, service, io.terminal, logger);
-      committed = COMMITTED_OUTCOMES.has(outcome);
+      if (COMMITTED_OUTCOMES.has(outcome)) committedOutcome = outcome;
       exitCode = RECOVERY_EXIT_CODES[outcome];
     } catch (error) {
       // `runRecoveryCommand` só rejeita antes do commit: aqui "nada foi alterado" é exacto. Os registos
@@ -188,11 +237,25 @@ export const runLocalServiceCli = async (
     logger.log('info', 'service.shutdown_requested', { signal });
   }
 
-  try {
-    await service.stop();
-  } catch {
-    // Depois do commit, 1 diria "base inalterada": o desfecho confirmado (0 ou 5) prevalece (RV-C1M-01).
-    return committed ? exitCode : LOCAL_SERVICE_EXIT_CODES.startupFailed;
+  // O encerramento corre sempre, e o seu resultado é avaliado à parte do resultado da operação.
+  const stop = await stopService(service);
+  if (committedOutcome === undefined || parsed.kind !== 'recovery') {
+    return stop === 'stopped' ? exitCode : LOCAL_SERVICE_EXIT_CODES.startupFailed;
   }
-  return exitCode;
+  // Depois do commit, 1 diria "base inalterada" (RV-C1M-01). Precedência: 5 > 10 > 0 (E1.07-D3-R1-C3).
+  if (committedOutcome === 'presentation-failed') return LOCAL_SERVICE_EXIT_CODES.recoveryPresentationFailed;
+  if (committedOutcome === 'ok' && stop === 'stopped') return LOCAL_SERVICE_EXIT_CODES.ok;
+  logBestEffort(logger, 'warn', 'recovery.finalization_incomplete', {
+    command: parsed.command,
+    secondaryChannels: committedOutcome === 'ok' ? 'complete' : 'incomplete',
+    serviceStop: stop,
+  });
+  if (io.terminal !== undefined) {
+    try {
+      io.terminal.write(committedIncompleteMessage(parsed.command, committedOutcome, stop));
+    } catch {
+      // Terminal indisponível: a saída 10 comunica o desfecho.
+    }
+  }
+  return LOCAL_SERVICE_EXIT_CODES.recoveryCommittedIncomplete;
 };

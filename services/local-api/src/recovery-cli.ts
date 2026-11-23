@@ -42,7 +42,13 @@ export interface RecoveryTerminal {
   write(text: string): void;
 }
 
-export type RecoveryOutcome = 'ok' | 'refused' | 'throttled' | 'presentation-failed';
+/**
+ * Desfechos (E1.07-D3-R1-C3): `refused`/`throttled` antes do *commit*; depois do *commit*,
+ * `presentation-failed` (código não entregue ou não confirmado), `committed-incomplete` (código
+ * entregue e confirmado pelo titular, mas um canal secundário — registo ou mensagem — falhou) e
+ * `ok` (tudo concluído). Precedência: `presentation-failed` > `committed-incomplete` > `ok`.
+ */
+export type RecoveryOutcome = 'ok' | 'refused' | 'throttled' | 'presentation-failed' | 'committed-incomplete';
 
 /** Tentativas de confirmação do último grupo antes de terminar com aviso. */
 const CONFIRMATION_ATTEMPTS = 3;
@@ -56,24 +62,56 @@ const normalizeGroup = (value: string): string =>
   value.toUpperCase().replace(/\s/g, '').replace(/O/g, '0').replace(/[IL]/g, '1');
 
 /**
- * Registo depois do *commit* (E1.07-D3-R1-C2, RV-C1M-01): melhor esforço. A operação já está
- * confirmada na base; uma falha do registo nunca pode fazê-la parecer não executada.
+ * Registo de melhor esforço (E1.07-D3-R1-C2, RV-C1M-01): nunca lança. Devolve se o registo foi
+ * escrito (E1.07-D3-R1-C3, RV-C2M-01): depois do *commit*, uma falha não faz a operação parecer não
+ * executada, mas impede o desfecho de sucesso completo (`committed-incomplete`, saída 10).
+ * O *sink* tem de ser síncrono: uma rejeição assíncrona não seria apanhada (RV-C2M-03).
  */
-export const logBestEffort = (logger: Logger, ...record: Parameters<Logger['log']>): void => {
+export const logBestEffort = (logger: Logger, ...record: Parameters<Logger['log']>): boolean => {
   try {
     logger.log(...record);
+    return true;
   } catch {
     // Canal secundário: o estado confirmado continua no terminal (se existir) e no código de saída.
+    return false;
   }
 };
 
-/** Estado confirmado, comunicado quando o código não chega a ser apresentado (nunca contém o código). */
-const UNPRESENTED_MESSAGES: Readonly<Record<RecoveryCommand, string>> = Object.freeze({
-  recover:
-    '\nA credencial do administrador inicial FOI substituída e as sessões dele foram revogadas, mas não foi possível apresentar o novo código de recuperação. Execute "recovery rotate" com a NOVA palavra-passe para emitir outro.\n',
-  rotate:
-    '\nO novo código de recuperação FOI emitido e já está activo, mas não foi possível apresentá-lo. Execute "recovery rotate" com a palavra-passe do administrador inicial para emitir outro.\n',
+/** Até onde chegou a entrega do código quando não houve confirmação (E1.07-D3-R1-C3, RV-C2M-02). */
+export type RecoveryPresentationGap = 'not-presented' | 'partially-presented' | 'presented-unconfirmed';
+
+/**
+ * Estado confirmado e falta de entrega, por comando e por fase, comunicados quando o código não foi
+ * entregue ou confirmado. Nunca contêm o código e nunca dizem "nada foi alterado": a operação está
+ * confirmada. A rotação é recomendada, nunca executada automaticamente.
+ */
+const UNDELIVERED_STATE: Readonly<Record<RecoveryCommand, Readonly<Record<RecoveryPresentationGap, string>>>> = Object.freeze({
+  recover: Object.freeze({
+    'not-presented':
+      'A credencial do administrador inicial FOI substituída e as sessões dele foram revogadas, mas o novo código de recuperação não foi apresentado.',
+    'partially-presented':
+      'A credencial do administrador inicial FOI substituída e as sessões dele foram revogadas, mas a apresentação do novo código de recuperação falhou e pode ter ficado incompleta no ecrã.',
+    'presented-unconfirmed':
+      'A credencial do administrador inicial FOI substituída e as sessões dele foram revogadas, e o novo código de recuperação foi apresentado, mas não foi confirmado que ficou guardado.',
+  }),
+  rotate: Object.freeze({
+    'not-presented': 'O novo código de recuperação FOI emitido e já está activo, mas não foi apresentado.',
+    'partially-presented':
+      'O novo código de recuperação FOI emitido e já está activo, mas a apresentação falhou e pode ter ficado incompleta no ecrã.',
+    'presented-unconfirmed':
+      'O novo código de recuperação FOI emitido, já está activo e foi apresentado, mas não foi confirmado que ficou guardado.',
+  }),
 });
+
+const ROTATION_GUIDANCE: Readonly<Record<RecoveryCommand, string>> = Object.freeze({
+  recover:
+    'É necessário emitir outro: logo que possível, execute "recovery rotate" com a NOVA palavra-passe e guarde o código que for apresentado.',
+  rotate:
+    'É necessário emitir outro: logo que possível, execute "recovery rotate" com a palavra-passe do administrador inicial e guarde o código que for apresentado.',
+});
+
+export const undeliveredMessage = (command: RecoveryCommand, gap: RecoveryPresentationGap): string =>
+  `\n${UNDELIVERED_STATE[command][gap]} ${ROTATION_GUIDANCE[command]}\n`;
 
 /**
  * Apresenta o código uma vez (DP-08), já depois do *commit*. Pede a confirmação do último grupo de
@@ -82,8 +120,14 @@ const UNPRESENTED_MESSAGES: Readonly<Record<RecoveryCommand, string>> = Object.f
  * `recovery rotate` (E1.07-D3-R1-P §5). Nunca regista o código.
  *
  * E1.07-D3-R1-C2 (RV-C1M-01): nunca rejeita. Tudo o que se escreve depois do *commit* (incluindo o
- * anúncio da credencial substituída) passa por aqui; qualquer falha resulta em `presentation-failed`
- * (saída 5), nunca numa recusa ou num "nada foi alterado".
+ * anúncio da credencial substituída) passa por aqui; nenhuma falha resulta numa recusa ou num
+ * "nada foi alterado".
+ *
+ * E1.07-D3-R1-C3 (RV-C2M-01/02/07): o desfecho distingue a entrega do código das falhas
+ * secundárias. Sem confirmação do titular → `presentation-failed` (5), com a mensagem da fase
+ * atingida. Com a confirmação do titular, uma falha da mensagem "Confirmado." ou do registo
+ * `recovery.code_presented` dá `committed-incomplete` (10): o código foi entregue e confirmado e não
+ * deve ser substituído por causa dessa falha.
  */
 const present = async (
   presentation: RecoveryCodePresentation,
@@ -94,10 +138,15 @@ const present = async (
 ): Promise<RecoveryOutcome> => {
   const sequence = presentation.sequence;
   let formatted = '';
+  // Fase da entrega: `displaying` durante a escrita do código; `displayed` depois de uma escrita completa.
+  let displaying = false;
+  let displayed = false;
+  let failure: unknown;
   try {
     if (announcement !== undefined) terminal.write(announcement);
     formatted = presentation.reveal();
     const show = (): void => {
+      displaying = true;
       terminal.write(
         [
           '',
@@ -109,6 +158,8 @@ const present = async (
           '',
         ].join('\n'),
       );
+      displaying = false;
+      displayed = true;
     };
     show();
     const expected = lastDataGroup(formatted);
@@ -123,39 +174,56 @@ const present = async (
         typed = '';
       }
       if (typed !== '' && normalizeGroup(typed) === expected) {
-        terminal.write('Confirmado.\n');
-        logBestEffort(logger, 'info', 'recovery.code_presented', { codeSequence: sequence, command, confirmed: true });
-        return 'ok';
+        // Confirmado pelo titular: daqui em diante só há canais secundários.
+        let complete = true;
+        try {
+          terminal.write('Confirmado.\n');
+        } catch {
+          complete = false;
+        }
+        const recorded = logBestEffort(logger, 'info', 'recovery.code_presented', {
+          codeSequence: sequence,
+          command,
+          confirmed: true,
+        });
+        return complete && recorded ? 'ok' : 'committed-incomplete';
       }
       if (attempt < CONFIRMATION_ATTEMPTS) {
         terminal.write('Não coincide. O código volta a ser mostrado:\n');
         show();
       }
     }
-    terminal.write(
-      'A confirmação falhou. O código já está activo; se não o guardou, execute "recovery rotate" com a palavra-passe do administrador inicial para emitir outro.\n',
-    );
-    logBestEffort(logger, 'warn', 'recovery.code_presented', { codeSequence: sequence, command, confirmed: false });
-    return 'presentation-failed';
   } catch (error) {
-    // O código não é registado; só a sequência e o tipo de falha.
-    logBestEffort(logger, 'error', 'recovery.presentation_failed', {
-      causeName: error instanceof Error ? error.name : null,
-      codeSequence: sequence,
-      command,
-      terminalFailure: error instanceof RecoveryTerminalError ? error.failure : null,
-    });
-    try {
-      terminal.write(UNPRESENTED_MESSAGES[command]);
-    } catch {
-      // Terminal indisponível: o código de saída 5 comunica o estado confirmado.
-    }
-    return 'presentation-failed';
+    failure = error;
   } finally {
     // Melhor esforço: as `string` de JavaScript não podem ser apagadas da memória.
     formatted = '';
   }
+
+  const gap: RecoveryPresentationGap = displayed ? 'presented-unconfirmed' : displaying ? 'partially-presented' : 'not-presented';
+  // O código não é registado; só a sequência, a fase e o tipo de falha.
+  if (failure === undefined) {
+    logBestEffort(logger, 'warn', 'recovery.code_presented', { codeSequence: sequence, command, confirmed: false, presentation: gap });
+  } else {
+    logBestEffort(logger, 'error', 'recovery.presentation_failed', {
+      causeName: failure instanceof Error ? failure.name : null,
+      codeSequence: sequence,
+      command,
+      presentation: gap,
+      terminalFailure: failure instanceof RecoveryTerminalError ? failure.failure : null,
+    });
+  }
+  try {
+    terminal.write(`${failure === undefined ? '\nA confirmação falhou.' : ''}${undeliveredMessage(command, gap)}`);
+  } catch {
+    // Terminal indisponível: o código de saída 5 comunica o estado confirmado.
+  }
+  return 'presentation-failed';
 };
+
+/** Um registo falhado depois do *commit* impede o sucesso completo, nunca a entrega já confirmada. */
+const withRecord = (outcome: RecoveryOutcome, recorded: boolean): RecoveryOutcome =>
+  outcome === 'ok' && !recorded ? 'committed-incomplete' : outcome;
 
 const runRotate = async (service: LocalService, terminal: RecoveryTerminal, logger: Logger): Promise<RecoveryOutcome> => {
   terminal.write('Emissão ou rotação do código de recuperação do administrador inicial.\n');
@@ -164,13 +232,13 @@ const runRotate = async (service: LocalService, terminal: RecoveryTerminal, logg
   const result = await service.installationRecovery.rotate(username, password);
   if (result.ok) {
     // Depois do commit: nada a partir daqui pode rejeitar (RV-C1M-01).
-    logBestEffort(logger, 'info', 'recovery.code_issued', {
+    const recorded = logBestEffort(logger, 'info', 'recovery.code_issued', {
       codeSequence: result.code.sequence,
       command: 'rotate',
       issuedReason: result.issuedReason,
       supersededSequence: result.supersededSequence ?? null,
     });
-    return present(result.code, terminal, logger, 'rotate');
+    return withRecord(await present(result.code, terminal, logger, 'rotate'), recorded);
   }
   if (result.reason === 'throttled') {
     terminal.write(`Demasiadas tentativas. Tente de novo dentro de ${result.retryAfterSeconds} s.\n`);
@@ -205,18 +273,19 @@ const runRecover = async (service: LocalService, terminal: RecoveryTerminal, log
   const result = await service.installationRecovery.recover(code, password);
   if (result.ok) {
     // Depois do commit: nada a partir daqui pode rejeitar (RV-C1M-01).
-    logBestEffort(logger, 'info', 'recovery.completed', {
+    const recorded = logBestEffort(logger, 'info', 'recovery.completed', {
       codeSequence: result.code.sequence,
       command: 'recover',
       consumedSequence: result.consumedSequence,
     });
-    return present(
+    const outcome = await present(
       result.code,
       terminal,
       logger,
       'recover',
       'Credencial do administrador inicial substituída. As sessões dele foram revogadas.\n',
     );
+    return withRecord(outcome, recorded);
   }
   if (result.reason === 'throttled') {
     terminal.write(`Demasiadas tentativas. Tente de novo dentro de ${result.retryAfterSeconds} s.\n`);
@@ -243,8 +312,8 @@ const runRecover = async (service: LocalService, terminal: RecoveryTerminal, log
 
 /**
  * Só rejeita ANTES do *commit*: durante a leitura dos dados, ou porque a operação falhou (é atómica:
- * nada da credencial nem dos códigos fica alterado). Depois do *commit* resolve sempre, com `ok` ou
- * `presentation-failed` (E1.07-D3-R1-C2, RV-C1M-01).
+ * nada da credencial nem dos códigos fica alterado). Depois do *commit* resolve sempre, com `ok`,
+ * `committed-incomplete` ou `presentation-failed` (E1.07-D3-R1-C2, RV-C1M-01; E1.07-D3-R1-C3).
  */
 export const runRecoveryCommand = (
   command: RecoveryCommand,
