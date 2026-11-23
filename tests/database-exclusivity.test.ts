@@ -6,14 +6,11 @@ import {
   existsSync,
   linkSync,
   mkdirSync,
-  mkdtempSync,
   readdirSync,
   readFileSync,
-  rmSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -53,6 +50,7 @@ import {
   type ChildEvent,
   type TestChild,
 } from './support/exclusivity/processes';
+import { createTestDirectory, removeTestDirectory } from './support/temporary-directories';
 
 /*
  * E1.07-X — exclusividade operacional por base SQLite (PD-43). Os ensaios entre instâncias usam
@@ -121,7 +119,7 @@ describe('Database exclusivity (E1.07-X)', () => {
   };
 
   beforeEach(() => {
-    directory = mkdtempSync(path.join(tmpdir(), 'kil-business-exclusivity-db-'));
+    directory = createTestDirectory('exclusivity-db');
     filename = path.join(directory, 'operacional.sqlite');
   });
 
@@ -129,7 +127,7 @@ describe('Database exclusivity (E1.07-X)', () => {
     await killAllChildren();
     for (const harness of running.splice(0)) await harness.service.stop().catch(() => undefined);
     for (const file of restoreAcl.splice(0)) execFileSync('icacls', [file, '/reset'], { stdio: 'ignore' });
-    rmSync(directory, { force: true, recursive: true });
+    removeTestDirectory(directory);
   });
 
   describe('database identity', () => {

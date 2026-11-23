@@ -1,6 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
 
@@ -8,6 +7,7 @@ import { build } from 'vite';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 import { REPOSITORY_ROOT } from './support/local-service-harness';
+import { createTestDirectory, removeTestDirectory } from './support/temporary-directories';
 
 /*
  * E1.07-D3-R1-C2 — terminal da recuperação num PROCESSO FILHO REAL (RV-C1M-02, RV-C1M-03/OM-04).
@@ -26,6 +26,8 @@ interface TerminalChild {
   /** Primeiro evento que satisfaz `match`; rejeita se o filho terminar antes. */
   readonly waitFor: (match: (event: ChildEvent) => boolean) => Promise<ChildEvent>;
   readonly exited: Promise<number | null>;
+  /** `close`: terminou e os *pipes* foram fechados; a limpeza espera por este evento. */
+  readonly closed: Promise<void>;
 }
 
 let directory: string | undefined;
@@ -33,7 +35,7 @@ let bundle = '';
 const children: TerminalChild[] = [];
 
 beforeAll(async () => {
-  directory = mkdtempSync(path.join(tmpdir(), 'kil-business-terminal-child-'));
+  directory = createTestDirectory('terminal-child');
   await build({
     build: {
       emptyOutDir: false,
@@ -59,13 +61,13 @@ beforeAll(async () => {
 afterEach(async () => {
   for (const child of children.splice(0)) {
     if (child.process.exitCode === null && child.process.signalCode === null) child.process.kill();
-    await child.exited;
+    await child.closed;
   }
 });
 
 afterAll(() => {
   if (directory === undefined) return;
-  rmSync(directory, { recursive: true });
+  removeTestDirectory(directory);
   expect(existsSync(directory)).toBe(false);
 });
 
@@ -95,7 +97,11 @@ const spawnChild = (mode: string): TerminalChild => {
   const exited = new Promise<number | null>((resolve) => {
     child.once('exit', (code) => resolve(code));
   });
+  const closed = new Promise<void>((resolve) => {
+    child.once('close', () => resolve());
+  });
   const tracked: TerminalChild = {
+    closed,
     events,
     exited,
     process: child,

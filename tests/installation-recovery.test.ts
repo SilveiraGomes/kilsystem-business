@@ -669,6 +669,8 @@ describe('E1.07-D3-R1 installation recovery of the initial administrator', () =>
           'anchor-not-intact',
         ],
       ];
+      // PD65-T1: cada cenário usa uma base própria; a do `beforeEach` é apagada antes de ser substituída.
+      temporary.dispose();
       for (const [label, tamper, cause] of scenarios) {
         const own = createTemporaryDatabase();
         try {
