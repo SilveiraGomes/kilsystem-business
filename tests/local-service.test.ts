@@ -253,6 +253,7 @@ describe('Local service lifecycle (E1.05)', () => {
       failLine: (line: string) => boolean,
       open: (options: OpenSqliteOptions) => SqliteDatabase = openSqliteDatabase,
       overrides: Readonly<Record<string, unknown>> = {},
+      databaseLockTimeoutMs?: number,
     ) => {
       const lines: string[] = [];
       const connections: SqliteDatabase[] = [];
@@ -265,6 +266,7 @@ describe('Local service lifecycle (E1.05)', () => {
             lines.push(line);
           },
         }),
+        databaseLockTimeoutMs,
         openDatabase: (options) => {
           const connection = open(options);
           connections.push(connection);
@@ -364,6 +366,152 @@ describe('Local service lifecycle (E1.05)', () => {
         expect(reopensExclusively(), name).toBe(true);
         await service.stop();
         expect(service.state, name).toBe('STOPPED');
+      }
+    });
+
+    it('[L-PD86-01] keeps readiness atomic when service.ready logging fails and recovers on the next start', async () => {
+      const loggerCause = new Error('service.ready indisponível');
+      const lines: string[] = [];
+      const connections: SqliteDatabase[] = [];
+      let failReady = true;
+      const lifecycle: { service: LocalService | undefined } = { service: undefined };
+      const service = createLocalService(serviceConfig(temporary.filename), {
+        logger: createJsonLogger({
+          instanceId: 'pd86-ready',
+          level: 'debug',
+          sink: (line) => {
+            const event = (JSON.parse(line) as { event: string }).event;
+            if (event === 'service.ready' && failReady) {
+              failReady = false;
+              expect(lifecycle.service?.state).toBe('STARTING');
+              throw loggerCause;
+            }
+            lines.push(line);
+          },
+        }),
+        openDatabase: (options) => {
+          const connection = openSqliteDatabase(options);
+          connections.push(connection);
+          return connection;
+        },
+        protectedDirectories: PROTECTED_DIRECTORIES,
+      });
+      lifecycle.service = service;
+      running.push(service);
+
+      const failure = await rejection(service.start());
+
+      expect(failure).toBeInstanceOf(LocalServiceStartupError);
+      expect(failure).toMatchObject({ name: 'LocalServiceStartupError', reason: 'unexpected' });
+      expect((failure as LocalServiceStartupError).cause).toBe(loggerCause);
+      expect(service.state).toBe('FAILED');
+      expect(service.lastFailure).toBe('unexpected');
+      expect(service.startupReport).toBeUndefined();
+      expect(connections.map((connection) => connection.open)).toEqual([false]);
+      expect(reopensExclusively()).toBe(true);
+      await expectNotReady(service, 'FAILED');
+
+      await service.start();
+
+      expect(service.state).toBe('READY');
+      expect(service.lastFailure).toBeUndefined();
+      expect(service.startupReport).toEqual({
+        appliedMigrations: [],
+        createdDatabase: false,
+        schemaVersion: LATEST_VERSION,
+      });
+      expect(connections.map((connection) => connection.open)).toEqual([false, true]);
+      expect(reopensExclusively()).toBe(false);
+      expect(lines.map((line) => (JSON.parse(line) as { event: string }).event).filter((event) => event === 'service.ready')).toHaveLength(1);
+
+      await service.stop();
+      expect(reopensExclusively()).toBe(true);
+    });
+
+    it('[L-PD86-02] restarts after a concurrent stop reports record-failed without opening duplicate connections', async () => {
+      let failStoppedTransition = true;
+      const { connections, service } = faultyService((line) => {
+        if (!failStoppedTransition || !line.includes('"to":"STOPPED"')) return false;
+        failStoppedTransition = false;
+        return true;
+      });
+      running.push(service);
+      await service.start();
+
+      const stopping = service.stop();
+      const restarting = service.start();
+      const stopFailure = await rejection(stopping);
+
+      expect(stopFailure).toBeInstanceOf(LocalServiceStopError);
+      expect(stopFailure).toMatchObject({ reason: 'record-failed' });
+      await expect(restarting).resolves.toBeUndefined();
+      expect(service.state).toBe('READY');
+      expect(connections).toHaveLength(2);
+      expect(connections.map((connection) => connection.open)).toEqual([false, true]);
+      expect(reopensExclusively()).toBe(false);
+
+      await service.stop();
+      expect(connections.every((connection) => !connection.open)).toBe(true);
+      expect(reopensExclusively()).toBe(true);
+    });
+
+    it('[L-PD86-03] propagates release-failed to a concurrent start and never opens a duplicate connection', async () => {
+      const releaseCause = new Error('falha de libertação');
+      const realConnections: { readonly close: () => void; readonly connection: SqliteDatabase }[] = [];
+      let failFirstClose = true;
+      const { connections, service } = faultyService(
+        () => false,
+        (options) => {
+          const connection = openSqliteDatabase(options);
+          const close = connection.close.bind(connection);
+          realConnections.push({ close, connection });
+          return Object.assign(connection, {
+            close: () => {
+              if (failFirstClose) {
+                failFirstClose = false;
+                throw releaseCause;
+              }
+              close();
+            },
+          });
+        },
+        {},
+        0,
+      );
+
+      try {
+        await service.start();
+
+        const stopping = service.stop();
+        const restarting = service.start();
+        const stopFailure = await rejection(stopping);
+        const startFailure = await rejection(restarting);
+
+        expect(stopFailure).toBeInstanceOf(LocalServiceStopError);
+        expect(stopFailure).toMatchObject({ reason: 'release-failed', cause: releaseCause });
+        expect(startFailure).toBe(stopFailure);
+        expect(service.state).toBe('FAILED');
+        expect(connections).toHaveLength(1);
+        expect(connections[0]?.open).toBe(true);
+        expect(reopensExclusively()).toBe(false);
+
+        await expect(service.start()).rejects.toMatchObject({
+          name: 'LocalServiceStartupError',
+          reason: 'database-locked',
+        });
+        expect(service.state).toBe('FAILED');
+        expect(connections).toHaveLength(1);
+
+        realConnections[0]?.close();
+        await service.stop();
+        await service.start();
+        expect(service.state).toBe('READY');
+        expect(connections).toHaveLength(2);
+        await service.stop();
+        expect(reopensExclusively()).toBe(true);
+      } finally {
+        await service.stop().catch(() => undefined);
+        for (const item of realConnections) if (item.connection.open) item.close();
       }
     });
   });
