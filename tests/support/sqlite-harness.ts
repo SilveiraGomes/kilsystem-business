@@ -23,8 +23,9 @@ export interface TemporaryDatabase {
   readonly dispose: () => void;
 }
 
-export const createTemporaryDatabase = (): TemporaryDatabase => {
-  const directory = createTestDirectory('test');
+/** `prefix`: `infra` nos testes da própria infra-estrutura, para os seus registos de limpeza serem reconhecidos como sintéticos. */
+export const createTemporaryDatabase = (prefix = 'test'): TemporaryDatabase => {
+  const directory = createTestDirectory(prefix);
   const filename = path.join(directory, 'tenant-test.sqlite');
   const connections: SqliteDatabase[] = [];
   let disposed = false;

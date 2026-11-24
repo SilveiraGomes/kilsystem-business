@@ -47,6 +47,8 @@ const CONFIRMATION_PROMPT = /escreva o último grupo de 4 símbolos/;
 let directory: string | undefined;
 let bundle = '';
 const children: CliChild[] = [];
+/** PD65-P5: filhos já criados cujo `close` ainda não chegou (independente de `children`, que `closeChildren` esvazia). */
+let unclosedChildren = 0;
 
 beforeAll(async () => {
   directory = createTestDirectory('recovery-cli-child');
@@ -105,6 +107,11 @@ const spawnCli = (databasePath: string, options: Omit<RecoveryCliChildOptions, '
     },
     stdio: ['pipe', 'pipe', 'pipe'],
   });
+  return trackCli(child);
+};
+
+const trackCli = (child: ChildProcessWithoutNullStreams): CliChild => {
+  unclosedChildren += 1;
   const events: ChildEvent[] = [];
   let output = '';
   const waiters: { readonly pattern: RegExp; readonly resolve: (match: RegExpMatchArray) => void }[] = [];
@@ -112,7 +119,10 @@ const spawnCli = (databasePath: string, options: Omit<RecoveryCliChildOptions, '
     child.once('exit', (code) => resolve(code));
   });
   const closed = new Promise<void>((resolve) => {
-    child.once('close', () => resolve());
+    child.once('close', () => {
+      unclosedChildren -= 1;
+      resolve();
+    });
   });
   child.stdout.setEncoding('utf8').on('data', (text: string) => {
     output += text;
@@ -189,14 +199,51 @@ const finished = async (child: CliChild): Promise<Finished> => {
   };
 };
 
+/*
+ * PD65-P5 (RV-PD65-02): o filho termina logo, mas o neto (`detached`, como no PD65-T07) herda os
+ * *pipes* e só termina sozinho 3 s depois; `exit` chega muito antes de `close`.
+ */
+const PIPE_HOLDER = [
+  "const { spawn } = require('node:child_process');",
+  "spawn(process.execPath, ['-e', 'setTimeout(() => process.exit(0), 3000)'], { detached: true, stdio: 'inherit', windowsHide: true });",
+  'process.exit(0);',
+].join('\n');
+
 describe('E1.07-D3-R1-C3 recovery CLI in a real child process', () => {
   let temporary: TemporaryDatabase;
+  /** PD65-P5: filhos ainda sem `close` no instante em que a base do teste foi apagada. */
+  let unclosedAtDispose: number | undefined;
+
+  const createDatabase = (): TemporaryDatabase => {
+    const database = createTemporaryDatabase();
+    unclosedAtDispose = undefined;
+    return {
+      ...database,
+      dispose: () => {
+        unclosedAtDispose ??= unclosedChildren;
+        database.dispose();
+      },
+    };
+  };
 
   afterEach(async () => {
     // Este `afterEach` corre antes do exterior: a base só é apagada depois de `close` de todos os filhos.
     await closeChildren();
     temporary.dispose();
+    // PD65-P5: protege a ordem acima — nenhum filho pode ter os *pipes* abertos quando a base é apagada.
+    expect(unclosedAtDispose, 'filhos sem `close` quando a base foi apagada').toBe(0);
   });
+
+  it('[PD65-T11] (PD65-P5) the database is only disposed after close of every child, even when close comes long after exit', async () => {
+    temporary = createDatabase();
+    const probe = trackCli(spawn(process.execPath, ['-e', PIPE_HOLDER], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true }));
+
+    expect(await probe.exited).toBe(0);
+    // `exit` já chegou; o neto mantém os *pipes* abertos, por isso `close` ainda não.
+    expect(probe.process.stdout.closed).toBe(false);
+    expect(unclosedChildren).toBe(1);
+    // O `afterEach` tem de esperar pelo `close` deste filho antes de apagar a base (verificado lá).
+  }, 30_000);
 
   /** Depois do fim do filho, a base abre em exclusivo sem espera e o estado é lido dessa ligação. */
   const afterExit = <T>(read: (database: SqliteDatabase) => T): T => {
@@ -211,7 +258,7 @@ describe('E1.07-D3-R1-C3 recovery CLI in a real child process', () => {
     database.prepare('SELECT state FROM installation_recovery_codes ORDER BY sequence').pluck().all() as string[];
 
   it('[R-P01] (RV-C2M-01/03/07) post-commit secondary failures give 10 or 5, the process ends by itself and the database is released', async () => {
-    temporary = createTemporaryDatabase();
+    temporary = createDatabase();
     const username = uniqueUsername('admin');
     const prepared = createServiceUnderTest(serviceConfig(temporary.filename), undefined, { passwordHashing: { parameters: TEST_HASHING_PARAMETERS } });
     await prepared.service.start();
