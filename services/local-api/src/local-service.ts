@@ -510,10 +510,14 @@ export const createLocalService = (
         onMissingDatabase: config.startupPolicy.onMissingDatabase,
         onPendingMigrations: config.startupPolicy.onPendingMigrations,
       });
-      startupReport = await initialise();
-      lastFailure = undefined;
+      const completedStartup = await initialise();
+      // `service.ready` ainda faz parte do arranque: enquanto o registo síncrono puder falhar, o
+      // estado permanece STARTING. Só depois de todos os passos falíveis se publica READY e se
+      // substitui o relatório do último arranque bem-sucedido (PD86-R1).
+      logger.log('info', 'service.ready', { ...completedStartup });
       transition('READY');
-      logger.log('info', 'service.ready', { ...startupReport });
+      startupReport = completedStartup;
+      lastFailure = undefined;
     } catch (error) {
       const failure =
         error instanceof LocalServiceStartupError
@@ -538,7 +542,14 @@ export const createLocalService = (
   const start = async (): Promise<void> => {
     if (starting) return starting;
     if (stopping) {
-      await stopping;
+      try {
+        await stopping;
+      } catch (error) {
+        // `record-failed` acontece depois de a ligação ser libertada e do estado chegar a STOPPED;
+        // o novo arranque pode prosseguir. `release-failed` mantém posse desconhecida e é sempre
+        // propagado, impedindo que esta chamada tente abrir outra ligação (PD86-R2).
+        if (!(error instanceof LocalServiceStopError && error.reason === 'record-failed')) throw error;
+      }
       return start();
     }
     if (state === 'READY') return;
