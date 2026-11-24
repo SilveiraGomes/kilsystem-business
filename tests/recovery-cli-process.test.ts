@@ -1,7 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
@@ -18,6 +17,7 @@ import { uniqueUsername } from './support/identity-fixtures';
 import { createServiceUnderTest, REPOSITORY_ROOT, serviceConfig } from './support/local-service-harness';
 import type { RecoveryCliChildOptions } from './support/recovery/recovery-cli-child';
 import { createTemporaryDatabase, type TemporaryDatabase } from './support/sqlite-harness';
+import { createTestDirectory, removeTestDirectory } from './support/temporary-directories';
 
 /*
  * E1.07-D3-R1-C3 — CLI de recuperação num PROCESSO FILHO REAL (RV-C2M-01/03/07). O filho corre
@@ -37,6 +37,8 @@ interface CliChild {
   /** Resolve quando a saída acumulada satisfaz `pattern`; rejeita se o filho terminar antes. */
   readonly waitForOutput: (pattern: RegExp) => Promise<RegExpMatchArray>;
   readonly exited: Promise<number | null>;
+  /** `close`: terminou e os *pipes* foram fechados; a limpeza espera por este evento. */
+  readonly closed: Promise<void>;
 }
 
 const CODE_PATTERN = /(?:[0-9A-HJKMNP-TV-Z]{4}-){8}[0-9A-HJKMNP-TV-Z*~$=U]/;
@@ -47,7 +49,7 @@ let bundle = '';
 const children: CliChild[] = [];
 
 beforeAll(async () => {
-  directory = mkdtempSync(path.join(tmpdir(), 'kil-business-recovery-cli-child-'));
+  directory = createTestDirectory('recovery-cli-child');
   const requireFromDatabase = createRequire(path.join(REPOSITORY_ROOT, 'packages', 'database', 'package.json'));
   const betterSqlite = pathToFileURL(requireFromDatabase.resolve('better-sqlite3')).href;
   await build({
@@ -72,17 +74,19 @@ beforeAll(async () => {
   bundle = path.join(directory, 'recovery-cli-child.mjs');
 }, 60_000);
 
-afterEach(async () => {
-  // Só para não deixar processos órfãos se uma asserção falhar a meio; um filho correcto já terminou.
+/** Termina os filhos ainda vivos (só se uma asserção falhar a meio) e espera por `close` de todos. */
+const closeChildren = async (): Promise<void> => {
   for (const child of children.splice(0)) {
     if (child.process.exitCode === null && child.process.signalCode === null) child.process.kill();
-    await child.exited;
+    await child.closed;
   }
-});
+};
+
+afterEach(closeChildren);
 
 afterAll(() => {
   if (directory === undefined) return;
-  rmSync(directory, { recursive: true });
+  removeTestDirectory(directory);
   expect(existsSync(directory)).toBe(false);
 });
 
@@ -107,6 +111,9 @@ const spawnCli = (databasePath: string, options: Omit<RecoveryCliChildOptions, '
   const exited = new Promise<number | null>((resolve) => {
     child.once('exit', (code) => resolve(code));
   });
+  const closed = new Promise<void>((resolve) => {
+    child.once('close', () => resolve());
+  });
   child.stdout.setEncoding('utf8').on('data', (text: string) => {
     output += text;
     for (const waiter of [...waiters]) {
@@ -125,6 +132,7 @@ const spawnCli = (databasePath: string, options: Omit<RecoveryCliChildOptions, '
     }
   });
   const tracked: CliChild = {
+    closed,
     events,
     exited,
     output: () => output,
@@ -184,7 +192,9 @@ const finished = async (child: CliChild): Promise<Finished> => {
 describe('E1.07-D3-R1-C3 recovery CLI in a real child process', () => {
   let temporary: TemporaryDatabase;
 
-  afterEach(() => {
+  afterEach(async () => {
+    // Este `afterEach` corre antes do exterior: a base só é apagada depois de `close` de todos os filhos.
+    await closeChildren();
     temporary.dispose();
   });
 

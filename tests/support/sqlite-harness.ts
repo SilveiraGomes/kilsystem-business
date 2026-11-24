@@ -1,5 +1,3 @@
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import {
@@ -14,6 +12,7 @@ import {
 import { createInternalDomainAuthorizationEvaluator } from '../../services/local-api/src/authorization/domain-authorization-engine';
 import type { AuthorizationRepositoryHarness } from './authorization-repository-contract';
 import type { IdentityRepositoryHarness } from './membership-repository-contract';
+import { createTestDirectory, removeTestDirectory } from './temporary-directories';
 import type { TenantRepositoryHarness } from './tenant-repository-contract';
 
 /** Base SQLite temporária em disco, fora do repositório, apagada em `dispose`. */
@@ -25,9 +24,10 @@ export interface TemporaryDatabase {
 }
 
 export const createTemporaryDatabase = (): TemporaryDatabase => {
-  const directory = mkdtempSync(path.join(tmpdir(), 'kil-business-test-'));
+  const directory = createTestDirectory('test');
   const filename = path.join(directory, 'tenant-test.sqlite');
   const connections: SqliteDatabase[] = [];
+  let disposed = false;
 
   return {
     directory,
@@ -37,9 +37,12 @@ export const createTemporaryDatabase = (): TemporaryDatabase => {
       connections.push(connection);
       return connection;
     },
+    // Idempotente: um teste que falhe a meio pode deixar o `afterEach` a eliminar a mesma base outra vez.
     dispose: () => {
       for (const connection of connections) if (connection.open) connection.close();
-      rmSync(directory, { force: true, recursive: true });
+      if (disposed) return;
+      removeTestDirectory(directory);
+      disposed = true;
     },
   };
 };

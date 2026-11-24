@@ -1,7 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
@@ -9,6 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { build } from 'vite';
 
 import { REPOSITORY_ROOT } from '../local-service-harness';
+import { createTestDirectory, removeTestDirectory } from '../temporary-directories';
 import type { ServiceProcessOptions } from './service-process';
 
 /*
@@ -24,7 +23,7 @@ export interface ChildBundle {
 }
 
 export const buildChildBundle = async (): Promise<ChildBundle> => {
-  const directory = mkdtempSync(path.join(tmpdir(), 'kil-business-exclusivity-'));
+  const directory = createTestDirectory('exclusivity');
   const requireFromDatabase = createRequire(path.join(REPOSITORY_ROOT, 'packages', 'database', 'package.json'));
   const betterSqlite = pathToFileURL(requireFromDatabase.resolve('better-sqlite3')).href;
   await build({
@@ -52,7 +51,7 @@ export const buildChildBundle = async (): Promise<ChildBundle> => {
   return {
     directory,
     dispose: () => {
-      rmSync(directory, { force: true, recursive: true });
+      removeTestDirectory(directory);
     },
     serviceCli: path.join(directory, 'service-cli.mjs'),
     serviceProcess: path.join(directory, 'service-process.mjs'),
@@ -68,6 +67,8 @@ export interface TestChild {
   readonly waitFor: (match: (event: ChildEvent) => boolean, timeoutMs?: number) => Promise<ChildEvent>;
   readonly send: (command: string) => void;
   readonly exited: Promise<number | null>;
+  /** `close`: o processo terminou e todos os seus *pipes* foram fechados. */
+  readonly closed: Promise<void>;
 }
 
 const children = new Set<TestChild>();
@@ -94,7 +95,11 @@ const track = (child: ChildProcessWithoutNullStreams): TestChild => {
   const exited = new Promise<number | null>((resolve) => {
     child.once('exit', (code) => resolve(code));
   });
+  const closed = new Promise<void>((resolve) => {
+    child.once('close', () => resolve());
+  });
   const tracked: TestChild = {
+    closed,
     events,
     exited,
     process: child,
@@ -119,9 +124,13 @@ const track = (child: ChildProcessWithoutNullStreams): TestChild => {
       }),
   };
   children.add(tracked);
-  void exited.then(() => children.delete(tracked));
+  // Só sai do registo em `close`: depois de `exit`, os *pipes* do filho ainda podem estar abertos.
+  void closed.then(() => children.delete(tracked));
   return tracked;
 };
+
+/** Acompanha um processo filho arbitrário (testes da própria infra-estrutura, PD65-T1). */
+export const trackTestChild = (child: ChildProcessWithoutNullStreams): TestChild => track(child);
 
 export const spawnServiceProcess = (bundle: ChildBundle, options: ServiceProcessOptions): TestChild =>
   track(
@@ -167,9 +176,12 @@ export const cliOutcome = (event: ChildEvent): boolean =>
 /** Primeiro desfecho do arranque do processo de serviço: `ready` ou `failed`. */
 export const processOutcome = (event: ChildEvent): boolean => event['probe'] === 'ready' || event['probe'] === 'failed';
 
-/** Termina à força todos os processos ainda vivos criados por estes ensaios. */
+/**
+ * Termina à força todos os processos ainda vivos criados por estes ensaios e espera por `close` de
+ * todos os que ainda não o emitiram (incluindo os que já tinham terminado), antes de qualquer limpeza.
+ */
 export const killAllChildren = async (): Promise<void> => {
-  const alive = [...children];
-  for (const child of alive) if (child.process.exitCode === null && child.process.signalCode === null) child.process.kill('SIGKILL');
-  await Promise.all(alive.map((child) => child.exited));
+  const pending = [...children];
+  for (const child of pending) if (child.process.exitCode === null && child.process.signalCode === null) child.process.kill('SIGKILL');
+  await Promise.all(pending.map((child) => child.closed));
 };
