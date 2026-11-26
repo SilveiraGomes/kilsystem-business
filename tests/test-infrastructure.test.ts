@@ -3,10 +3,11 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { openSqliteDatabase } from '../packages/database/src/index';
 import { isEvent, killAllChildren, trackTestChild } from './support/exclusivity/processes';
+import { createTemporaryDatabase } from './support/sqlite-harness';
 import {
   CLEANUP_MAX_ATTEMPTS,
   createTestDirectory,
@@ -153,6 +154,102 @@ describe('E1.07-PD65-T1 test temporary directories', () => {
     expect(TRANSIENT_CLEANUP_CODES).toContain(records[0]?.code);
     expect(existsSync(directory)).toBe(false);
   });
+});
+
+/*
+ * E1.07-PD65-P5 (RV-PD65-01) — libertação da base temporária: `dispose()` fecha as ligações próprias
+ * antes de remover a pasta, pode ser chamado de novo sem erro nem segunda remoção, e uma falha real
+ * não fica escondida por uma chamada posterior. Usa o prefixo `infra`: os registos são sintéticos.
+ */
+const codeOf = (error: unknown): unknown => (typeof error === 'object' && error !== null && 'code' in error ? error.code : undefined);
+
+const thrownBy = (work: () => void): unknown => {
+  try {
+    work();
+  } catch (error) {
+    return error;
+  }
+  return undefined;
+};
+
+/** Linhas `[kil-test-cleanup]` escritas em `stderr` sobre `directory` durante `work` (o `stderr` real continua a recebê-las). */
+const cleanupLinesDuring = (directory: string, work: () => void): string[] => {
+  const lines: string[] = [];
+  const spy = vi.spyOn(process.stderr, 'write');
+  try {
+    work();
+  } finally {
+    for (const [chunk] of spy.mock.calls) {
+      const text = String(chunk);
+      if (text.startsWith('[kil-test-cleanup]') && text.includes(JSON.stringify(directory).slice(1, -1))) lines.push(text);
+    }
+    spy.mockRestore();
+  }
+  return lines;
+};
+
+describe('E1.07-PD65-P5 temporary database disposal', () => {
+  it('[PD65-T08] dispose() is idempotent: repeated calls neither fail nor remove or release anything twice', () => {
+    const temporary = createTemporaryDatabase('infra');
+    const connection = temporary.open();
+    connection.exec('CREATE TABLE t (x INTEGER)');
+
+    temporary.dispose();
+    expect(connection.open).toBe(false);
+    expect(existsSync(temporary.directory)).toBe(false);
+    expect(pendingTestDirectories()).not.toContain(temporary.directory);
+
+    // Um `afterEach` depois de um teste que já libertou a base: a 2.ª e a 3.ª chamada não tocam na pasta.
+    const lines = cleanupLinesDuring(temporary.directory, () => {
+      expect(thrownBy(() => temporary.dispose())).toBeUndefined();
+      expect(thrownBy(() => temporary.dispose())).toBeUndefined();
+    });
+    expect(lines).toEqual([]);
+    expect(pendingTestDirectories()).not.toContain(temporary.directory);
+  });
+
+  it('[PD65-T09] dispose() closes every own connection before removing the directory, so removal needs no retry', () => {
+    const temporary = createTemporaryDatabase('infra');
+    const writer = temporary.open();
+    writer.exec('CREATE TABLE t (x INTEGER); INSERT INTO t VALUES (1)');
+    const reader = temporary.open();
+    expect(reader.prepare('SELECT count(*) FROM t').pluck().get()).toBe(1);
+
+    // Em Windows, remover antes de fechar dá `EPERM`/`EBUSY` até ao esgotamento das tentativas.
+    const lines = cleanupLinesDuring(temporary.directory, () => {
+      expect(thrownBy(() => temporary.dispose())).toBeUndefined();
+    });
+
+    expect([writer.open, reader.open]).toEqual([false, false]);
+    expect(lines).toEqual([]);
+    expect(existsSync(temporary.directory)).toBe(false);
+    expect(pendingTestDirectories()).not.toContain(temporary.directory);
+  });
+
+  it.runIf(process.platform === 'win32')(
+    '[PD65-T10] (Windows) a failed dispose() is not hidden: a repeated call fails again until the cause is released, then removes once',
+    () => {
+      const temporary = createTemporaryDatabase('infra');
+      temporary.open().exec('CREATE TABLE t (x INTEGER)');
+      // Ligação alheia ao harness: `dispose()` não a conhece nem a fecha, e mantém o ficheiro aberto.
+      const foreign = openSqliteDatabase({ filename: temporary.filename });
+      try {
+        for (const call of ['1.ª', '2.ª']) {
+          const error = thrownBy(() => temporary.dispose());
+          expect(TRANSIENT_CLEANUP_CODES, `${call} chamada`).toContain(codeOf(error));
+          expect(pendingTestDirectories(), `${call} chamada`).toContain(temporary.directory);
+        }
+      } finally {
+        foreign.close();
+      }
+
+      expect(thrownBy(() => temporary.dispose())).toBeUndefined();
+      expect(existsSync(temporary.directory)).toBe(false);
+      expect(pendingTestDirectories()).not.toContain(temporary.directory);
+      expect(thrownBy(() => temporary.dispose())).toBeUndefined();
+    },
+    15_000,
+  );
 });
 
 /*
