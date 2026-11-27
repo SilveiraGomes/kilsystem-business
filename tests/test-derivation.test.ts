@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { SqliteDatabase } from '../packages/database/src/index';
 import { createPasswordHasher, type PasswordHash } from '../services/local-api/src/authentication/password-hashing';
 import {
+  CLASSIFIED_DERIVATION_FILES,
   IDENTITY_GATE_DERIVATION,
   INSTALLATION_RECOVERY_DERIVATION,
   LOCAL_AUTHENTICATION_DERIVATION,
@@ -16,8 +17,10 @@ import { newUser } from './support/identity-fixtures';
 import { createServiceUnderTest, inspectDatabase, REPOSITORY_ROOT, serviceConfig, type ServiceUnderTest } from './support/local-service-harness';
 import { createTemporaryDatabase, type TemporaryDatabase } from './support/sqlite-harness';
 import {
+  createDerivationGuard,
   createDerivationTracker,
   deterministicTestDerive,
+  fileDerivationGuard,
   isArgon2idHashOf,
   nativeArgon2idForTests,
   type DerivationClassification,
@@ -157,6 +160,81 @@ describe('E1.07-PD65-T4-C1 test password derivation', () => {
     expect(LOCAL_AUTHENTICATION_DERIVATION.argon2idRequired).toContain('authenticates an ACTIVE identity with a valid credential and returns a minimal result');
     expect(IDENTITY_GATE_DERIVATION.argon2idRequired).toEqual(expect.arrayContaining(['[G18]']));
     expect(LOCAL_SESSIONS_DERIVATION.argon2idRequired).toEqual(expect.arrayContaining(['[S02]', '[S28]', '[S35]']));
+  });
+});
+
+describe('E1.07-PD87 binding of the derivation trackers to the test hooks (RV-02)', () => {
+  const classification: DerivationClassification = { argon2idRequired: ['[sentinela]'], deterministicAllowed: ['[T4C-07]'] };
+
+  /** Um teste sintético completo: beginTest (setup) → reset (beforeEach) → corpo → verifyAndReset (afterEach) → endTest (setup). */
+  const cycle = async (
+    steps: { readonly reset?: 'before' | 'late' | 'never'; readonly verify?: boolean; readonly direct?: number } = {},
+    directAllowed: readonly string[] = [],
+  ): Promise<readonly string[]> => {
+    const guard = createDerivationGuard();
+    const tracker = createDerivationTracker(classification, { guard });
+    guard.beginTest();
+    if ((steps.reset ?? 'before') === 'before') tracker.reset();
+    tracker.useDeterministic();
+    await tracker.derive(input());
+    for (let call = 0; call < (steps.direct ?? 0); call += 1) guard.countDirect();
+    if (steps.reset === 'late') tracker.reset();
+    if (steps.verify ?? true) tracker.verifyAndReset(currentTest());
+    return guard.endTest(currentTest(), { directAllowed, expectedTrackers: 1 });
+  };
+
+  it('[T4C-07] the guard reports a missing verification, a missing or late reset and direct deterministic derivations', async () => {
+    expect(await cycle()).toEqual([]);
+    expect((await cycle({ verify: false })).join('\n')).toMatch(/verificação do tracker não executada/);
+    expect((await cycle({ reset: 'never' })).join('\n')).toMatch(/tracker não reposto antes do teste/);
+    expect((await cycle({ reset: 'late' })).join('\n')).toMatch(/reset\(\) depois de o teste ter começado a derivar/);
+    expect((await cycle({ direct: 2 })).join('\n')).toMatch(/derivação determinística fora de um tracker autorizado \(2×\)/);
+    expect(await cycle({ direct: 2 }, ['[T4C-07]'])).toEqual([]);
+
+    // Sem beginTest (ficheiro sem a guarda ligada) não há verificação a fazer; o contador directo é reposto por teste.
+    const guard = createDerivationGuard();
+    const one = { directAllowed: [], expectedTrackers: 1 };
+    expect(guard.endTest(currentTest(), one).join('\n')).toMatch(/trackers de derivação registados: 0, esperados: 1/);
+    const tracker = createDerivationTracker(classification, { guard });
+    expect(guard.tracked()).toBe(1);
+    expect(guard.endTest(currentTest(), one)).toEqual([]);
+    expect(guard.endTest(currentTest(), { directAllowed: [], expectedTrackers: 0 }).join('\n')).toMatch(/registados: 1, esperados: 0/);
+    guard.countDirect();
+    expect(guard.endTest(currentTest(), one).length).toBe(1);
+    expect(guard.endTest(currentTest(), one)).toEqual([]);
+    tracker.reset();
+
+    // Um tracker criado dentro de um teste, sem guarda explícita, é efémero e não fica registado na guarda do ficheiro.
+    const before = fileDerivationGuard.tracked();
+    createDerivationTracker(classification);
+    expect(fileDerivationGuard.tracked()).toBe(before);
+  });
+
+  it('[T4C-08] the guard is wired into tests/setup.ts and the four classified files use the file-level tracker', () => {
+    const setup = readFileSync(path.join(REPOSITORY_ROOT, 'tests', 'setup.ts'), 'utf8');
+    expect(setup).toMatch(/beforeEach\(\(\) => \{\s*fileDerivationGuard\.beginTest\(\);\s*\}\);/);
+    expect(setup).toContain('fileDerivationGuard.endTest(currentTestName');
+    expect(setup).toContain("CLASSIFIED_DERIVATION_FILES.includes(path.basename(testPath ?? '')) ? 1 : 0");
+    expect(setup).toContain("expect(problems.join('\\n'), 'ligação do tracker de derivação (PD-87)').toBe('');");
+    const files = [
+      ['local-sessions.test.ts', 'LOCAL_SESSIONS_DERIVATION'],
+      ['local-authentication.test.ts', 'LOCAL_AUTHENTICATION_DERIVATION'],
+      ['identity-persistence-gate.test.ts', 'IDENTITY_GATE_DERIVATION'],
+      ['installation-recovery.test.ts', 'INSTALLATION_RECOVERY_DERIVATION'],
+    ] as const;
+    expect(files.map(([file]) => file)).toEqual(CLASSIFIED_DERIVATION_FILES);
+    for (const [file, name] of files) {
+      const text = readFileSync(path.join(REPOSITORY_ROOT, 'tests', file), 'utf8');
+      // Um único tracker, criado ao nível do describe com a classificação do ficheiro e sem guarda própria.
+      expect(text.match(/createDerivationTracker\(/g), file).toHaveLength(1);
+      expect(text, file).toContain(`  const derivation = createDerivationTracker(${name});`);
+    }
+    // O tracker deste ficheiro de testes é o da guarda real: a guarda tem trackers registados só nos ficheiros classificados.
+    expect(fileDerivationGuard.tracked()).toBe(0);
+  });
+
+  it.fails('[T4C-09] a direct deterministic derivation in a test outside DIRECT_DETERMINISTIC_ALLOWED makes that test fail (guard active)', async () => {
+    await deterministicTestDerive(input());
   });
 });
 

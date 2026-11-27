@@ -17,6 +17,24 @@ import type { DerivationClassification } from './test-derivation';
  * classificação aprovada e tem de ser revista.
  */
 
+/**
+ * E1.07-PD87 (RV-02) — testes que podem chamar `deterministicTestDerive` directamente, fora de um
+ * *tracker*: só as provas da própria derivação de teste. Qualquer outra chamada directa faz falhar o
+ * teste (guarda de `tests/setup.ts`).
+ */
+export const DIRECT_DETERMINISTIC_ALLOWED: readonly string[] = Object.freeze(['[T4C-01]', '[T4C-02]', '[T4C-04]', '[T4C-06]']);
+
+/**
+ * E1.07-PD87 (RV-02) — ficheiros com um *tracker* de derivação: cada um tem de registar exactamente um
+ * *tracker* na guarda; qualquer outro ficheiro, nenhum.
+ */
+export const CLASSIFIED_DERIVATION_FILES: readonly string[] = Object.freeze([
+  'local-sessions.test.ts',
+  'local-authentication.test.ts',
+  'identity-persistence-gate.test.ts',
+  'installation-recovery.test.ts',
+]);
+
 export const LOCAL_SESSIONS_DERIVATION: DerivationClassification = Object.freeze({
   argon2idRequired: Object.freeze(['[S02]', '[S06]', '[S11]', '[S28]', '[S35]', '[S43]']),
   deterministicAllowed: Object.freeze(['[S15]', '[S30]', '[S31]', '[S47]', '[S47b]', '[S47c]', '[S47d]', '[S48]', '[S48b]']),
@@ -35,6 +53,8 @@ export const LOCAL_AUTHENTICATION_DERIVATION: DerivationClassification = Object.
     'cannot be bypassed with concurrent attempts',
     'limits unknown usernames in the same way, storing only SHA-256 keys',
     'stays bounded when the system clock moves backwards or forwards',
+    // PD-87 (RV-07): limite literal da D-094; o objecto é a contagem, não a derivação.
+    'refuses the sixth attempt after five literal failures through the service (D-094 limit, PD-87)',
   ]),
 });
 

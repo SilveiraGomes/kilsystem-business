@@ -403,6 +403,21 @@ describe('Local authentication (E1.07-B)', () => {
       expect(counter.calls() - before).toBe(policy.freeFailures);
     });
 
+    it('refuses the sixth attempt after five literal failures through the service (D-094 limit, PD-87)', async () => {
+      // PD-87 (RV-07): números literais da D-094, sem ler a política, para fixar o limite que o serviço aplica.
+      derivation.useDeterministic();
+      const harness = await startedService();
+      const user = await provision(harness);
+      for (let attempt = 1; attempt <= 5; attempt += 1) {
+        await expect(harness.service.authentication.authenticate(user.username, OTHER_TEST_PASSWORD), `falha ${String(attempt)}`).resolves.toEqual(INVALID);
+      }
+      await expect(harness.service.authentication.authenticate(user.username, TEST_PASSWORD)).resolves.toEqual({
+        ok: false,
+        reason: 'throttled',
+        retryAfterSeconds: 30,
+      });
+    });
+
     it('limits unknown usernames in the same way, storing only SHA-256 keys', async () => {
       derivation.useDeterministic();
       const harness = await startedService();
@@ -533,6 +548,49 @@ describe('Local authentication (E1.07-B)', () => {
       // Oitava falha: 30 s × 2^(8 − 5) = 240 s, contados a partir de agora.
       const expectedLock = policy.baseLockSeconds * 2 ** (8 - policy.freeFailures);
       expect(decision.allowed && decision.user.lockedUntil).toBe(new Date(at + expectedLock * 1000).toISOString());
+    });
+
+    // PD-87 (RV-07): os três testes seguintes usam os números literais da D-094 e a política por omissão de
+    // `evaluateAttempt` (a mesma do serviço), sem ler `AUTHENTICATION_THROTTLE_POLICY`.
+    it('[PD87-L01] (D-094) admits exactly five failures per username, then locks for 30 s doubling up to 900 s', () => {
+      let record: Parameters<typeof evaluateAttempt>[1];
+      let now = at;
+      const locks: (number | undefined)[] = [];
+      for (let attempt = 1; attempt <= 11; attempt += 1) {
+        const decision = evaluateAttempt(key, record, undefined, now);
+        if (!decision.allowed) throw new Error(`Tentativa ${String(attempt)} recusada.`);
+        expect(decision.user.failures).toBe(attempt);
+        record = decision.user;
+        const until = decision.user.lockedUntil === undefined ? undefined : Date.parse(decision.user.lockedUntil);
+        locks.push(until === undefined ? undefined : (until - now) / 1000);
+        if (until === undefined) {
+          now += 1000;
+        } else {
+          expect(evaluateAttempt(key, record, undefined, until - 1), `bloqueio ${String(attempt)}`).toMatchObject({ allowed: false });
+          now = until;
+        }
+      }
+      expect(locks).toEqual([undefined, undefined, undefined, undefined, 30, 60, 120, 240, 480, 900, 900]);
+    });
+
+    it('[PD87-L02] (D-094) suspends the instance at the 100th failure within 300 s, until that window ends', () => {
+      let instance: Parameters<typeof evaluateAttempt>[2];
+      for (let attempt = 1; attempt <= 100; attempt += 1) {
+        const decision = evaluateAttempt(throttleKeyFor(`literal.${String(attempt)}`), undefined, instance, at + attempt - 1);
+        if (!decision.allowed) throw new Error(`Tentativa ${String(attempt)} recusada.`);
+        expect(decision.instance.failures).toBe(attempt);
+        expect(decision.instance.lockedUntil === undefined, `tentativa ${String(attempt)}`).toBe(attempt < 100);
+        instance = decision.instance;
+      }
+      expect(instance?.lockedUntil).toBe(new Date(at + 300 * 1000).toISOString());
+      expect(evaluateAttempt(key, undefined, instance, at + 299 * 1000)).toEqual({ allowed: false, retryAfterSeconds: 1 });
+      expect(evaluateAttempt(key, undefined, instance, at + 300 * 1000)).toMatchObject({ allowed: true, instance: { failures: 1 } });
+    });
+
+    it('[PD87-L03] (D-094) remembers a username counter for 86400 s without attempts and forgets it afterwards', () => {
+      const four = { failures: 4, key, lastAttemptAt: new Date(at).toISOString(), lockedUntil: undefined, windowStartedAt: new Date(at).toISOString() };
+      expect(evaluateAttempt(key, four, undefined, at + 86_399 * 1000)).toMatchObject({ allowed: true, user: { failures: 5 } });
+      expect(evaluateAttempt(key, four, undefined, at + 86_400 * 1000)).toMatchObject({ allowed: true, user: { failures: 1 } });
     });
 
     it('forgets old failures and resets windows set in the future', () => {
