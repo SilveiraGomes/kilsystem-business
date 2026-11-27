@@ -1,6 +1,6 @@
 import { argon2, argon2Sync, hkdfSync, timingSafeEqual } from 'node:crypto';
 
-import { expect } from 'vitest';
+import { expect, type RunnerTask, type RunnerTestFile, type RunnerTestSuite } from 'vitest';
 
 import type { Argon2idDerive, PasswordHash } from '../../services/local-api/src/authentication/password-hashing';
 
@@ -63,27 +63,62 @@ export interface GuardExpectations {
   readonly expectedTrackers: number;
 }
 
+export interface GuardCounts {
+  /** Testes começados por `beginTest()` neste ficheiro. */
+  readonly begun: number;
+  /** Testes terminados por `endTest()` neste ficheiro. */
+  readonly ended: number;
+  /** Teste começado e ainda não terminado. */
+  readonly active: string | undefined;
+}
+
 export interface DerivationGuard {
   readonly track: (hooks: TrackerHooks) => void;
   readonly tracked: () => number;
-  readonly beginTest: () => void;
+  /** Lança se o teste anterior não foi terminado por `endTest()` (o `afterEach` da guarda não correu). */
+  readonly beginTest: (testName: string) => void;
   readonly countDirect: () => void;
   readonly endTest: (testName: string, expectations: GuardExpectations) => readonly string[];
+  readonly counts: () => GuardCounts;
+  /** Para o `afterAll`: cada teste executado no ficheiro foi começado e terminado pela guarda. */
+  readonly finishFile: (executedTests: number) => readonly string[];
 }
 
+/*
+ * E1.07-PD87-C1 (RV-PD87M-01) — a guarda não pode ser desligada em silêncio. Um teste terminado sem
+ * ter sido começado (o `beforeEach` da guarda não correu: retirado, ou sob uma condição sempre
+ * falsa) é um problema desse teste, e cada *tracker* registado e não começado também; um teste
+ * começado sem o anterior ter terminado faz falhar o `beforeEach`; e no fim do ficheiro o número de
+ * testes executados tem de coincidir com os começados e terminados. Nenhum destes controlos depende
+ * do texto de `tests/setup.ts`.
+ */
 export const createDerivationGuard = (): DerivationGuard => {
   const trackers: TrackerHooks[] = [];
   let direct = 0;
+  let active: string | undefined;
+  let begun = 0;
+  let ended = 0;
   return Object.freeze({
-    beginTest: () => {
+    beginTest: (testName: string) => {
+      const unfinished = active;
+      begun += 1;
+      active = testName;
       direct = 0;
       for (const tracker of trackers) tracker.begin();
+      if (unfinished !== undefined) {
+        throw new Error(`guarda de derivação (PD-87): endTest() não executado para o teste anterior (afterEach da guarda): ${unfinished}`);
+      }
     },
+    counts: () => ({ active, begun, ended }),
     countDirect: () => {
       direct += 1;
     },
     endTest: (testName: string, { directAllowed, expectedTrackers }: GuardExpectations) => {
-      const problems = trackers.flatMap((tracker) => tracker.problems(testName));
+      const problems: string[] = [];
+      if (active !== testName) problems.push(`beginTest() não executado para este teste (guarda inactiva no beforeEach): ${testName}`);
+      ended += 1;
+      active = undefined;
+      problems.push(...trackers.flatMap((tracker) => tracker.problems(testName)));
       if (trackers.length !== expectedTrackers) {
         problems.push(`trackers de derivação registados: ${String(trackers.length)}, esperados: ${String(expectedTrackers)}: ${testName}`);
       }
@@ -91,6 +126,14 @@ export const createDerivationGuard = (): DerivationGuard => {
         problems.push(`derivação determinística fora de um tracker autorizado (${String(direct)}×): ${testName}`);
       }
       direct = 0;
+      return problems;
+    },
+    finishFile: (executedTests: number) => {
+      const problems: string[] = [];
+      if (active !== undefined) problems.push(`endTest() não executado para o último teste (afterEach da guarda): ${active}`);
+      if (begun !== executedTests || ended !== executedTests) {
+        problems.push(`testes executados: ${String(executedTests)}, começados pela guarda: ${String(begun)}, terminados: ${String(ended)}`);
+      }
       return problems;
     },
     track: (hooks: TrackerHooks) => {
@@ -102,6 +145,16 @@ export const createDerivationGuard = (): DerivationGuard => {
 
 /** Guarda do ficheiro de testes em curso, ligada aos *hooks* globais de `tests/setup.ts`. */
 export const fileDerivationGuard = createDerivationGuard();
+
+/**
+ * Testes de um ficheiro (ou *suite*) que o Vitest executou — com `beforeEach`, portanto —, para o
+ * `afterAll`: os ignorados (`skip`, `todo`, filtrados por `-t`) não contam.
+ */
+export const executedTests = (suite: Readonly<RunnerTestSuite | RunnerTestFile>): number =>
+  suite.tasks.reduce((total: number, task: RunnerTask) => {
+    if (task.type === 'suite') return total + executedTests(task);
+    return total + (task.type === 'test' && task.mode === 'run' && (task.result?.state === 'pass' || task.result?.state === 'fail') ? 1 : 0);
+  }, 0);
 
 /**
  * Derivação determinística SÓ PARA TESTES, chamada directamente (fora de um *tracker*). Cada chamada
@@ -193,7 +246,8 @@ export const createDerivationTracker = (
       verifiedFor = undefined;
     },
     problems: (testName: string) => {
-      if (!begun) return [];
+      // PD87-C1 (RV-PD87M-01): um tracker registado que a guarda não começou já não fica sem verificação.
+      if (!begun) return [`tracker não iniciado pela guarda (beginTest() no beforeEach): ${testName}`];
       begun = false;
       const problems: string[] = [];
       if (!resetSeen) problems.push(`tracker não reposto antes do teste (reset() no beforeEach): ${testName}`);

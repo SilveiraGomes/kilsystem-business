@@ -5,10 +5,12 @@ import path from 'node:path';
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { openSqliteDatabase } from '../packages/database/src/index';
+import { openSqliteDatabase, type SqliteDatabase } from '../packages/database/src/index';
 import { runThenCleanUp } from './support/cleanup-after';
 import { isEvent, killAllChildren, trackTestChild } from './support/exclusivity/processes';
+import { expectFailureReasons, failureReasonProblems } from './support/expected-failure';
 import { createServiceUnderTest, serviceConfig } from './support/local-service-harness';
+import { ServiceConnectionLeakError, stopServicesThenDispose } from './support/service-cleanup';
 import { createTemporaryDatabase } from './support/sqlite-harness';
 import {
   CLEANUP_MAX_ATTEMPTS,
@@ -445,6 +447,10 @@ describe('E1.07-PD87 cleanup after a failing test body (RV-05)', () => {
   });
 
   it.fails('[PD87-T04] by default the secondary failure is added to the running test, which fails even when the primary failure is caught', async () => {
+    // PD87-C1 (RV-PD87M-02): o teste tem de falhar só pela falha secundária EPERM, comunicada pelo relatório por omissão.
+    expectFailureReasons([
+      /^SecondaryCleanupError: Falha secundária de limpeza, depois da falha principal do teste \(comunicada antes desta\): Error: falha simulada EPERM$/,
+    ]);
     await expect(
       runThenCleanUp(
         () => Promise.reject(new Error('principal')),
@@ -455,6 +461,21 @@ describe('E1.07-PD87 cleanup after a failing test body (RV-05)', () => {
         ],
       ),
     ).rejects.toThrow('principal');
+  });
+
+  it('[C1-N01] a negative test passes only when it failed with exactly the declared reasons, in order, inside it.fails', () => {
+    const reasons = [/^Error: certa$/, /^TypeError: segunda$/];
+    expect(failureReasonProblems('t', ['Error: certa', 'TypeError: segunda'], reasons, true)).toEqual([]);
+    expect(failureReasonProblems('t', undefined, reasons, undefined)).toEqual(['teste negativo sem falha observada: t']);
+    const other = (observed: readonly string[]) => failureReasonProblems('t', observed, reasons, true).join('\n');
+    expect(other(['Error: outra', 'TypeError: segunda'])).toMatch(/^teste negativo falhou por outra razão: t\n/);
+    expect(other(['Error: certa'])).toMatch(/outra razão/);
+    expect(other(['Error: certa', 'TypeError: segunda', 'Error: a mais'])).toMatch(/outra razão/);
+    expect(other(['TypeError: segunda', 'Error: certa'])).toMatch(/outra razão/);
+    expect(other([])).toMatch(/outra razão/);
+    expect(failureReasonProblems('t', ['Error: certa', 'TypeError: segunda'], reasons, false)).toEqual([
+      'razão esperada declarada num teste sem it.fails: t',
+    ]);
   });
 
   it('[PD87-T05] with a running service, stopping it before disposing frees the database; disposing first fails visibly and is reported as secondary', async () => {
@@ -482,5 +503,113 @@ describe('E1.07-PD87 cleanup after a failing test body (RV-05)', () => {
     expect(reported).toHaveLength(process.platform === 'win32' ? 1 : 0);
     expect(existsSync(temporary.directory)).toBe(false);
     expect(pendingTestDirectories()).not.toContain(temporary.directory);
+  });
+});
+
+describe('E1.07-PD87-C1 stopping services before disposing the database (RV-PD87M-03, PD-57)', () => {
+  const collector = () => {
+    const reported: unknown[] = [];
+    return { report: (error: unknown) => reported.push(error), reported };
+  };
+  const openCount = (connections: readonly SqliteDatabase[]): number => connections.filter((connection) => connection.open).length;
+
+  it('[C1-L01] an assertion failure with the service READY and a failing dispose: the assertion stays primary, dispose runs only after stop with every connection closed, and nothing external is removed', async () => {
+    const temporary = createTemporaryDatabase('infra');
+    const neighbour = createTestDirectory('infra');
+    writeFileSync(path.join(neighbour, 'alheio.txt'), 'não apagar');
+    const harness = createServiceUnderTest(serviceConfig(temporary.filename));
+    await harness.service.start();
+    const disposeFailure = failure('EPERM');
+    const atDispose: { state?: string; open?: number } = {};
+    const { report, reported } = collector();
+    const run = runThenCleanUp(
+      () => {
+        expect(harness.service.state, 'asserção injectada com o serviço activo').toBe('STOPPED');
+        return Promise.resolve();
+      },
+      stopServicesThenDispose([harness], {
+        dispose: () => {
+          atDispose.state = harness.service.state;
+          atDispose.open = openCount(harness.connections);
+          temporary.dispose();
+          throw disposeFailure;
+        },
+      }),
+      report,
+    );
+    await expect(run).rejects.toThrow(/asserção injectada com o serviço activo: expected 'READY' to be 'STOPPED'/);
+    expect(reported).toEqual([disposeFailure]);
+    expect(atDispose).toEqual({ open: 0, state: 'STOPPED' });
+    expect(harness.connections.length).toBeGreaterThan(0);
+    expect(openCount(harness.connections)).toBe(0);
+    expect(existsSync(temporary.directory)).toBe(false);
+    expect(pendingTestDirectories()).not.toContain(temporary.directory);
+    expect(existsSync(path.join(neighbour, 'alheio.txt'))).toBe(true);
+    removeTestDirectory(neighbour);
+  });
+
+  it('[C1-L02] an assertion failure and a stop() that fails without stopping: the leak is reported separately, the connection is closed before disposing and the database is removed', async () => {
+    const temporary = createTemporaryDatabase('infra');
+    const real = createServiceUnderTest(serviceConfig(temporary.filename));
+    await real.service.start();
+    const stopFailure = failure('PD87C1-STOP');
+    const broken = { connections: real.connections, service: { stop: () => Promise.reject(stopFailure) } };
+    const assertion = new Error('asserção principal');
+    const { report, reported } = collector();
+    await expect(runThenCleanUp(() => Promise.reject(assertion), stopServicesThenDispose([broken], temporary), report)).rejects.toBe(assertion);
+    expect(reported).toHaveLength(2);
+    expect(reported[0]).toBe(stopFailure);
+    expect(reported[1]).toBeInstanceOf(ServiceConnectionLeakError);
+    expect(reported[1]).toMatchObject({ leaked: 1, stillOpen: 0 });
+    expect(openCount(real.connections)).toBe(0);
+    expect(existsSync(temporary.directory)).toBe(false);
+    // O serviço real termina sem erro: a sua ligação já estava fechada.
+    await expect(real.service.stop()).resolves.toBeUndefined();
+    expect(real.service.state).toBe('STOPPED');
+  });
+
+  it('[C1-L03] when a leaked connection cannot be closed, the database is not disposed and the folder stays visible as pending', async () => {
+    const temporary = createTemporaryDatabase('infra');
+    const closeFailure = failure('PD87C1-CLOSE');
+    const stuck = {
+      close: () => {
+        throw closeFailure;
+      },
+      open: true,
+    } as unknown as SqliteDatabase;
+    const { report, reported } = collector();
+    const cleanups = stopServicesThenDispose([{ connections: [stuck], service: { stop: () => Promise.resolve() } }], temporary);
+    await expect(runThenCleanUp(() => Promise.reject(new Error('asserção principal')), cleanups, report)).rejects.toThrow('asserção principal');
+    expect(reported).toHaveLength(2);
+    expect(reported[0]).toMatchObject({ cause: closeFailure, leaked: 1, stillOpen: 1 });
+    expect(String(reported[1])).toMatch(/Base temporária não apagada: o encerramento das ligações SQLite não foi confirmado/);
+    expect(existsSync(temporary.directory)).toBe(true);
+    expect(pendingTestDirectories()).toContain(temporary.directory);
+    temporary.dispose();
+    expect(pendingTestDirectories()).not.toContain(temporary.directory);
+  });
+
+  it('[C1-L04] a failing stop() does not prevent stopping the other services; without a body failure every cleanup failure is the test failure', async () => {
+    const temporary = createTemporaryDatabase('infra');
+    const real = createServiceUnderTest(serviceConfig(temporary.filename));
+    await real.service.start();
+    const stopFailure = failure('PD87C1-STOP');
+    const failing = { connections: [], service: { stop: () => Promise.reject(stopFailure) } };
+    const { report, reported } = collector();
+    await expect(runThenCleanUp(() => Promise.resolve('corpo'), stopServicesThenDispose([failing, real], temporary), report)).rejects.toBe(stopFailure);
+    expect(reported).toEqual([]);
+    expect(real.service.state).toBe('STOPPED');
+    expect(openCount(real.connections)).toBe(0);
+    expect(existsSync(temporary.directory)).toBe(false);
+
+    // Sem nenhuma falha: nada comunicado, serviço parado, ligações fechadas, base removida.
+    const clean = createTemporaryDatabase('infra');
+    const service = createServiceUnderTest(serviceConfig(clean.filename));
+    await service.service.start();
+    await expect(runThenCleanUp(() => Promise.resolve('valor'), stopServicesThenDispose([service], clean), report)).resolves.toBe('valor');
+    expect(reported).toEqual([]);
+    expect(service.service.state).toBe('STOPPED');
+    expect(openCount(service.connections)).toBe(0);
+    expect(existsSync(clean.directory)).toBe(false);
   });
 });

@@ -52,9 +52,11 @@ import {
   requestFor,
   TEST_CATALOG,
 } from './support/authorization-fixtures';
+import { runThenCleanUp } from './support/cleanup-after';
 import { branchInput, contextFor, CREATED_AT, newCompany, UPDATED_AT } from './support/fixtures';
 import { newBranchMembership, newCompanyMembership, newUser } from './support/identity-fixtures';
-import { createServiceUnderTest, REPOSITORY_ROOT, serviceConfig } from './support/local-service-harness';
+import { createServiceUnderTest, REPOSITORY_ROOT, serviceConfig, type ServiceUnderTest } from './support/local-service-harness';
+import { stopServicesThenDispose } from './support/service-cleanup';
 import { createTemporaryDatabase, type TemporaryDatabase } from './support/sqlite-harness';
 
 /*
@@ -314,7 +316,10 @@ describe('RBAC SQLite integrity (E1.07-D2/R1, migrations 6-7)', () => {
 
     it('[RM04] the local service refuses migration 7 under the strict policy without touching a migration-6 file', async () => {
       const legacy = createTemporaryDatabase();
-      try {
+      // PD87-C1 (RV-PD87M-03): os serviços são parados e as ligações confirmadas fechadas antes de
+      // apagar a base; uma falha da limpeza depois de uma asserção falhada não substitui a asserção.
+      const services: ServiceUnderTest[] = [];
+      await runThenCleanUp(async () => {
         const connection = legacy.open();
         runMigrations(connection, MIGRATIONS.slice(0, 6));
         connection.close();
@@ -322,15 +327,15 @@ describe('RBAC SQLite integrity (E1.07-D2/R1, migrations 6-7)', () => {
         const strict = createServiceUnderTest(
           serviceConfig(legacy.filename, { startupPolicy: { onMissingDatabase: 'fail', onPendingMigrations: 'fail' } }),
         );
+        services.push(strict);
         await expect(strict.service.start()).rejects.toMatchObject({ reason: 'pending-migrations' });
         expect(readFileSync(legacy.filename).equals(before)).toBe(true);
         const applying = createServiceUnderTest(serviceConfig(legacy.filename));
+        services.push(applying);
         await applying.service.start();
         expect(applying.service.startupReport).toMatchObject({ appliedMigrations: [7, 8, 9], schemaVersion: 9 });
         await applying.service.stop();
-      } finally {
-        legacy.dispose();
-      }
+      }, stopServicesThenDispose(services, legacy));
     });
 
     it('[RM05] upgrades a migration-6 database with valid RBAC data without changing rows or checksums 1-6', async () => {
