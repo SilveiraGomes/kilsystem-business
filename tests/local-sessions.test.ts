@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   createSqliteSessionStore,
+  DEFAULT_DATABASE_LOCK_TIMEOUT_MS,
   inspectMigrations,
   MIGRATIONS,
   migrationChecksum,
@@ -72,7 +73,9 @@ import {
   type ServiceTestDependencies,
   type ServiceUnderTest,
 } from './support/local-service-harness';
+import { LOCAL_SESSIONS_DERIVATION } from './support/argon2-test-classification';
 import { createTemporaryDatabase, type TemporaryDatabase } from './support/sqlite-harness';
+import { createDerivationTracker } from './support/test-derivation';
 
 /*
  * E1.07-C — sessões locais, validade, revogação e continuidade da identidade. Os testes estão
@@ -154,11 +157,12 @@ describe('Local sessions (E1.07-C)', () => {
   let clock: TestClock;
   const running: { readonly service: LocalService }[] = [];
   const extraDatabases: TemporaryDatabase[] = [];
+  const derivation = createDerivationTracker(LOCAL_SESSIONS_DERIVATION);
 
   const dependencies = (overrides: ServiceTestDependencies = {}): ServiceTestDependencies => ({
     clock: clock.now,
     monotonicClock: clock.monotonic,
-    passwordHashing: { parameters: TEST_HASHING_PARAMETERS },
+    passwordHashing: { derive: derivation.derive, parameters: TEST_HASHING_PARAMETERS },
     ...overrides,
   });
 
@@ -238,12 +242,14 @@ describe('Local sessions (E1.07-C)', () => {
   beforeEach(() => {
     temporary = createTemporaryDatabase();
     clock = createTestClock();
+    derivation.reset();
   });
 
   afterEach(async () => {
     for (const harness of running.splice(0)) await harness.service.stop();
     temporary.dispose();
     for (const database of extraDatabases.splice(0)) database.dispose();
+    derivation.verifyAndReset(expect.getState().currentTestName ?? '');
   });
 
   describe('authentication proofs', () => {
@@ -460,6 +466,7 @@ describe('Local sessions (E1.07-C)', () => {
     });
 
     it('[S15] issues distinct tokens and session identifiers', async () => {
+      derivation.useDeterministic();
       const harness = await startedService();
       const sessions: IssuedSession[] = [];
       for (const user of [await provision(harness), await provision(harness)]) {
@@ -739,6 +746,7 @@ describe('Local sessions (E1.07-C)', () => {
     });
 
     it('[S30] refuses a sixth active session without revoking the others, counting only valid sessions', async () => {
+      derivation.useDeterministic();
       const harness = await startedService();
       const user = await provision(harness);
       const sessions: IssuedSession[] = [];
@@ -757,6 +765,7 @@ describe('Local sessions (E1.07-C)', () => {
     });
 
     it('[S31] applies the session limit atomically under concurrency', async () => {
+      derivation.useDeterministic();
       const harness = await startedService();
       const user = await provision(harness);
       const identities: AuthenticatedIdentity[] = [];
@@ -1070,7 +1079,9 @@ describe('Local sessions (E1.07-C)', () => {
     });
 
     it('[S43] rejects proofs issued before a restart, including in a new service instance', async () => {
-      const first = await startedService();
+      // PD65-T4-C1 (D-246): só `first`, cujo arranque sobre a base detida por `second` tem de ser
+      // recusado, deixa de esperar o `busy_timeout` por omissão (2 s); a espera limitada é provada no X40.
+      const first = await startedService({ databaseLockTimeoutMs: 0 });
       const user = await provision(first);
       const identity = await login(first, user);
       await first.service.stop();
@@ -1079,7 +1090,9 @@ describe('Local sessions (E1.07-C)', () => {
 
       await expect(second.service.sessions.create(identity)).resolves.toEqual(REQUIRED);
       // E1.07-X: enquanto `second` detém a base, `first` não arranca sobre ela.
+      const refusedAt = performance.now();
       await expect(first.service.start()).rejects.toMatchObject({ reason: 'database-locked' });
+      expect(performance.now() - refusedAt, 'recusa sem esperar o busy_timeout por omissão').toBeLessThan(DEFAULT_DATABASE_LOCK_TIMEOUT_MS);
       await second.service.stop();
       await first.service.start();
       await expect(first.service.sessions.create(identity)).resolves.toEqual(REQUIRED);
@@ -1153,6 +1166,7 @@ describe('Local sessions (E1.07-C)', () => {
     });
 
     it('[S47] does not extend any validity when the wall clock moves backwards', async () => {
+      derivation.useDeterministic();
       const harness = await startedService();
       const user = await provision(harness);
       const session = await openSession(harness, user);
@@ -1173,6 +1187,7 @@ describe('Local sessions (E1.07-C)', () => {
     });
 
     it('[S48] cleans up only ended sessions beyond the retention period, never active ones', async () => {
+      derivation.useDeterministic();
       const harness = await startedService();
       const alice = await provision(harness);
       const bruno = await provision(harness);
@@ -1203,6 +1218,7 @@ describe('Local sessions (E1.07-C)', () => {
      * sentidos; S47d cobre o reinício.
      */
     it('[S47b] expires sessions and proofs normally after a 30-day forward jump followed by a correction', async () => {
+      derivation.useDeterministic();
       const harness = await startedService();
       const user = await provision(harness);
       const { sessions } = harness.service;
@@ -1247,6 +1263,7 @@ describe('Local sessions (E1.07-C)', () => {
     });
 
     it('[S47c] never extends a validity across repeated forward and backward jumps', async () => {
+      derivation.useDeterministic();
       const harness = await startedService();
       const user = await provision(harness);
       let previousCreation = '';
@@ -1268,6 +1285,7 @@ describe('Local sessions (E1.07-C)', () => {
     });
 
     it('[S47d] keeps expiring normally after a restart, including a process started with the clock ahead', async () => {
+      derivation.useDeterministic();
       const harness = await startedService();
       const user = await provision(harness);
       const old = await openSession(harness, user);
@@ -1303,6 +1321,7 @@ describe('Local sessions (E1.07-C)', () => {
      * antigo plausível. A expiração e o limite de sessões não mudam.
      */
     it('[S48b] never deletes ended sessions because of a one-year forward jump, at startup or during the run', async () => {
+      derivation.useDeterministic();
       const harness = await startedService({ sessionPolicy: { maxActiveSessionsPerUser: 2 } });
       const user = await provision(harness);
       const loggedOut = await openSession(harness, user);

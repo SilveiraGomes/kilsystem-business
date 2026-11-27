@@ -44,7 +44,9 @@ import {
   serviceConfig,
   type ServiceUnderTest,
 } from './support/local-service-harness';
+import { IDENTITY_GATE_DERIVATION } from './support/argon2-test-classification';
 import { createTemporaryDatabase, type TemporaryDatabase } from './support/sqlite-harness';
+import { createDerivationTracker } from './support/test-derivation';
 
 /*
  * E1.07-D3-G0 — Gate de segurança da administração da instalação (PD-73, PD-75, PD-76).
@@ -226,10 +228,12 @@ describe('E1.07-D3-G0 installation authority gate (PD-73, PD-75, PD-76)', () => 
     return { database, temporary: own };
   };
 
+  const derivation = createDerivationTracker(IDENTITY_GATE_DERIVATION);
+
   const startedService = async (filename = temporary.filename): Promise<ServiceUnderTest> => {
     const harness = createServiceUnderTest(serviceConfig(filename), undefined, {
       clock: clock.now,
-      passwordHashing: { parameters: TEST_HASHING_PARAMETERS },
+      passwordHashing: { derive: derivation.derive, parameters: TEST_HASHING_PARAMETERS },
     });
     running.push(harness);
     await harness.service.start();
@@ -258,12 +262,14 @@ describe('E1.07-D3-G0 installation authority gate (PD-73, PD-75, PD-76)', () => 
     temporary = createTemporaryDatabase();
     extra = [];
     clock = createTestClock();
+    derivation.reset();
   });
 
   afterEach(async () => {
     for (const harness of running.splice(0)) await harness.service.stop();
     for (const own of extra) own.dispose();
     temporary.dispose();
+    derivation.verifyAndReset(expect.getState().currentTestName ?? '');
   });
 
   describe('PD-75 reproduction before migration 8 (migration 7, published head)', () => {
@@ -714,6 +720,7 @@ describe('E1.07-D3-G0 installation authority gate (PD-73, PD-75, PD-76)', () => 
     });
 
     it('[G21] keeps ordinary identities administrable, including a deactivated one without credential', async () => {
+      derivation.useDeterministic();
       const { administrator, harness } = await initialised();
       const { credentials, users } = harness.service.identityProvisioning;
       const administratorCredential = () =>
@@ -807,6 +814,7 @@ describe('E1.07-D3-G0 installation authority gate (PD-73, PD-75, PD-76)', () => 
         { credential: false, label: 'credential missing, without any session', session: false },
         { credential: false, label: 'credential missing, with an earlier session', session: true },
       ])('[G22] refuses re-creating a missing initial administrator through users.create, $label', async ({ credential, session }) => {
+        derivation.useDeterministic();
         const { administrator, harness } = await initialised({ session });
         if (!credential) removeCredentialOutsideTheBoundary(administrator.id);
         removeIdentityOutsideTheBoundary(administrator.id);

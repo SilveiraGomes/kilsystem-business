@@ -74,26 +74,27 @@ describe('E1.07-PD65-T1 test temporary directories', () => {
     }
   });
 
-  it('[PD65-T03] retries only EPERM/EBUSY, with bounded delays, and records every retry', () => {
-    expect(TRANSIENT_CLEANUP_CODES).toEqual(['EPERM', 'EBUSY']);
+  it('[PD65-T03] retries only EPERM/EBUSY/ENOTEMPTY, with bounded delays, and records every retry', () => {
+    expect(TRANSIENT_CLEANUP_CODES).toEqual(['EPERM', 'EBUSY', 'ENOTEMPTY']);
     const directory = createTestDirectory('infra');
-    const remover = scripted(['EPERM', 'EBUSY']);
+    const remover = scripted(['EPERM', 'EBUSY', 'ENOTEMPTY']);
     const waits: number[] = [];
     const records: CleanupRecord[] = [];
 
     removeTestDirectory(directory, { onRecord: (record) => records.push(record), remove: remover.remove, wait: (ms) => waits.push(ms) });
 
-    expect(remover.calls()).toBe(3);
-    expect(waits).toEqual([50, 100]);
+    expect(remover.calls()).toBe(4);
+    expect(waits).toEqual([50, 100, 200]);
     expect(records).toEqual([
       { attempt: 1, code: 'EPERM', delayMs: 50, directory, outcome: 'retry' },
       { attempt: 2, code: 'EBUSY', delayMs: 100, directory, outcome: 'retry' },
+      { attempt: 3, code: 'ENOTEMPTY', delayMs: 200, directory, outcome: 'retry' },
     ]);
     expect(existsSync(directory)).toBe(false);
   });
 
-  it('[PD65-T04] never retries any other error, including ENOTEMPTY, EACCES or an error without a code', () => {
-    for (const code of ['ENOTEMPTY', 'EACCES', 'ENOENT', undefined]) {
+  it('[PD65-T04] never retries any other error, including EACCES, ENOENT, EISDIR or an error without a code', () => {
+    for (const code of ['EACCES', 'ENOENT', 'EISDIR', 'ENOTDIR', undefined]) {
       const directory = createTestDirectory('infra');
       const remover = scripted([code]);
       const records: CleanupRecord[] = [];
@@ -131,6 +132,88 @@ describe('E1.07-PD65-T1 test temporary directories', () => {
       expect(calls).toBe(CLEANUP_MAX_ATTEMPTS);
       expect(waits).toEqual([50, 100, 200, 400]);
       expect(records.map((record) => record.outcome)).toEqual(['retry', 'retry', 'retry', 'retry', 'gave-up']);
+      expect(pendingTestDirectories()).toContain(directory);
+    } finally {
+      removeTestDirectory(directory);
+    }
+  });
+
+  it('[PD65-T12] (D-246) a persistent ENOTEMPTY gives up after 5 attempts and 750 ms, records it and stays visible', () => {
+    const directory = createTestDirectory('infra');
+    const persistent = failure('ENOTEMPTY');
+    let calls = 0;
+    const waits: number[] = [];
+    const records: CleanupRecord[] = [];
+    try {
+      expect(() =>
+        removeTestDirectory(directory, {
+          onRecord: (record) => records.push(record),
+          remove: () => {
+            calls += 1;
+            throw persistent;
+          },
+          wait: (ms) => waits.push(ms),
+        }),
+      ).toThrow(persistent);
+      expect(calls).toBe(CLEANUP_MAX_ATTEMPTS);
+      expect(waits.reduce((total, ms) => total + ms, 0)).toBe(750);
+      expect(records.map((record) => [record.code, record.outcome])).toEqual([
+        ['ENOTEMPTY', 'retry'],
+        ['ENOTEMPTY', 'retry'],
+        ['ENOTEMPTY', 'retry'],
+        ['ENOTEMPTY', 'retry'],
+        ['ENOTEMPTY', 'gave-up'],
+      ]);
+      // Limpeza incompleta visível: a pasta continua a existir e registada como pendente.
+      expect(existsSync(directory)).toBe(true);
+      expect(pendingTestDirectories()).toContain(directory);
+    } finally {
+      removeTestDirectory(directory);
+    }
+  });
+
+  it('[PD65-T13] (D-246) detects an incomplete cleanup: a removal that reports success but leaves the directory fails and stays pending', () => {
+    for (const before of [[], ['ENOTEMPTY'], ['EPERM', 'ENOTEMPTY']]) {
+      const directory = createTestDirectory('infra');
+      writeFileSync(path.join(directory, 'resto.txt'), 'x');
+      const remaining = [...before];
+      const records: CleanupRecord[] = [];
+      try {
+        expect(() =>
+          removeTestDirectory(directory, {
+            onRecord: (record) => records.push(record),
+            // Depois das falhas indicadas, «remove» sem erro mas sem apagar nada.
+            remove: () => {
+              const code = remaining.shift();
+              if (code !== undefined) throw failure(code);
+            },
+            wait: () => undefined,
+          }),
+        ).toThrow(/continua a existir/);
+        expect(records.map((record) => record.code), before.join(',')).toEqual(before);
+        expect(existsSync(directory)).toBe(true);
+        expect(pendingTestDirectories()).toContain(directory);
+      } finally {
+        removeTestDirectory(directory);
+      }
+    }
+  });
+
+  it('[PD65-T14] (D-246) mixed transient codes share one limit of 5 attempts; a non-transient code after them is rethrown at once', () => {
+    const directory = createTestDirectory('infra');
+    const remover = scripted(['ENOTEMPTY', 'EPERM', 'EACCES']);
+    const records: CleanupRecord[] = [];
+    try {
+      expect(() =>
+        removeTestDirectory(directory, { onRecord: (record) => records.push(record), remove: remover.remove, wait: () => undefined }),
+      ).toThrow('falha simulada EACCES');
+      expect(remover.calls()).toBe(3);
+      expect(records.map((record) => record.code)).toEqual(['ENOTEMPTY', 'EPERM']);
+      expect(pendingTestDirectories()).toContain(directory);
+
+      const exhausted = scripted(['EPERM', 'ENOTEMPTY', 'EBUSY', 'ENOTEMPTY', 'EPERM', 'ENOTEMPTY']);
+      expect(() => removeTestDirectory(directory, { remove: exhausted.remove, wait: () => undefined })).toThrow('falha simulada EPERM');
+      expect(exhausted.calls()).toBe(CLEANUP_MAX_ATTEMPTS);
       expect(pendingTestDirectories()).toContain(directory);
     } finally {
       removeTestDirectory(directory);

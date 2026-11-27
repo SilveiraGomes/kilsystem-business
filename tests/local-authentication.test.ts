@@ -51,7 +51,9 @@ import {
   type ServiceTestDependencies,
   type ServiceUnderTest,
 } from './support/local-service-harness';
+import { LOCAL_AUTHENTICATION_DERIVATION } from './support/argon2-test-classification';
 import { createTemporaryDatabase, type TemporaryDatabase } from './support/sqlite-harness';
+import { createDerivationTracker } from './support/test-derivation';
 
 const INVALID = { ok: false, reason: 'invalid-credentials' };
 const policy = AUTHENTICATION_THROTTLE_POLICY;
@@ -69,26 +71,12 @@ type Table =
 const count = (database: SqliteDatabase, table: Table): number =>
   database.prepare(`SELECT count(*) FROM ${table}`).pluck().get() as number;
 
-/** Derivação nativa com contador de chamadas, para confirmar o percurso criptográfico. */
-const countingDerive = (): { readonly derive: Argon2idDerive; readonly calls: () => number } => {
+/** Derivação com contador de chamadas (por omissão Argon2id real, através do *tracker* do ficheiro). */
+const countingDerive = (base: Argon2idDerive): { readonly derive: Argon2idDerive; readonly calls: () => number } => {
   let calls = 0;
-  const derive: Argon2idDerive = async (input) => {
+  const derive: Argon2idDerive = (input) => {
     calls += 1;
-    const { argon2 } = await import('node:crypto');
-    return new Promise<Buffer>((resolve, reject) => {
-      argon2(
-        'argon2id',
-        {
-          memory: input.parameters.memoryKiB,
-          message: input.message,
-          nonce: input.nonce,
-          parallelism: input.parameters.parallelism,
-          passes: input.parameters.passes,
-          tagLength: input.tagLength,
-        },
-        (error, key) => (error ? reject(error) : resolve(key)),
-      );
-    });
+    return base(input);
   };
   return { calls: () => calls, derive };
 };
@@ -131,11 +119,12 @@ describe('Local authentication (E1.07-B)', () => {
   let temporary: TemporaryDatabase;
   let clock: TestClock;
   const running: ServiceUnderTest[] = [];
+  const derivation = createDerivationTracker(LOCAL_AUTHENTICATION_DERIVATION);
 
   const newService = (dependencies: ServiceTestDependencies = {}): ServiceUnderTest => {
     const harness = createServiceUnderTest(serviceConfig(temporary.filename), undefined, {
       clock: clock.now,
-      passwordHashing: { parameters: TEST_HASHING_PARAMETERS },
+      passwordHashing: { derive: derivation.derive, parameters: TEST_HASHING_PARAMETERS },
       ...dependencies,
     });
     running.push(harness);
@@ -166,11 +155,13 @@ describe('Local authentication (E1.07-B)', () => {
   beforeEach(() => {
     temporary = createTemporaryDatabase();
     clock = createTestClock();
+    derivation.reset();
   });
 
   afterEach(async () => {
     for (const harness of running.splice(0)) await harness.service.stop();
     temporary.dispose();
+    derivation.verifyAndReset(expect.getState().currentTestName ?? '');
   });
 
   describe('authentication', () => {
@@ -230,7 +221,7 @@ describe('Local authentication (E1.07-B)', () => {
     });
 
     it('answers every refusal with the same generic result and one derivation per attempt', async () => {
-      const counter = countingDerive();
+      const counter = countingDerive(derivation.derive);
       const harness = await startedService({ passwordHashing: { derive: counter.derive, parameters: TEST_HASHING_PARAMETERS } });
       const active = await provision(harness);
       const suspended = await provision(harness);
@@ -347,6 +338,7 @@ describe('Local authentication (E1.07-B)', () => {
     };
 
     it('locks a username temporarily after five failures and doubles the lock on each new failure', async () => {
+      derivation.useDeterministic();
       const harness = await startedService();
       const user = await provision(harness);
       await failFiveTimes(harness, user.username);
@@ -365,6 +357,7 @@ describe('Local authentication (E1.07-B)', () => {
     });
 
     it('accepts the correct password after the lock expires and resets the counter', async () => {
+      derivation.useDeterministic();
       const harness = await startedService();
       const user = await provision(harness);
       await failFiveTimes(harness, user.username);
@@ -381,6 +374,7 @@ describe('Local authentication (E1.07-B)', () => {
     });
 
     it('keeps the throttle state across service restarts', async () => {
+      derivation.useDeterministic();
       const first = await startedService();
       const user = await provision(first);
       await failFiveTimes(first, user.username);
@@ -394,7 +388,8 @@ describe('Local authentication (E1.07-B)', () => {
     });
 
     it('cannot be bypassed with concurrent attempts', async () => {
-      const counter = countingDerive();
+      derivation.useDeterministic();
+      const counter = countingDerive(derivation.derive);
       const harness = await startedService({ passwordHashing: { derive: counter.derive, parameters: TEST_HASHING_PARAMETERS } });
       const user = await provision(harness);
       const before = counter.calls();
@@ -409,6 +404,7 @@ describe('Local authentication (E1.07-B)', () => {
     });
 
     it('limits unknown usernames in the same way, storing only SHA-256 keys', async () => {
+      derivation.useDeterministic();
       const harness = await startedService();
       const unknown = 'utilizador.desconhecido.teste';
       await failFiveTimes(harness, unknown);
@@ -452,7 +448,7 @@ describe('Local authentication (E1.07-B)', () => {
     });
 
     it('rejects oversized inputs before any derivation', async () => {
-      const counter = countingDerive();
+      const counter = countingDerive(derivation.derive);
       const harness = await startedService({ passwordHashing: { derive: counter.derive, parameters: TEST_HASHING_PARAMETERS } });
       const user = await provision(harness);
       const before = counter.calls();
@@ -464,6 +460,7 @@ describe('Local authentication (E1.07-B)', () => {
     });
 
     it('stays bounded when the system clock moves backwards or forwards', async () => {
+      derivation.useDeterministic();
       const harness = await startedService();
       const user = await provision(harness);
       await failFiveTimes(harness, user.username);
