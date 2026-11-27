@@ -72,9 +72,11 @@ import {
 } from '../services/local-api/src/config';
 import { LOCAL_SERVICE_TRANSITIONS, type LocalServiceState } from '../services/local-api/src/local-service';
 import { createJsonLogger } from '../services/local-api/src/logger';
+import { runThenCleanUp } from './support/cleanup-after';
 import { branchInput, companyInput, CREATED_AT, newCompany, newId, TEST_TAX_ID_POLICY } from './support/fixtures';
 import { companyMembershipInput, newUser, userInput } from './support/identity-fixtures';
 import { createServiceUnderTest, PROTECTED_DIRECTORIES, serviceConfig } from './support/local-service-harness';
+import { stopServicesThenDispose } from './support/service-cleanup';
 import { createTemporaryDatabase } from './support/sqlite-harness';
 
 /*
@@ -495,9 +497,12 @@ describe('Domain contract immutability (E1.07-D1-H, PD-64)', () => {
       expect(LOCAL_SERVICE_TRANSITIONS.READY.includes('STARTING')).toBe(false);
 
       // O ciclo de vida normal continua a funcionar sobre uma base temporária própria.
+      // PD87-C1 (RV-PD87M-03): o serviço é parado e as ligações confirmadas fechadas antes de apagar
+      // a base; uma falha da limpeza depois de uma asserção falhada não substitui a asserção.
       const temporary = createTemporaryDatabase();
-      try {
-        const { service } = createServiceUnderTest(serviceConfig(temporary.filename));
+      const harness = createServiceUnderTest(serviceConfig(temporary.filename));
+      const { service } = harness;
+      await runThenCleanUp(async () => {
         await service.start();
         expect(service.state).toBe('READY');
         await service.stop();
@@ -506,9 +511,7 @@ describe('Domain contract immutability (E1.07-D1-H, PD-64)', () => {
         expect(service.state).toBe('READY');
         await service.stop();
         expect(service.state).toBe('STOPPED');
-      } finally {
-        temporary.dispose();
-      }
+      }, stopServicesThenDispose([harness], temporary));
     });
 
     it('H17 STORED_PARAMETER_BOUNDS: inner bounds are frozen and tampered credentials stay refused', () => {

@@ -13,6 +13,7 @@ import {
   LOCAL_SESSIONS_DERIVATION,
 } from './support/argon2-test-classification';
 import { OTHER_TEST_PASSWORD, TEST_HASHING_PARAMETERS, TEST_PASSWORD } from './support/authentication-fixtures';
+import { expectFailureReasons } from './support/expected-failure';
 import { newUser } from './support/identity-fixtures';
 import { createServiceUnderTest, inspectDatabase, REPOSITORY_ROOT, serviceConfig, type ServiceUnderTest } from './support/local-service-harness';
 import { createTemporaryDatabase, type TemporaryDatabase } from './support/sqlite-harness';
@@ -20,6 +21,7 @@ import {
   createDerivationGuard,
   createDerivationTracker,
   deterministicTestDerive,
+  executedTests,
   fileDerivationGuard,
   isArgon2idHashOf,
   nativeArgon2idForTests,
@@ -173,7 +175,7 @@ describe('E1.07-PD87 binding of the derivation trackers to the test hooks (RV-02
   ): Promise<readonly string[]> => {
     const guard = createDerivationGuard();
     const tracker = createDerivationTracker(classification, { guard });
-    guard.beginTest();
+    guard.beginTest(currentTest());
     if ((steps.reset ?? 'before') === 'before') tracker.reset();
     tracker.useDeterministic();
     await tracker.derive(input());
@@ -191,18 +193,34 @@ describe('E1.07-PD87 binding of the derivation trackers to the test hooks (RV-02
     expect((await cycle({ direct: 2 })).join('\n')).toMatch(/derivação determinística fora de um tracker autorizado \(2×\)/);
     expect(await cycle({ direct: 2 }, ['[T4C-07]'])).toEqual([]);
 
-    // Sem beginTest (ficheiro sem a guarda ligada) não há verificação a fazer; o contador directo é reposto por teste.
+    // PD87-C1 (RV-PD87M-01): sem beginTest a guarda já não fica calada — o teste e cada tracker não
+    // começado são problemas; o número de trackers e o contador directo continuam verificados por teste.
     const guard = createDerivationGuard();
     const one = { directAllowed: [], expectedTrackers: 1 };
-    expect(guard.endTest(currentTest(), one).join('\n')).toMatch(/trackers de derivação registados: 0, esperados: 1/);
+    expect(guard.endTest(currentTest(), one)).toEqual([
+      `beginTest() não executado para este teste (guarda inactiva no beforeEach): ${currentTest()}`,
+      `trackers de derivação registados: 0, esperados: 1: ${currentTest()}`,
+    ]);
     const tracker = createDerivationTracker(classification, { guard });
     expect(guard.tracked()).toBe(1);
+    expect(guard.endTest(currentTest(), one)).toEqual([
+      `beginTest() não executado para este teste (guarda inactiva no beforeEach): ${currentTest()}`,
+      `tracker não iniciado pela guarda (beginTest() no beforeEach): ${currentTest()}`,
+    ]);
+    const started = (): void => {
+      guard.beginTest(currentTest());
+      tracker.reset();
+      tracker.verifyAndReset(currentTest());
+    };
+    started();
     expect(guard.endTest(currentTest(), one)).toEqual([]);
+    started();
     expect(guard.endTest(currentTest(), { directAllowed: [], expectedTrackers: 0 }).join('\n')).toMatch(/registados: 1, esperados: 0/);
+    started();
     guard.countDirect();
     expect(guard.endTest(currentTest(), one).length).toBe(1);
+    started();
     expect(guard.endTest(currentTest(), one)).toEqual([]);
-    tracker.reset();
 
     // Um tracker criado dentro de um teste, sem guarda explícita, é efémero e não fica registado na guarda do ficheiro.
     const before = fileDerivationGuard.tracked();
@@ -211,11 +229,14 @@ describe('E1.07-PD87 binding of the derivation trackers to the test hooks (RV-02
   });
 
   it('[T4C-08] the guard is wired into tests/setup.ts and the four classified files use the file-level tracker', () => {
+    // Verificação textual complementar; a activação é verificada dinamicamente por [C1-G02]/[C1-G03] e por finishFile.
     const setup = readFileSync(path.join(REPOSITORY_ROOT, 'tests', 'setup.ts'), 'utf8');
-    expect(setup).toMatch(/beforeEach\(\(\) => \{\s*fileDerivationGuard\.beginTest\(\);\s*\}\);/);
+    expect(setup).toMatch(/beforeEach\(\(\) => \{\s*fileDerivationGuard\.beginTest\(expect\.getState\(\)\.currentTestName \?\? ''\);\s*\}\);/);
     expect(setup).toContain('fileDerivationGuard.endTest(currentTestName');
     expect(setup).toContain("CLASSIFIED_DERIVATION_FILES.includes(path.basename(testPath ?? '')) ? 1 : 0");
-    expect(setup).toContain("expect(problems.join('\\n'), 'ligação do tracker de derivação (PD-87)').toBe('');");
+    expect(setup).toContain('if (problems.length > 0) throw new Error(`ligação do tracker de derivação (PD-87):\\n${problems.join(\'\\n\')}`);');
+    expect(setup).toContain('...fileDerivationGuard.finishFile(executedTests(file)),');
+    expect(setup).toContain('...unmetFailureReasons(),');
     const files = [
       ['local-sessions.test.ts', 'LOCAL_SESSIONS_DERIVATION'],
       ['local-authentication.test.ts', 'LOCAL_AUTHENTICATION_DERIVATION'],
@@ -234,7 +255,59 @@ describe('E1.07-PD87 binding of the derivation trackers to the test hooks (RV-02
   });
 
   it.fails('[T4C-09] a direct deterministic derivation in a test outside DIRECT_DETERMINISTIC_ALLOWED makes that test fail (guard active)', async () => {
+    // PD87-C1 (RV-PD87M-02): só esta razão, e nenhuma outra, conta como a falha esperada.
+    expectFailureReasons([
+      /^Error: ligação do tracker de derivação \(PD-87\):\nderivação determinística fora de um tracker autorizado \(1×\): .*\[T4C-09\] a direct deterministic derivation[^\n]*$/,
+    ]);
     await deterministicTestDerive(input());
+  });
+
+  it('[C1-G01] the guard fails a test that was not begun, a test begun before the previous ended, an unbalanced file and a tracker reused across tests', async () => {
+    const guard = createDerivationGuard();
+    const none = { directAllowed: [], expectedTrackers: 0 };
+    expect(guard.endTest('a', none)).toEqual(['beginTest() não executado para este teste (guarda inactiva no beforeEach): a']);
+    guard.beginTest('b');
+    expect(() => guard.beginTest('c')).toThrow('endTest() não executado para o teste anterior (afterEach da guarda): b');
+    expect(guard.endTest('c', none)).toEqual([]);
+    guard.beginTest('d');
+    expect(guard.endTest('outro', none)).toEqual(['beginTest() não executado para este teste (guarda inactiva no beforeEach): outro']);
+    expect(guard.counts()).toEqual({ active: undefined, begun: 3, ended: 3 });
+    expect(guard.finishFile(3)).toEqual([]);
+    expect(guard.finishFile(4)).toEqual(['testes executados: 4, começados pela guarda: 3, terminados: 3']);
+    guard.beginTest('e');
+    expect(guard.finishFile(4)).toEqual([
+      'endTest() não executado para o último teste (afterEach da guarda): e',
+      'testes executados: 4, começados pela guarda: 4, terminados: 3',
+    ]);
+
+    // RV-PD87M-06: cada teste começa do zero — um reset() do teste anterior não serve ao seguinte.
+    const reused = createDerivationGuard();
+    const tracker = createDerivationTracker(classification, { guard: reused });
+    const one = { directAllowed: [], expectedTrackers: 1 };
+    reused.beginTest('primeiro');
+    tracker.reset();
+    tracker.verifyAndReset('primeiro');
+    expect(reused.endTest('primeiro', one)).toEqual([]);
+    reused.beginTest('segundo');
+    await tracker.derive(input());
+    tracker.verifyAndReset('segundo');
+    expect(reused.endTest('segundo', one)).toEqual(['tracker não reposto antes do teste (reset() no beforeEach): segundo']);
+    reused.beginTest('terceiro');
+    tracker.reset();
+    expect(reused.endTest('terceiro', one)).toEqual(['verificação do tracker não executada (verifyAndReset() no afterEach): terceiro']);
+  });
+
+  it('[C1-G02] inside a running test, the real guard has begun exactly this test (beforeEach of tests/setup.ts ran)', () => {
+    const { active, begun, ended } = fileDerivationGuard.counts();
+    expect(active).toBe(currentTest());
+    expect(begun).toBe(ended + 1);
+  });
+
+  it('[C1-G03] every executed test of this file so far was begun and ended by the real guard (afterEach of tests/setup.ts ran)', ({ task }) => {
+    const done = executedTests(task.file);
+    const { begun, ended } = fileDerivationGuard.counts();
+    // Os testes já terminados deste ficheiro (com qualquer ordem ou filtro) e o teste em curso.
+    expect({ begun, ended }).toEqual({ begun: done + 1, ended: done });
   });
 });
 
