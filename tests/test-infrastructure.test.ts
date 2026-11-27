@@ -6,7 +6,9 @@ import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import { openSqliteDatabase } from '../packages/database/src/index';
+import { runThenCleanUp } from './support/cleanup-after';
 import { isEvent, killAllChildren, trackTestChild } from './support/exclusivity/processes';
+import { createServiceUnderTest, serviceConfig } from './support/local-service-harness';
 import { createTemporaryDatabase } from './support/sqlite-harness';
 import {
   CLEANUP_MAX_ATTEMPTS,
@@ -378,4 +380,107 @@ describe('E1.07-PD65-T1 child process cleanup', () => {
       removeTestDirectory(directory);
     }
   }, 30_000);
+});
+
+describe('E1.07-PD87 cleanup after a failing test body (RV-05)', () => {
+  const collector = () => {
+    const reported: unknown[] = [];
+    return { report: (error: unknown) => reported.push(error), reported };
+  };
+
+  it('[PD87-T01] a body failure stays the primary failure; a later cleanup failure is reported separately and every cleanup runs', async () => {
+    const primary = new Error('asserção principal');
+    const secondary = failure('EPERM');
+    const order: string[] = [];
+    const { report, reported } = collector();
+    const run = runThenCleanUp(
+      () => Promise.reject(primary),
+      [
+        () => {
+          order.push('stop');
+          throw secondary;
+        },
+        () => {
+          order.push('dispose');
+        },
+      ],
+      report,
+    );
+    await expect(run).rejects.toBe(primary);
+    expect(order).toEqual(['stop', 'dispose']);
+    expect(reported).toEqual([secondary]);
+  });
+
+  it('[PD87-T02] without a body failure, a cleanup failure is the test failure and is never swallowed', async () => {
+    const { report, reported } = collector();
+    const only = failure('EBUSY');
+    await expect(runThenCleanUp(() => Promise.resolve(1), [() => {
+      throw only;
+    }], report)).rejects.toBe(only);
+    const first = failure('EPERM');
+    const second = failure('ENOTEMPTY');
+    const both = runThenCleanUp(() => Promise.resolve(1), [() => {
+      throw first;
+    }, () => {
+      throw second;
+    }], report);
+    await expect(both).rejects.toBeInstanceOf(AggregateError);
+    await both.catch((error: unknown) => {
+      expect(error instanceof AggregateError && error.errors).toEqual([first, second]);
+    });
+    expect(reported).toEqual([]);
+  });
+
+  it('[PD87-T03] without any failure the body value is returned and nothing is reported', async () => {
+    const { report, reported } = collector();
+    let cleaned = 0;
+    await expect(runThenCleanUp(() => Promise.resolve('valor'), [() => (cleaned += 1), async () => {
+      await Promise.resolve();
+      cleaned += 1;
+    }], report)).resolves.toBe('valor');
+    expect(cleaned).toBe(2);
+    const primary = new Error('só o corpo');
+    await expect(runThenCleanUp(() => Promise.reject(primary), [() => (cleaned += 1)], report)).rejects.toBe(primary);
+    expect(reported).toEqual([]);
+  });
+
+  it.fails('[PD87-T04] by default the secondary failure is added to the running test, which fails even when the primary failure is caught', async () => {
+    await expect(
+      runThenCleanUp(
+        () => Promise.reject(new Error('principal')),
+        [
+          () => {
+            throw failure('EPERM');
+          },
+        ],
+      ),
+    ).rejects.toThrow('principal');
+  });
+
+  it('[PD87-T05] with a running service, stopping it before disposing frees the database; disposing first fails visibly and is reported as secondary', async () => {
+    const temporary = createTemporaryDatabase('infra');
+    const harness = createServiceUnderTest(serviceConfig(temporary.filename));
+    await harness.service.start();
+    const assertion = new Error('asserção falhada com o serviço activo');
+    const { report, reported } = collector();
+    try {
+      // Ordem errada (a de RV-05): a base ainda está detida pelo serviço.
+      await expect(runThenCleanUp(() => Promise.reject(assertion), [() => {
+        temporary.dispose();
+      }], report)).rejects.toBe(assertion);
+      if (process.platform === 'win32') {
+        expect(reported).toHaveLength(1);
+        expect(['EPERM', 'EBUSY']).toContain((reported[0] as { code?: unknown }).code);
+        expect(pendingTestDirectories()).toContain(temporary.directory);
+      }
+    } finally {
+      // Ordem correcta (a de R-S07 depois da PD-87): parar e só depois apagar.
+      await expect(runThenCleanUp(() => Promise.reject(assertion), [() => harness.service.stop(), () => {
+        temporary.dispose();
+      }], report)).rejects.toBe(assertion);
+    }
+    expect(reported).toHaveLength(process.platform === 'win32' ? 1 : 0);
+    expect(existsSync(temporary.directory)).toBe(false);
+    expect(pendingTestDirectories()).not.toContain(temporary.directory);
+  });
 });

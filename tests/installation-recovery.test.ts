@@ -32,6 +32,7 @@ import {
   type ServiceUnderTest,
 } from './support/local-service-harness';
 import { INSTALLATION_RECOVERY_DERIVATION } from './support/argon2-test-classification';
+import { runThenCleanUp } from './support/cleanup-after';
 import { createTemporaryDatabase, type TemporaryDatabase } from './support/sqlite-harness';
 import { createDerivationTracker } from './support/test-derivation';
 import {
@@ -679,21 +680,32 @@ describe('E1.07-D3-R1 installation recovery of the initial administrator', () =>
       temporary.dispose();
       for (const [label, tamper, cause] of scenarios) {
         const own = createTemporaryDatabase();
-        try {
-          temporary = own;
-          const installation = await initialised();
-          const code = await issue(installation);
-          inspect((database) => tamper(database, installation.administrator.id));
-          const before = inspect((database) => rows(database, ['password_credentials', 'installation_recovery_codes', ...AUTHORITY_TABLES]));
-          await expect(recoverWith(installation, code), label).resolves.toEqual({ cause, ok: false, reason: 'recovery-refused' });
-          expect(inspect((database) => rows(database, ['password_credentials', 'installation_recovery_codes', ...AUTHORITY_TABLES])), label).toEqual(
-            before,
-          );
-          expect(inspect(eventKinds).slice(-2), label).toEqual(['recovery-attempted', 'recovery-refused']);
-          await installation.harness.service.stop();
-        } finally {
-          own.dispose();
-        }
+        temporary = own;
+        const firstOwnService = running.length;
+        // PD-87 (RV-05): os serviços do cenário são parados antes de apagar a base; uma falha da
+        // limpeza depois de uma asserção falhada é comunicada à parte e não substitui a asserção.
+        await runThenCleanUp(
+          async () => {
+            const installation = await initialised();
+            const code = await issue(installation);
+            inspect((database) => tamper(database, installation.administrator.id));
+            const before = inspect((database) => rows(database, ['password_credentials', 'installation_recovery_codes', ...AUTHORITY_TABLES]));
+            await expect(recoverWith(installation, code), label).resolves.toEqual({ cause, ok: false, reason: 'recovery-refused' });
+            expect(inspect((database) => rows(database, ['password_credentials', 'installation_recovery_codes', ...AUTHORITY_TABLES])), label).toEqual(
+              before,
+            );
+            expect(inspect(eventKinds).slice(-2), label).toEqual(['recovery-attempted', 'recovery-refused']);
+            await installation.harness.service.stop();
+          },
+          [
+            async () => {
+              for (const harness of running.splice(firstOwnService)) await harness.service.stop();
+            },
+            () => {
+              own.dispose();
+            },
+          ],
+        );
       }
       temporary = createTemporaryDatabase();
     });
