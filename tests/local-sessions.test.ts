@@ -74,6 +74,7 @@ import {
   type ServiceUnderTest,
 } from './support/local-service-harness';
 import { LOCAL_SESSIONS_DERIVATION } from './support/argon2-test-classification';
+import { stopServicesThenDisposeNow, type StoppableService } from './support/service-cleanup';
 import { createTemporaryDatabase, type TemporaryDatabase } from './support/sqlite-harness';
 import { createDerivationTracker } from './support/test-derivation';
 
@@ -155,7 +156,7 @@ const expectNotReady = async (operation: () => Promise<unknown>): Promise<void> 
 describe('Local sessions (E1.07-C)', () => {
   let temporary: TemporaryDatabase;
   let clock: TestClock;
-  const running: { readonly service: LocalService }[] = [];
+  const running: StoppableService[] = [];
   const extraDatabases: TemporaryDatabase[] = [];
   const derivation = createDerivationTracker(LOCAL_SESSIONS_DERIVATION);
 
@@ -246,8 +247,8 @@ describe('Local sessions (E1.07-C)', () => {
   });
 
   afterEach(async () => {
-    for (const harness of running.splice(0)) await harness.service.stop();
-    temporary.dispose();
+    // PD87-C2 (PD-57): as bases só são apagadas depois de parar os serviços e confirmar as ligações fechadas.
+    await stopServicesThenDisposeNow(running.splice(0), temporary);
     for (const database of extraDatabases.splice(0)) database.dispose();
     derivation.verifyAndReset(expect.getState().currentTestName ?? '');
   });
@@ -1000,15 +1001,22 @@ describe('Local sessions (E1.07-C)', () => {
           }
         },
       });
+      // PD87-C2 (PD-57): as ligações ficam registadas para o `afterEach` confirmar que foram fechadas.
+      const connections: SqliteDatabase[] = [];
       const service = createLocalService(serviceConfig(temporary.filename), {
         clock: clock.now,
         logger,
         monotonicClock: clock.monotonic,
+        openDatabase: (options) => {
+          const connection = openSqliteDatabase(options);
+          connections.push(connection);
+          return connection;
+        },
         passwordHashing: { parameters: TEST_HASHING_PARAMETERS },
         protectedDirectories: PROTECTED_DIRECTORIES,
       });
       hook.service = service;
-      running.push({ service });
+      running.push({ connections, service });
       await service.start();
       const user = await provision({ service });
       const identity = await login({ service }, user);

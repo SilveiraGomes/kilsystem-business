@@ -32,6 +32,7 @@ import {
   serviceConfig,
   type ServiceUnderTest,
 } from './support/local-service-harness';
+import { stopServicesThenDisposeNow, type StoppableService } from './support/service-cleanup';
 import { createTemporaryDatabase, type TemporaryDatabase } from './support/sqlite-harness';
 
 // Derivados da lista de migrações (E1.07-A acrescentou a versão 2).
@@ -97,10 +98,10 @@ const env = (databasePath: string, overrides: Readonly<Record<string, string | u
 
 describe('Local service lifecycle (E1.05)', () => {
   let temporary: TemporaryDatabase;
-  const running: LocalService[] = [];
+  const running: StoppableService[] = [];
 
   const track = (harness: ServiceUnderTest): ServiceUnderTest => {
-    running.push(harness.service);
+    running.push(harness);
     return harness;
   };
 
@@ -112,9 +113,9 @@ describe('Local service lifecycle (E1.05)', () => {
   });
 
   afterEach(async () => {
-    for (const service of running.splice(0)) await service.stop();
-    // Em Windows, `rmSync` falha se alguma ligação ao ficheiro tiver ficado aberta.
-    temporary.dispose();
+    // Em Windows, `rmSync` falha se alguma ligação ao ficheiro tiver ficado aberta. PD87-C2 (PD-57):
+    // a base só é apagada depois de parar os serviços e confirmar todas as ligações fechadas.
+    await stopServicesThenDisposeNow(running.splice(0), temporary);
   });
 
   describe('state machine', () => {
@@ -246,8 +247,11 @@ describe('Local service lifecycle (E1.05)', () => {
 
   describe('release independent of the log (E1.07-D3-R1-C3, RV-C2M-01/03)', () => {
     /**
-     * Serviço cujo registo lança nas linhas escolhidas. Fica fora de `running`: o `stop()` destes
-     * serviços pode rejeitar de propósito, e cada teste termina-os ele próprio.
+     * Serviço cujo registo lança nas linhas escolhidas. O `stop()` destes serviços pode rejeitar de
+     * propósito, e cada teste termina-os ele próprio. PD87-C2 (PD-57): ficam também em `running`, com
+     * o `close` verdadeiro de cada ligação (alguns testes trocam-no por um que lança): numa asserção
+     * falhada a meio, o `afterEach` pára-os e fecha as ligações deixadas abertas, comunicadas como
+     * fuga, antes de apagar a base. Num teste aprovado terminam em `STOPPED` e a nova paragem é nula.
      */
     const faultyService = (
       failLine: (line: string) => boolean,
@@ -257,6 +261,7 @@ describe('Local service lifecycle (E1.05)', () => {
     ) => {
       const lines: string[] = [];
       const connections: SqliteDatabase[] = [];
+      const releasable: Pick<SqliteDatabase, 'close' | 'open'>[] = [];
       const service = createLocalService(serviceConfig(temporary.filename, overrides), {
         logger: createJsonLogger({
           instanceId: 'release-test',
@@ -270,10 +275,19 @@ describe('Local service lifecycle (E1.05)', () => {
         openDatabase: (options) => {
           const connection = open(options);
           connections.push(connection);
+          // O `close` do protótipo é o verdadeiro, mesmo quando o teste substituiu o da instância.
+          const prototype = Object.getPrototypeOf(connection) as Pick<SqliteDatabase, 'close'>;
+          releasable.push({
+            close: () => prototype.close.call(connection),
+            get open() {
+              return connection.open;
+            },
+          });
           return connection;
         },
         protectedDirectories: PROTECTED_DIRECTORIES,
       });
+      running.push({ connections: releasable, service });
       return { connections, events: () => lines.map((line) => (JSON.parse(line) as { event: string }).event), service };
     };
 
@@ -397,7 +411,7 @@ describe('Local service lifecycle (E1.05)', () => {
         protectedDirectories: PROTECTED_DIRECTORIES,
       });
       lifecycle.service = service;
-      running.push(service);
+      running.push({ connections, service });
 
       const failure = await rejection(service.start());
 
@@ -435,7 +449,6 @@ describe('Local service lifecycle (E1.05)', () => {
         failStoppedTransition = false;
         return true;
       });
-      running.push(service);
       await service.start();
 
       const stopping = service.stop();

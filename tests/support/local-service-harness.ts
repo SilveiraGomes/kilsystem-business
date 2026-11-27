@@ -11,6 +11,7 @@ import {
 import { createJsonLogger } from '../../services/local-api/src/logger';
 import type { AuthorizationRepositoryHarness } from './authorization-repository-contract';
 import type { IdentityRepositoryHarness } from './membership-repository-contract';
+import { stopServicesThenDisposeNow } from './service-cleanup';
 import { createTemporaryDatabase } from './sqlite-harness';
 import type { TenantRepositoryHarness } from './tenant-repository-contract';
 
@@ -133,32 +134,30 @@ export const createServiceUnderTest = (
 /** Suite de contrato através do serviço local em `READY`, sobre base temporária. */
 export const createLocalServiceHarness = async (): Promise<TenantRepositoryHarness> => {
   const temporary = createTemporaryDatabase();
-  const { service } = createServiceUnderTest(serviceConfig(temporary.filename));
+  const harness = createServiceUnderTest(serviceConfig(temporary.filename));
+  const { service } = harness;
   await service.start();
   return {
     branches: service.branches,
     companies: service.companies,
-    dispose: async () => {
-      await service.stop();
-      temporary.dispose();
-    },
+    // PD87-C2 (PD-57): a base só é apagada depois de parar o serviço e confirmar as ligações fechadas.
+    dispose: () => stopServicesThenDisposeNow([harness], temporary),
   };
 };
 
 /** Identidades e associações através do serviço local em `READY` (E1.07-A, D-089). */
 export const createLocalServiceIdentityHarness = async (): Promise<IdentityRepositoryHarness> => {
   const temporary = createTemporaryDatabase();
-  const { service } = createServiceUnderTest(serviceConfig(temporary.filename));
+  const harness = createServiceUnderTest(serviceConfig(temporary.filename));
+  const { service } = harness;
   await service.start();
   return {
     branches: service.branches,
     branchMemberships: service.branchMemberships,
     companies: service.companies,
     companyMemberships: service.companyMemberships,
-    dispose: async () => {
-      await service.stop();
-      temporary.dispose();
-    },
+    // PD87-C2 (PD-57): a base só é apagada depois de parar o serviço e confirmar as ligações fechadas.
+    dispose: () => stopServicesThenDisposeNow([harness], temporary),
     scopes: service.membershipScopes,
     users: service.identityProvisioning.users,
   };
@@ -167,7 +166,8 @@ export const createLocalServiceIdentityHarness = async (): Promise<IdentityRepos
 /** Persistência RBAC e motor interno através do serviço local em `READY` (E1.07-D2). */
 export const createLocalServiceAuthorizationHarness = async (): Promise<AuthorizationRepositoryHarness> => {
   const temporary = createTemporaryDatabase();
-  const { service } = createServiceUnderTest(serviceConfig(temporary.filename));
+  const harness = createServiceUnderTest(serviceConfig(temporary.filename));
+  const { service } = harness;
   await service.start();
   const rbac = service.internalAuthorization;
   return {
@@ -176,10 +176,8 @@ export const createLocalServiceAuthorizationHarness = async (): Promise<Authoriz
     companies: service.companies,
     companyMemberships: service.companyMemberships,
     diagnostics: rbac.diagnostics,
-    dispose: async () => {
-      await service.stop();
-      temporary.dispose();
-    },
+    // PD87-C2 (PD-57): a base só é apagada depois de parar o serviço e confirmar as ligações fechadas.
+    dispose: () => stopServicesThenDisposeNow([harness], temporary),
     evaluator: rbac.domainEvaluator,
     roleAssignments: rbac.roleAssignments,
     rolePermissions: rbac.rolePermissions,

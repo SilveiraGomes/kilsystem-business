@@ -52,6 +52,7 @@ import {
   type ServiceUnderTest,
 } from './support/local-service-harness';
 import { LOCAL_AUTHENTICATION_DERIVATION } from './support/argon2-test-classification';
+import { stopServicesThenDisposeNow } from './support/service-cleanup';
 import { createTemporaryDatabase, type TemporaryDatabase } from './support/sqlite-harness';
 import { createDerivationTracker } from './support/test-derivation';
 
@@ -159,8 +160,8 @@ describe('Local authentication (E1.07-B)', () => {
   });
 
   afterEach(async () => {
-    for (const harness of running.splice(0)) await harness.service.stop();
-    temporary.dispose();
+    // PD87-C2 (PD-57): a base só é apagada depois de parar os serviços e confirmar as ligações fechadas.
+    await stopServicesThenDisposeNow(running.splice(0), temporary);
     derivation.verifyAndReset(expect.getState().currentTestName ?? '');
   });
 

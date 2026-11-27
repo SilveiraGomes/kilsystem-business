@@ -25,9 +25,11 @@ import {
   type UserId,
 } from '../packages/shared-types/src/index';
 import { LocalServiceStartupError, LocalServiceStateError } from '../services/local-api/src/local-service';
+import { runThenCleanUp } from './support/cleanup-after';
 import { branchInput, contextFor, CREATED_AT, newCompany, newId } from './support/fixtures';
 import { newBranchMembership, newCompanyMembership, newUser } from './support/identity-fixtures';
-import { createServiceUnderTest, REPOSITORY_ROOT, serviceConfig } from './support/local-service-harness';
+import { createServiceUnderTest, REPOSITORY_ROOT, serviceConfig, type ServiceUnderTest } from './support/local-service-harness';
+import { stopServicesThenDispose } from './support/service-cleanup';
 import { createTemporaryDatabase, type TemporaryDatabase } from './support/sqlite-harness';
 
 const E1_04_MIGRATIONS = MIGRATIONS.slice(0, 1);
@@ -517,19 +519,25 @@ describe('Identity persistence (E1.07-A)', () => {
 
     it('never writes identity fields in service logs', async () => {
       const harness = createServiceUnderTest(serviceConfig(temporary.filename));
-      await harness.service.start();
-      const user = newUser({ displayName: 'Nome Registado', email: 'registo@kil-business.test' });
-      await harness.service.identityProvisioning.users.create(user);
-      await expect(harness.service.identityProvisioning.users.create(user)).rejects.toBeInstanceOf(RecordConflictError);
-      await harness.service.stop();
+      await runThenCleanUp(async () => {
+        await harness.service.start();
+        const user = newUser({ displayName: 'Nome Registado', email: 'registo@kil-business.test' });
+        await harness.service.identityProvisioning.users.create(user);
+        await expect(harness.service.identityProvisioning.users.create(user)).rejects.toBeInstanceOf(RecordConflictError);
+        await harness.service.stop();
 
-      const output = harness.lines.join('\n');
-      for (const value of [user.username, user.displayName, String(user.email), String(user.phone), user.id]) {
-        expect(output).not.toContain(value);
-      }
+        const output = harness.lines.join('\n');
+        for (const value of [user.username, user.displayName, String(user.email), String(user.phone), user.id]) {
+          expect(output).not.toContain(value);
+        }
+      }, stopServicesThenDispose([harness], temporary));
     });
   });
 
+  // PD87-C2 (RV-C1M-03; PD-57, D-158): estes testes iniciam serviços no corpo. Numa asserção falhada
+  // com um serviço activo, o `afterEach` apagava a base ainda detida (`EPERM`, pasta pendente e
+  // serviço órfão). Agora os serviços são parados e as ligações confirmadas fechadas antes de apagar
+  // a base, a asserção continua a ser a falha principal e as falhas de limpeza são secundárias.
   describe('local service composition', () => {
     it('refuses identity and membership operations outside READY, including stale references', async () => {
       const harness = createServiceUnderTest(serviceConfig(temporary.filename));
@@ -549,64 +557,73 @@ describe('Identity persistence (E1.07-A)', () => {
         }
       };
 
-      await expectNotReady();
-      await harness.service.start();
-      const { users } = harness.service.identityProvisioning;
-      const { companyMemberships, membershipScopes } = harness.service;
-      await users.create(user);
-      await expect(users.findById(user.id)).resolves.toEqual(user);
-      await harness.service.stop();
+      await runThenCleanUp(async () => {
+        await expectNotReady();
+        await harness.service.start();
+        const { users } = harness.service.identityProvisioning;
+        const { companyMemberships, membershipScopes } = harness.service;
+        await users.create(user);
+        await expect(users.findById(user.id)).resolves.toEqual(user);
+        await harness.service.stop();
 
-      await expectNotReady();
-      await expect(users.findById(user.id)).rejects.toBeInstanceOf(LocalServiceStateError);
-      await expect(companyMemberships.findByUser(context, user.id)).rejects.toBeInstanceOf(LocalServiceStateError);
-      await expect(membershipScopes.evaluate(context, user.id)).rejects.toBeInstanceOf(LocalServiceStateError);
-      expect(Object.isFrozen(harness.service.identityProvisioning)).toBe(true);
+        await expectNotReady();
+        await expect(users.findById(user.id)).rejects.toBeInstanceOf(LocalServiceStateError);
+        await expect(companyMemberships.findByUser(context, user.id)).rejects.toBeInstanceOf(LocalServiceStateError);
+        await expect(membershipScopes.evaluate(context, user.id)).rejects.toBeInstanceOf(LocalServiceStateError);
+        expect(Object.isFrozen(harness.service.identityProvisioning)).toBe(true);
+      }, stopServicesThenDispose([harness], temporary));
     });
 
     it('applies the identity migration to an E1.04 database at startup, or refuses it under a strict policy', async () => {
-      const legacy = await createLegacyDatabase(temporary);
+      const services: ServiceUnderTest[] = [];
+      await runThenCleanUp(async () => {
+        const legacy = await createLegacyDatabase(temporary);
 
-      const strict = createServiceUnderTest(
-        serviceConfig(temporary.filename, { startupPolicy: { onMissingDatabase: 'fail', onPendingMigrations: 'fail' } }),
-      );
-      await expect(strict.service.start()).rejects.toMatchObject({
-        name: LocalServiceStartupError.name,
-        reason: 'pending-migrations',
-      });
-      await strict.service.stop();
+        const strict = createServiceUnderTest(
+          serviceConfig(temporary.filename, { startupPolicy: { onMissingDatabase: 'fail', onPendingMigrations: 'fail' } }),
+        );
+        services.push(strict);
+        await expect(strict.service.start()).rejects.toMatchObject({
+          name: LocalServiceStartupError.name,
+          reason: 'pending-migrations',
+        });
+        await strict.service.stop();
 
-      const harness = createServiceUnderTest(serviceConfig(temporary.filename));
-      await harness.service.start();
-      expect(harness.service.startupReport).toEqual({
-        appliedMigrations: AFTER_E1_04,
-        createdDatabase: false,
-        schemaVersion: LATEST_VERSION,
-      });
-      await expect(
-        harness.service.branches.listByCompany(contextFor(legacy.companyA.tenantId), legacy.companyA.id),
-      ).resolves.toEqual([legacy.branchA1, legacy.branchA2]);
-      await harness.service.stop();
+        const harness = createServiceUnderTest(serviceConfig(temporary.filename));
+        services.push(harness);
+        await harness.service.start();
+        expect(harness.service.startupReport).toEqual({
+          appliedMigrations: AFTER_E1_04,
+          createdDatabase: false,
+          schemaVersion: LATEST_VERSION,
+        });
+        await expect(
+          harness.service.branches.listByCompany(contextFor(legacy.companyA.tenantId), legacy.companyA.id),
+        ).resolves.toEqual([legacy.branchA1, legacy.branchA2]);
+        await harness.service.stop();
+      }, stopServicesThenDispose(services, temporary));
     });
 
     it('keeps identities and memberships across service restarts', async () => {
       const first = createServiceUnderTest(serviceConfig(temporary.filename));
-      await first.service.start();
-      const company = newCompany();
-      const context = contextFor(company.tenantId);
-      const user = newUser();
-      await first.service.companies.create(context, company);
-      await first.service.identityProvisioning.users.create(user);
-      await first.service.companyMemberships.create(context, newCompanyMembership(user, company));
-      await first.service.stop();
-
       const second = createServiceUnderTest(serviceConfig(temporary.filename));
-      await second.service.start();
-      await expect(second.service.membershipScopes.evaluate(context, user.id)).resolves.toMatchObject({
-        eligible: true,
-        scope: 'COMPANY_WIDE',
-      });
-      await second.service.stop();
+      await runThenCleanUp(async () => {
+        await first.service.start();
+        const company = newCompany();
+        const context = contextFor(company.tenantId);
+        const user = newUser();
+        await first.service.companies.create(context, company);
+        await first.service.identityProvisioning.users.create(user);
+        await first.service.companyMemberships.create(context, newCompanyMembership(user, company));
+        await first.service.stop();
+
+        await second.service.start();
+        await expect(second.service.membershipScopes.evaluate(context, user.id)).resolves.toMatchObject({
+          eligible: true,
+          scope: 'COMPANY_WIDE',
+        });
+        await second.service.stop();
+      }, stopServicesThenDispose([first, second], temporary));
     });
   });
 

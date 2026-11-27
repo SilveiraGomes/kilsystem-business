@@ -8,9 +8,14 @@ import { describe, expect, it, vi } from 'vitest';
 import { openSqliteDatabase, type SqliteDatabase } from '../packages/database/src/index';
 import { runThenCleanUp } from './support/cleanup-after';
 import { isEvent, killAllChildren, trackTestChild } from './support/exclusivity/processes';
-import { expectFailureReasons, failureReasonProblems } from './support/expected-failure';
+import { expectFailureReasons, failureReasonProblems, undeclaredFailureReasons } from './support/expected-failure';
 import { createServiceUnderTest, serviceConfig } from './support/local-service-harness';
-import { ServiceConnectionLeakError, stopServicesThenDispose } from './support/service-cleanup';
+import {
+  ServiceConnectionLeakError,
+  stopServicesThenDispose,
+  stopServicesThenDisposeNow,
+  type StoppableService,
+} from './support/service-cleanup';
 import { createTemporaryDatabase } from './support/sqlite-harness';
 import {
   CLEANUP_MAX_ATTEMPTS,
@@ -478,6 +483,20 @@ describe('E1.07-PD87 cleanup after a failing test body (RV-05)', () => {
     ]);
   });
 
+  it('[C2-N01] (RV-C1M-02) every it.fails that ran needs a declared reason, matched by the Vitest task id, not by the name', () => {
+    const failing = [
+      { fullTestName: 'declarado', id: 'id-1' },
+      { fullTestName: 'sem declaração', id: 'id-2' },
+      { fullTestName: 'declarado', id: 'id-3' },
+    ];
+    expect(undeclaredFailureReasons(failing, new Set(['id-1', 'id-2', 'id-3']))).toEqual([]);
+    expect(undeclaredFailureReasons(failing, new Set(['id-1', undefined]))).toEqual([
+      'teste negativo (it.fails) sem razão esperada declarada (expectFailureReasons): sem declaração',
+      'teste negativo (it.fails) sem razão esperada declarada (expectFailureReasons): declarado',
+    ]);
+    expect(undeclaredFailureReasons([], new Set())).toEqual([]);
+  });
+
   it('[PD87-T05] with a running service, stopping it before disposing frees the database; disposing first fails visibly and is reported as secondary', async () => {
     const temporary = createTemporaryDatabase('infra');
     const harness = createServiceUnderTest(serviceConfig(temporary.filename));
@@ -587,6 +606,57 @@ describe('E1.07-PD87-C1 stopping services before disposing the database (RV-PD87
     expect(pendingTestDirectories()).toContain(temporary.directory);
     temporary.dispose();
     expect(pendingTestDirectories()).not.toContain(temporary.directory);
+  });
+
+  it('[C2-L01] (PD-57) the service list may be read when the cleanups run, so services added by the test body are stopped and confirmed', async () => {
+    const temporary = createTemporaryDatabase('infra');
+    const services: StoppableService[] = [];
+    const cleanups = stopServicesThenDispose(() => services, temporary);
+    const late = createServiceUnderTest(serviceConfig(temporary.filename));
+    services.push(late);
+    await late.service.start();
+    await expect(runThenCleanUp(() => Promise.resolve('valor'), cleanups)).resolves.toBe('valor');
+    expect(late.service.state).toBe('STOPPED');
+    expect(openCount(late.connections)).toBe(0);
+    expect(existsSync(temporary.directory)).toBe(false);
+  });
+
+  it('[C2-L02] (PD-57) run at once in an afterEach: a connection whose close was replaced is closed through its real close, and every failure is reported together', async () => {
+    // Ligação cujo `close` lança (como em [L-C3-02]); o substituto usa o `close` verdadeiro do protótipo.
+    const first = createTemporaryDatabase('infra');
+    const connection = openSqliteDatabase({ filename: first.filename });
+    const prototype = Object.getPrototypeOf(connection) as Pick<SqliteDatabase, 'close'>;
+    Object.assign(connection, {
+      close: () => {
+        throw failure('PD87C2-CLOSE');
+      },
+    });
+    const substitute = {
+      close: () => prototype.close.call(connection),
+      get open() {
+        return connection.open;
+      },
+    };
+    await expect(stopServicesThenDisposeNow([{ connections: [substitute], service: { stop: () => Promise.resolve() } }], first)).rejects.toMatchObject({
+      leaked: 1,
+      name: 'ServiceConnectionLeakError',
+      stillOpen: 0,
+    });
+    expect(connection.open).toBe(false);
+    expect(existsSync(first.directory)).toBe(false);
+
+    // Paragem falhada e fuga: as duas falhas juntas; a base é apagada porque as ligações ficaram confirmadas fechadas.
+    const second = createTemporaryDatabase('infra');
+    const leaked = openSqliteDatabase({ filename: second.filename });
+    const stopFailure = failure('PD87C2-STOP');
+    const both = stopServicesThenDisposeNow([{ connections: [leaked], service: { stop: () => Promise.reject(stopFailure) } }], second);
+    await expect(both).rejects.toBeInstanceOf(AggregateError);
+    await both.catch((error: unknown) => {
+      expect(error instanceof AggregateError && error.errors[0]).toBe(stopFailure);
+      expect(error instanceof AggregateError && error.errors[1]).toBeInstanceOf(ServiceConnectionLeakError);
+    });
+    expect(leaked.open).toBe(false);
+    expect(existsSync(second.directory)).toBe(false);
   });
 
   it('[C1-L04] a failing stop() does not prevent stopping the other services; without a body failure every cleanup failure is the test failure', async () => {
