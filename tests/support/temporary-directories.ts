@@ -7,13 +7,14 @@ import path from 'node:path';
  * removida por `removeTestDirectory`, que só aceita o caminho literal de uma pasta deste registo,
  * filha directa de `os.tmpdir()` e com o prefixo `kil-business-`. Em Windows, um *handle* ainda
  * aberto (processo filho a terminar, antivírus, indexação) pode fazer `rmSync` falhar com `EPERM`
- * ou `EBUSY` durante alguns milissegundos; só esses dois códigos são repetidos, um número limitado
- * de vezes, e cada repetição é registada. Qualquer outro erro, ou o esgotamento das tentativas,
+ * ou `EBUSY` durante alguns milissegundos, ou com `ENOTEMPTY` enquanto a eliminação de um ficheiro
+ * da pasta ainda está pendente (D-246, PD-57); só esses três códigos são repetidos, um número
+ * limitado de vezes, e cada repetição é registada. Qualquer outro erro, ou o esgotamento das tentativas,
  * propaga-se: a limpeza nunca falha em silêncio.
  */
 
-/** Códigos transitórios observados na PD-65 (X34). `ENOTEMPTY`, `EACCES` e outros não são repetidos. */
-export const TRANSIENT_CLEANUP_CODES: readonly string[] = Object.freeze(['EPERM', 'EBUSY']);
+/** Códigos transitórios: `EPERM`/`EBUSY` (PD-65, X34) e `ENOTEMPTY` (PD-57, PD65-T4; D-246). `EACCES` e outros não são repetidos. */
+export const TRANSIENT_CLEANUP_CODES: readonly string[] = Object.freeze(['EPERM', 'EBUSY', 'ENOTEMPTY']);
 export const CLEANUP_MAX_ATTEMPTS = 5;
 /** Espera antes da tentativa n+1: 50, 100, 200, 400 ms (no máximo 750 ms no total). */
 export const cleanupDelayMs = (attempt: number): number => 50 * 2 ** (attempt - 1);
@@ -80,7 +81,7 @@ const assertOwnDirectory = (directory: string): void => {
 };
 
 /**
- * Remove uma pasta criada por `createTestDirectory`. Repete só `EPERM`/`EBUSY`, no máximo
+ * Remove uma pasta criada por `createTestDirectory`. Repete só `EPERM`/`EBUSY`/`ENOTEMPTY`, no máximo
  * `CLEANUP_MAX_ATTEMPTS` tentativas, e confirma que o caminho deixou de existir.
  */
 export const removeTestDirectory = (directory: string, options: RemoveOptions = {}): void => {

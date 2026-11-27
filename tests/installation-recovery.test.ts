@@ -31,7 +31,9 @@ import {
   serviceConfig,
   type ServiceUnderTest,
 } from './support/local-service-harness';
+import { INSTALLATION_RECOVERY_DERIVATION } from './support/argon2-test-classification';
 import { createTemporaryDatabase, type TemporaryDatabase } from './support/sqlite-harness';
+import { createDerivationTracker } from './support/test-derivation';
 import {
   LOCAL_SERVICE_EXIT_CODES,
   RecoveryTerminalError,
@@ -127,8 +129,11 @@ const eventKinds = (database: SqliteDatabase): string[] =>
 const credentialVersion = (database: SqliteDatabase, userId: string): number =>
   database.prepare('SELECT credential_version FROM password_credentials WHERE user_id = ?').pluck().get(userId) as number;
 
-/** Derivação Argon2id real, com um gancho opcional depois de cada derivação (concorrência controlada). */
-const createDerive = () => {
+/**
+ * Derivação (por omissão Argon2id real, através do *tracker* do ficheiro), com um gancho opcional
+ * depois de cada derivação (concorrência controlada).
+ */
+const createDerive = (base: Argon2idDerive) => {
   const calls: { readonly memoryKiB: number; readonly passes: number; readonly tagLength: number }[] = [];
   let after: (() => Promise<void> | void) | undefined;
   const derive: Argon2idDerive = async ({ message, nonce, parameters, tagLength }) => {
@@ -137,16 +142,7 @@ const createDerive = () => {
     // uma derivação concorrente pode terminar antes e não deve apanhá-lo.
     const hook = after;
     after = undefined;
-    const result = await new Promise<Buffer>((resolve, reject) => {
-      argon2(
-        'argon2id',
-        { memory: parameters.memoryKiB, message, nonce, parallelism: parameters.parallelism, passes: parameters.passes, tagLength },
-        (error, key) => {
-          if (error) reject(error);
-          else resolve(key);
-        },
-      );
-    });
+    const result = await base({ message, nonce, parameters, tagLength });
     if (hook !== undefined) await hook();
     return result;
   };
@@ -183,6 +179,7 @@ describe('E1.07-D3-R1 installation recovery of the initial administrator', () =>
   let temporary: TemporaryDatabase;
   let clock: TestClock;
   let hashing: ReturnType<typeof createDerive>;
+  const derivation = createDerivationTracker(INSTALLATION_RECOVERY_DERIVATION);
   const running: ServiceUnderTest[] = [];
 
   const startedService = async (filename = temporary.filename): Promise<ServiceUnderTest> => {
@@ -231,12 +228,14 @@ describe('E1.07-D3-R1 installation recovery of the initial administrator', () =>
   beforeEach(() => {
     temporary = createTemporaryDatabase();
     clock = createTestClock();
-    hashing = createDerive();
+    hashing = createDerive(derivation.derive);
+    derivation.reset();
   });
 
   afterEach(async () => {
     for (const harness of running.splice(0)) await harness.service.stop();
     temporary.dispose();
+    derivation.verifyAndReset(expect.getState().currentTestName ?? '');
   });
 
   describe('recovery code format (DP-01)', () => {
@@ -413,6 +412,7 @@ describe('E1.07-D3-R1 installation recovery of the initial administrator', () =>
     });
 
     it('[R-F04b] rotation refuses wrong credentials, other identities and an administrator that is not the anchored one', async () => {
+      derivation.useDeterministic();
       const installation = await initialised();
       const { service } = installation.harness;
       await expect(service.installationRecovery.rotate(installation.administrator.username, OTHER_TEST_PASSWORD)).resolves.toEqual({
@@ -432,6 +432,7 @@ describe('E1.07-D3-R1 installation recovery of the initial administrator', () =>
     });
 
     it('[R-F09] a code lost after the commit (never presented) is replaced by a rotation with the new password', async () => {
+      derivation.useDeterministic();
       const installation = await initialised();
       const code = await issue(installation);
       const recovered = await recoverWith(installation, code);
@@ -467,6 +468,7 @@ describe('E1.07-D3-R1 installation recovery of the initial administrator', () =>
     });
 
     it('[R-S10b] still recovers and rotates after the system clock moved back before the code was issued', async () => {
+      derivation.useDeterministic();
       const installation = await initialised();
       clock.advanceSeconds(7200);
       const code = await issue(installation);
@@ -487,6 +489,7 @@ describe('E1.07-D3-R1 installation recovery of the initial administrator', () =>
     });
 
     it('[R-F05] [R-S03] refuses every consumed or superseded code of a chain exactly like a wrong code', async () => {
+      derivation.useDeterministic();
       const installation = await initialised();
       const { installationRecovery } = installation.harness.service;
       const first = await issue(installation);
@@ -555,6 +558,7 @@ describe('E1.07-D3-R1 installation recovery of the initial administrator', () =>
     });
 
     it('[R-F08] [R-S06] leaves the anchor, identities, organisations and RBAC byte-for-byte unchanged', async () => {
+      derivation.useDeterministic();
       const installation = await initialised();
       const { service } = installation.harness;
       const other = newUser();
@@ -595,6 +599,7 @@ describe('E1.07-D3-R1 installation recovery of the initial administrator', () =>
     });
 
     it('[R-F11] records issuance, rotation, attempts and outcomes without secrets or personal data', async () => {
+      derivation.useDeterministic();
       const installation = await initialised();
       const code = await issue(installation);
       await recoverWith(installation, generateRecoveryCode().formatted);
@@ -629,6 +634,7 @@ describe('E1.07-D3-R1 installation recovery of the initial administrator', () =>
     });
 
     it('[R-S07] refuses a broken anchor (three faults) and an INACTIVE administrator even with the right code, without writing', async () => {
+      derivation.useDeterministic();
       const scenarios: readonly (readonly [string, (database: SqliteDatabase, userId: string) => void, string])[] = [
         [
           'administrator INACTIVE',
@@ -693,6 +699,7 @@ describe('E1.07-D3-R1 installation recovery of the initial administrator', () =>
     });
 
     it('[R-S04] concurrent recoveries with the same code: exactly one commits, the other writes nothing', async () => {
+      derivation.useDeterministic();
       const installation = await initialised();
       const code = await issue(installation);
       const results = await Promise.all([recoverWith(installation, code, OTHER_TEST_PASSWORD), recoverWith(installation, code, 'terceira frase fictícia longa')]);
@@ -718,6 +725,7 @@ describe('E1.07-D3-R1 installation recovery of the initial administrator', () =>
     });
 
     it('[R-S04b] a rotation concurrent with a recovery leaves exactly one consistent outcome', async () => {
+      derivation.useDeterministic();
       const installation = await initialised();
       const code = await issue(installation);
       const gate = deferred();
@@ -755,6 +763,7 @@ describe('E1.07-D3-R1 installation recovery of the initial administrator', () =>
     };
 
     it('[R-S04d] concurrent rotations: only the last committed code is delivered; the loser gets rotation-conflict', async () => {
+      derivation.useDeterministic();
       const installation = await initialised();
       await issue(installation);
       const loser = await rotationHeldBeforeCommit(installation);
@@ -771,6 +780,7 @@ describe('E1.07-D3-R1 installation recovery of the initial administrator', () =>
     });
 
     it('[R-S04e] concurrent first issuances: one code is issued, the other rotation is refused without writing', async () => {
+      derivation.useDeterministic();
       const installation = await initialised();
       const loser = await rotationHeldBeforeCommit(installation);
       const winner = await installation.harness.service.installationRecovery.rotate(installation.administrator.username, TEST_PASSWORD);
@@ -783,6 +793,7 @@ describe('E1.07-D3-R1 installation recovery of the initial administrator', () =>
     });
 
     it('[R-S04c] a rotation whose password was replaced during its derivation is refused without writing', async () => {
+      derivation.useDeterministic();
       const installation = await initialised();
       await issue(installation);
       const before = inspect((database) => rows(database, ['installation_recovery_codes']));
@@ -807,6 +818,7 @@ describe('E1.07-D3-R1 installation recovery of the initial administrator', () =>
     });
 
     it('[R-S05] a credential replaced during the derivation aborts the recovery; the code stays active', async () => {
+      derivation.useDeterministic();
       const installation = await initialised();
       const code = await issue(installation);
       let tampered: unknown;
@@ -832,6 +844,7 @@ describe('E1.07-D3-R1 installation recovery of the initial administrator', () =>
     });
 
     it('[R-S05b] a failure inside the confirming transaction, after the credential and the consumption, rolls everything back', async () => {
+      derivation.useDeterministic();
       const installation = await initialised();
       const { service } = installation.harness;
       const code = await issue(installation);
@@ -870,6 +883,7 @@ describe('E1.07-D3-R1 installation recovery of the initial administrator', () =>
 
   describe('throttling (DP-06)', () => {
     it('[R-S02] allows 3 failures, then locks 60 s doubling up to 3600 s, never permanently; success clears the failures', async () => {
+      derivation.useDeterministic();
       const installation = await initialised();
       const code = await issue(installation);
       const wrong = () => recoverWith(installation, generateRecoveryCode().formatted);
@@ -892,6 +906,7 @@ describe('E1.07-D3-R1 installation recovery of the initial administrator', () =>
     });
 
     it('[R-S02b] counts attempts before the derivation: concurrent wrong codes never exceed the free failures', async () => {
+      derivation.useDeterministic();
       const installation = await initialised();
       await issue(installation);
       hashing.calls.length = 0;
@@ -949,6 +964,7 @@ describe('E1.07-D3-R1 installation recovery of the initial administrator', () =>
     };
 
     it('[R-S12] [R-S13] refuses reactivation, a second ACTIVE, another anchor, verifier edits, deletion, REPLACE and rowid reuse in the four configurations', async () => {
+      derivation.useDeterministic();
       const { installation, other } = await seeded();
       const admin = installation.administrator.id;
       const completedAt = inspect(
