@@ -48,9 +48,9 @@ interface TrackerHooks {
 }
 
 /**
- * E1.07-PD87 (RV-02) — guarda da ligação dos *trackers* aos *hooks*. Os *hooks* globais de
- * `tests/setup.ts` chamam `beginTest()` antes dos `beforeEach` de cada ficheiro e `endTest()` depois
- * dos `afterEach` (ordem `stack`). Para cada *tracker* registado, `endTest()` devolve um problema se
+ * E1.07-PD87 (RV-02) — guarda da ligação dos *trackers* aos *hooks*. O `aroundEach` global de
+ * `tests/setup.ts` chama `beginTest()` antes dos `beforeEach` de cada ficheiro e `endTest()` depois
+ * de todos os `afterEach`, mesmo que um deles lance (PD87-C2, RV-C1M-04). Para cada *tracker* registado, `endTest()` devolve um problema se
  * o teste não começou com `reset()` antes de qualquer derivação, ou se `verifyAndReset()` não correu
  * para esse teste; se o número de *trackers* registados não for o esperado para o ficheiro; e se houve
  * derivações determinísticas fora de um *tracker* num teste não listado em `directAllowed`. Assim, retirar a verificação ou a reposição de um ficheiro, ou substituir a
@@ -72,16 +72,27 @@ export interface GuardCounts {
   readonly active: string | undefined;
 }
 
+/** O que o Vitest executou num ficheiro, para o `afterAll` (ver `fileExecution`). */
+export interface FileExecution {
+  /** Testes que correram com os *hooks*: terminados (`pass`/`fail`) ou ignorados em execução. */
+  readonly executed: number;
+  /** Nomes completos dos testes ignorados em execução (`context.skip()`). */
+  readonly skippedAtRuntime: readonly string[];
+}
+
 export interface DerivationGuard {
   readonly track: (hooks: TrackerHooks) => void;
   readonly tracked: () => number;
-  /** Lança se o teste anterior não foi terminado por `endTest()` (o `afterEach` da guarda não correu). */
+  /** Lança se o teste anterior não foi terminado por `endTest()` (a desmontagem da guarda não correu). */
   readonly beginTest: (testName: string) => void;
   readonly countDirect: () => void;
   readonly endTest: (testName: string, expectations: GuardExpectations) => readonly string[];
   readonly counts: () => GuardCounts;
-  /** Para o `afterAll`: cada teste executado no ficheiro foi começado e terminado pela guarda. */
-  readonly finishFile: (executedTests: number) => readonly string[];
+  /**
+   * Para o `afterAll`: cada teste executado no ficheiro foi começado e terminado pela guarda; cada
+   * teste ignorado em execução consta de `allowedRuntimeSkips` e não teve problemas da guarda.
+   */
+  readonly finishFile: (execution: FileExecution, allowedRuntimeSkips: readonly string[]) => readonly string[];
 }
 
 /*
@@ -91,9 +102,16 @@ export interface DerivationGuard {
  * começado sem o anterior ter terminado faz falhar o `beforeEach`; e no fim do ficheiro o número de
  * testes executados tem de coincidir com os começados e terminados. Nenhum destes controlos depende
  * do texto de `tests/setup.ts`.
+ *
+ * E1.07-PD87-C2 (RV-C1M-01) — um teste ignorado em execução (`context.skip()`) correu os *hooks*, por
+ * isso conta como executado; mas o Vitest substitui o seu resultado por `skip` e descarta os erros dos
+ * `afterEach`, incluindo os da guarda. Por isso `endTest()` guarda os problemas de cada teste e
+ * `finishFile()` comunica os de um teste que acabou ignorado, e recusa um ignorado em execução que não
+ * conste de `allowedRuntimeSkips`: um teste crítico não pode ser ignorado em silêncio.
  */
 export const createDerivationGuard = (): DerivationGuard => {
   const trackers: TrackerHooks[] = [];
+  const reported = new Map<string, readonly string[]>();
   let direct = 0;
   let active: string | undefined;
   let begun = 0;
@@ -126,14 +144,23 @@ export const createDerivationGuard = (): DerivationGuard => {
         problems.push(`derivação determinística fora de um tracker autorizado (${String(direct)}×): ${testName}`);
       }
       direct = 0;
+      if (problems.length > 0) reported.set(testName, problems);
       return problems;
     },
-    finishFile: (executedTests: number) => {
+    finishFile: ({ executed, skippedAtRuntime }: FileExecution, allowedRuntimeSkips: readonly string[]) => {
       const problems: string[] = [];
-      if (active !== undefined) problems.push(`endTest() não executado para o último teste (afterEach da guarda): ${active}`);
-      if (begun !== executedTests || ended !== executedTests) {
-        problems.push(`testes executados: ${String(executedTests)}, começados pela guarda: ${String(begun)}, terminados: ${String(ended)}`);
+      if (active !== undefined) problems.push(`endTest() não executado para o último teste (desmontagem da guarda): ${active}`);
+      if (begun !== executed || ended !== executed) {
+        problems.push(`testes executados: ${String(executed)}, começados pela guarda: ${String(begun)}, terminados: ${String(ended)}`);
       }
+      for (const testName of skippedAtRuntime) {
+        if (!marked(testName, allowedRuntimeSkips)) problems.push(`teste ignorado em execução sem autorização (RUNTIME_SKIP_ALLOWED): ${testName}`);
+        const discarded = reported.get(testName);
+        if (discarded !== undefined) {
+          problems.push(`problemas da guarda num teste ignorado em execução (descartados pelo Vitest): ${testName}\n${discarded.join('\n')}`);
+        }
+      }
+      reported.clear();
       return problems;
     },
     track: (hooks: TrackerHooks) => {
@@ -146,15 +173,42 @@ export const createDerivationGuard = (): DerivationGuard => {
 /** Guarda do ficheiro de testes em curso, ligada aos *hooks* globais de `tests/setup.ts`. */
 export const fileDerivationGuard = createDerivationGuard();
 
+type RunnerTest = Extract<RunnerTask, { readonly type: 'test' }>;
+
+const testsOf = (suite: Readonly<RunnerTestSuite | RunnerTestFile>): readonly RunnerTest[] =>
+  suite.tasks.flatMap((task: RunnerTask): readonly RunnerTest[] => {
+    if (task.type === 'suite') return testsOf(task);
+    return task.type === 'test' ? [task] : [];
+  });
+
+/** `pending` existe no resultado em execução do Vitest 5.1.0, mas não no tipo público. */
+const isPending = (result: unknown): boolean =>
+  typeof result === 'object' && result !== null && 'pending' in result && result.pending === true;
+
+/** Ignorado em execução: o Vitest correu os *hooks* e depois marcou o teste `skip` com `pending`. */
+export const skippedAtRuntime = (test: RunnerTest): boolean => test.mode === 'skip' && isPending(test.result);
+
+/** Terminado com os *hooks*: `pass` ou `fail` (num `it.fails`, depois da inversão). */
+const ranToTheEnd = (test: RunnerTest): boolean =>
+  test.mode === 'run' && (test.result?.state === 'pass' || test.result?.state === 'fail');
+
 /**
- * Testes de um ficheiro (ou *suite*) que o Vitest executou — com `beforeEach`, portanto —, para o
- * `afterAll`: os ignorados (`skip`, `todo`, filtrados por `-t`) não contam.
+ * Testes de um ficheiro (ou *suite*) que o Vitest executou — com os *hooks*, portanto —, para o
+ * `afterAll`: os terminados e os ignorados em execução (PD87-C2, RV-C1M-01). Os ignorados antes de
+ * correr (`skip`, `skipIf`, `todo`, filtrados por `-t`) não contam.
  */
-export const executedTests = (suite: Readonly<RunnerTestSuite | RunnerTestFile>): number =>
-  suite.tasks.reduce((total: number, task: RunnerTask) => {
-    if (task.type === 'suite') return total + executedTests(task);
-    return total + (task.type === 'test' && task.mode === 'run' && (task.result?.state === 'pass' || task.result?.state === 'fail') ? 1 : 0);
-  }, 0);
+export const fileExecution = (suite: Readonly<RunnerTestSuite | RunnerTestFile>): FileExecution => {
+  const tests = testsOf(suite);
+  const skipped = tests.filter(skippedAtRuntime);
+  return {
+    executed: tests.filter(ranToTheEnd).length + skipped.length,
+    skippedAtRuntime: skipped.map((test) => test.fullTestName),
+  };
+};
+
+/** Testes `it.fails` que correram (com qualquer resultado), para a verificação das razões (PD87-C2, RV-C1M-02). */
+export const failingTestsRun = (suite: Readonly<RunnerTestSuite | RunnerTestFile>): readonly RunnerTest[] =>
+  testsOf(suite).filter((test) => test.fails === true && ranToTheEnd(test));
 
 /**
  * Derivação determinística SÓ PARA TESTES, chamada directamente (fora de um *tracker*). Cada chamada

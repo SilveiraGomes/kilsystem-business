@@ -50,6 +50,8 @@ import {
   type ChildEvent,
   type TestChild,
 } from './support/exclusivity/processes';
+import { SIMULATE_FILE_SYMLINK_EPERM_ENV } from './support/runtime-skips';
+import { stopServicesThenDisposeNow } from './support/service-cleanup';
 import { createTestDirectory, removeTestDirectory } from './support/temporary-directories';
 
 /*
@@ -125,9 +127,14 @@ describe('Database exclusivity (E1.07-X)', () => {
 
   afterEach(async () => {
     await killAllChildren();
-    for (const harness of running.splice(0)) await harness.service.stop().catch(() => undefined);
-    for (const file of restoreAcl.splice(0)) execFileSync('icacls', [file, '/reset'], { stdio: 'ignore' });
-    removeTestDirectory(directory);
+    // PD87-C2 (PD-57): uma falha de `stop()` deixa de ser ignorada, e a pasta só é apagada depois de
+    // confirmar fechadas as ligações dos serviços (as falhas são comunicadas a seguir à do teste).
+    await stopServicesThenDisposeNow(running.splice(0), {
+      dispose: () => {
+        for (const file of restoreAcl.splice(0)) execFileSync('icacls', [file, '/reset'], { stdio: 'ignore' });
+        removeTestDirectory(directory);
+      },
+    });
   });
 
   describe('database identity', () => {
@@ -167,10 +174,15 @@ describe('Database exclusivity (E1.07-X)', () => {
       );
       const fileLink = path.join(directory, 'atalho.sqlite');
       try {
+        // PD87-C2 (RV-C1M-01): a falta de privilégio pode ser simulada, só no ensaio em processo filho [C2-P02].
+        if (process.env[SIMULATE_FILE_SYMLINK_EPERM_ENV] === '1') {
+          throw Object.assign(new Error('EPERM simulado: ligação simbólica de ficheiro sem privilégio (PD87-C2)'), { code: 'EPERM' });
+        }
         symlinkSync(target, fileLink, 'file');
       } catch (error) {
-        // Ligações simbólicas de ficheiro exigem privilégio em Windows; registado como ignorado.
-        if ((error as NodeJS.ErrnoException).code === 'EPERM') context.skip();
+        // Ligações simbólicas de ficheiro exigem privilégio em Windows; registado como ignorado,
+        // autorizado em `RUNTIME_SKIP_ALLOWED` (o `afterAll` de `tests/setup.ts` recusa os restantes).
+        if ((error as NodeJS.ErrnoException).code === 'EPERM') context.skip('ligações simbólicas de ficheiro exigem privilégio (EPERM)');
         throw error;
       }
       expect(resolveDatabaseIdentity(fileLink, { protectedDirectories: PROTECTED_DIRECTORIES })).toBe(identity);

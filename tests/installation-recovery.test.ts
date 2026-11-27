@@ -33,6 +33,7 @@ import {
 } from './support/local-service-harness';
 import { INSTALLATION_RECOVERY_DERIVATION } from './support/argon2-test-classification';
 import { runThenCleanUp } from './support/cleanup-after';
+import { stopServicesThenDispose, stopServicesThenDisposeNow } from './support/service-cleanup';
 import { createTemporaryDatabase, type TemporaryDatabase } from './support/sqlite-harness';
 import { createDerivationTracker } from './support/test-derivation';
 import {
@@ -234,8 +235,8 @@ describe('E1.07-D3-R1 installation recovery of the initial administrator', () =>
   });
 
   afterEach(async () => {
-    for (const harness of running.splice(0)) await harness.service.stop();
-    temporary.dispose();
+    // PD87-C2 (PD-57): a base só é apagada depois de parar os serviços e confirmar as ligações fechadas.
+    await stopServicesThenDisposeNow(running.splice(0), temporary);
     derivation.verifyAndReset(expect.getState().currentTestName ?? '');
   });
 
@@ -684,6 +685,7 @@ describe('E1.07-D3-R1 installation recovery of the initial administrator', () =>
         const firstOwnService = running.length;
         // PD-87 (RV-05): os serviços do cenário são parados antes de apagar a base; uma falha da
         // limpeza depois de uma asserção falhada é comunicada à parte e não substitui a asserção.
+        // PD87-C2 (PD-57): e as ligações são confirmadas fechadas antes de apagar a base.
         await runThenCleanUp(
           async () => {
             const installation = await initialised();
@@ -697,14 +699,7 @@ describe('E1.07-D3-R1 installation recovery of the initial administrator', () =>
             expect(inspect(eventKinds).slice(-2), label).toEqual(['recovery-attempted', 'recovery-refused']);
             await installation.harness.service.stop();
           },
-          [
-            async () => {
-              for (const harness of running.splice(firstOwnService)) await harness.service.stop();
-            },
-            () => {
-              own.dispose();
-            },
-          ],
+          stopServicesThenDispose(() => running.splice(firstOwnService), own),
         );
       }
       temporary = createTemporaryDatabase();

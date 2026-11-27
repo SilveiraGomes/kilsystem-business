@@ -45,6 +45,7 @@ import {
   type ServiceUnderTest,
 } from './support/local-service-harness';
 import { IDENTITY_GATE_DERIVATION } from './support/argon2-test-classification';
+import { stopServicesThenDisposeNow } from './support/service-cleanup';
 import { createTemporaryDatabase, type TemporaryDatabase } from './support/sqlite-harness';
 import { createDerivationTracker } from './support/test-derivation';
 
@@ -266,9 +267,13 @@ describe('E1.07-D3-G0 installation authority gate (PD-73, PD-75, PD-76)', () => 
   });
 
   afterEach(async () => {
-    for (const harness of running.splice(0)) await harness.service.stop();
-    for (const own of extra) own.dispose();
-    temporary.dispose();
+    // PD87-C2 (PD-57): as bases só são apagadas depois de parar os serviços e confirmar as ligações fechadas.
+    await stopServicesThenDisposeNow(running.splice(0), {
+      dispose: () => {
+        for (const own of extra) own.dispose();
+        temporary.dispose();
+      },
+    });
     derivation.verifyAndReset(expect.getState().currentTestName ?? '');
   });
 

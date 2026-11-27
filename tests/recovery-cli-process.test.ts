@@ -14,8 +14,9 @@ import { LOCAL_SERVICE_ENV } from '../services/local-api/src/config';
 import { OTHER_TEST_PASSWORD, TEST_HASHING_PARAMETERS, TEST_PASSWORD } from './support/authentication-fixtures';
 import { newId } from './support/fixtures';
 import { uniqueUsername } from './support/identity-fixtures';
-import { createServiceUnderTest, REPOSITORY_ROOT, serviceConfig } from './support/local-service-harness';
+import { createServiceUnderTest, REPOSITORY_ROOT, serviceConfig, type ServiceUnderTest } from './support/local-service-harness';
 import type { RecoveryCliChildOptions } from './support/recovery/recovery-cli-child';
+import { stopServicesThenDisposeNow } from './support/service-cleanup';
 import { createTemporaryDatabase, type TemporaryDatabase } from './support/sqlite-harness';
 import { createTestDirectory, removeTestDirectory } from './support/temporary-directories';
 
@@ -211,6 +212,7 @@ const PIPE_HOLDER = [
 
 describe('E1.07-D3-R1-C3 recovery CLI in a real child process', () => {
   let temporary: TemporaryDatabase;
+  const services: ServiceUnderTest[] = [];
   /** PD65-P5: filhos ainda sem `close` no instante em que a base do teste foi apagada. */
   let unclosedAtDispose: number | undefined;
 
@@ -229,7 +231,9 @@ describe('E1.07-D3-R1-C3 recovery CLI in a real child process', () => {
   afterEach(async () => {
     // Este `afterEach` corre antes do exterior: a base só é apagada depois de `close` de todos os filhos.
     await closeChildren();
-    temporary.dispose();
+    // PD87-C2 (PD-57): e depois de parar os serviços do próprio teste e confirmar as ligações fechadas;
+    // uma asserção falhada com o serviço de preparação activo já não apaga a base detida.
+    await stopServicesThenDisposeNow(services.splice(0), temporary);
     // PD65-P5: protege a ordem acima — nenhum filho pode ter os *pipes* abertos quando a base é apagada.
     expect(unclosedAtDispose, 'filhos sem `close` quando a base foi apagada').toBe(0);
   });
@@ -261,6 +265,7 @@ describe('E1.07-D3-R1-C3 recovery CLI in a real child process', () => {
     temporary = createDatabase();
     const username = uniqueUsername('admin');
     const prepared = createServiceUnderTest(serviceConfig(temporary.filename), undefined, { passwordHashing: { parameters: TEST_HASHING_PARAMETERS } });
+    services.push(prepared);
     await prepared.service.start();
     await prepared.service.identityProvisioning.installation.initialise({ displayName: 'Administrador Fictício', id: newId(), username }, TEST_PASSWORD);
     await prepared.service.stop();

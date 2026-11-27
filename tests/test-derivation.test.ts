@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, type RunnerTestFile } from 'vitest';
 
 import type { SqliteDatabase } from '../packages/database/src/index';
 import { createPasswordHasher, type PasswordHash } from '../services/local-api/src/authentication/password-hashing';
@@ -16,13 +16,16 @@ import { OTHER_TEST_PASSWORD, TEST_HASHING_PARAMETERS, TEST_PASSWORD } from './s
 import { expectFailureReasons } from './support/expected-failure';
 import { newUser } from './support/identity-fixtures';
 import { createServiceUnderTest, inspectDatabase, REPOSITORY_ROOT, serviceConfig, type ServiceUnderTest } from './support/local-service-harness';
+import { RUNTIME_SKIP_ALLOWED } from './support/runtime-skips';
+import { stopServicesThenDisposeNow } from './support/service-cleanup';
 import { createTemporaryDatabase, type TemporaryDatabase } from './support/sqlite-harness';
 import {
   createDerivationGuard,
   createDerivationTracker,
   deterministicTestDerive,
-  executedTests,
+  failingTestsRun,
   fileDerivationGuard,
+  fileExecution,
   isArgon2idHashOf,
   nativeArgon2idForTests,
   type DerivationClassification,
@@ -229,14 +232,17 @@ describe('E1.07-PD87 binding of the derivation trackers to the test hooks (RV-02
   });
 
   it('[T4C-08] the guard is wired into tests/setup.ts and the four classified files use the file-level tracker', () => {
-    // Verificação textual complementar; a activação é verificada dinamicamente por [C1-G02]/[C1-G03] e por finishFile.
+    // Verificação textual complementar; a activação é verificada por comportamento por [C1-G02]/[C1-G03],
+    // por finishFile e, para o afterAll, em processo filho por [C2-P01] (PD87-C2, RV-C1M-05).
     const setup = readFileSync(path.join(REPOSITORY_ROOT, 'tests', 'setup.ts'), 'utf8');
-    expect(setup).toMatch(/beforeEach\(\(\) => \{\s*fileDerivationGuard\.beginTest\(expect\.getState\(\)\.currentTestName \?\? ''\);\s*\}\);/);
-    expect(setup).toContain('fileDerivationGuard.endTest(currentTestName');
-    expect(setup).toContain("CLASSIFIED_DERIVATION_FILES.includes(path.basename(testPath ?? '')) ? 1 : 0");
-    expect(setup).toContain('if (problems.length > 0) throw new Error(`ligação do tracker de derivação (PD-87):\\n${problems.join(\'\\n\')}`);');
-    expect(setup).toContain('...fileDerivationGuard.finishFile(executedTests(file)),');
-    expect(setup).toContain('...unmetFailureReasons(),');
+    expect(setup).toMatch(/aroundEach\(async \(runTest, \{ task \}\) => \{\s*fileDerivationGuard\.beginTest\(task\.fullTestName\);/);
+    expect(setup).toContain('fileDerivationGuard.endTest(task.fullTestName');
+    expect(setup).toContain('CLASSIFIED_DERIVATION_FILES.includes(path.basename(task.file.filepath)) ? 1 : 0');
+    expect(setup).toContain('new Error(`ligação do tracker de derivação (PD-87):\\n${problems.join(\'\\n\')}`)');
+    expect(setup).toContain('observeFailures(task, guardFailure === undefined ? [] : [guardFailure]);');
+    expect(setup).toContain('if (guardFailure !== undefined) throw guardFailure;');
+    expect(setup).toContain('...fileDerivationGuard.finishFile(fileExecution(file), RUNTIME_SKIP_ALLOWED),');
+    expect(setup).toContain('...unmetFailureReasons(file),');
     const files = [
       ['local-sessions.test.ts', 'LOCAL_SESSIONS_DERIVATION'],
       ['local-authentication.test.ts', 'LOCAL_AUTHENTICATION_DERIVATION'],
@@ -272,11 +278,12 @@ describe('E1.07-PD87 binding of the derivation trackers to the test hooks (RV-02
     guard.beginTest('d');
     expect(guard.endTest('outro', none)).toEqual(['beginTest() não executado para este teste (guarda inactiva no beforeEach): outro']);
     expect(guard.counts()).toEqual({ active: undefined, begun: 3, ended: 3 });
-    expect(guard.finishFile(3)).toEqual([]);
-    expect(guard.finishFile(4)).toEqual(['testes executados: 4, começados pela guarda: 3, terminados: 3']);
+    const ran = (executed: number) => ({ executed, skippedAtRuntime: [] });
+    expect(guard.finishFile(ran(3), [])).toEqual([]);
+    expect(guard.finishFile(ran(4), [])).toEqual(['testes executados: 4, começados pela guarda: 3, terminados: 3']);
     guard.beginTest('e');
-    expect(guard.finishFile(4)).toEqual([
-      'endTest() não executado para o último teste (afterEach da guarda): e',
+    expect(guard.finishFile(ran(4), [])).toEqual([
+      'endTest() não executado para o último teste (desmontagem da guarda): e',
       'testes executados: 4, começados pela guarda: 4, terminados: 3',
     ]);
 
@@ -304,10 +311,85 @@ describe('E1.07-PD87 binding of the derivation trackers to the test hooks (RV-02
   });
 
   it('[C1-G03] every executed test of this file so far was begun and ended by the real guard (afterEach of tests/setup.ts ran)', ({ task }) => {
-    const done = executedTests(task.file);
+    const done = fileExecution(task.file).executed;
     const { begun, ended } = fileDerivationGuard.counts();
     // Os testes já terminados deste ficheiro (com qualquer ordem ou filtro) e o teste em curso.
     expect({ begun, ended }).toEqual({ begun: done + 1, ended: done });
+  });
+});
+
+describe('E1.07-PD87-C2 runtime skips, file execution and the guard (RV-C1M-01)', () => {
+  const none = { directAllowed: [], expectedTrackers: 0 };
+  const run = (guard: ReturnType<typeof createDerivationGuard>, name: string, direct = 0): readonly string[] => {
+    guard.beginTest(name);
+    for (let call = 0; call < direct; call += 1) guard.countDirect();
+    return guard.endTest(name, none);
+  };
+
+  it('[C2-G01] a test skipped at runtime counts as executed, is accepted only when authorised, and its discarded guard problems are reported', () => {
+    // Autorizado e sem problemas: aceite; o ignorado conta como executado (começado e terminado).
+    const authorised = createDerivationGuard();
+    expect(run(authorised, '[X02] ligação')).toEqual([]);
+    expect(run(authorised, 'normal')).toEqual([]);
+    expect(authorised.finishFile({ executed: 2, skippedAtRuntime: ['[X02] ligação'] }, ['[X02]'])).toEqual([]);
+
+    // Não autorizado: recusado, mesmo com a contagem certa.
+    const unauthorised = createDerivationGuard();
+    expect(run(unauthorised, 'crítico')).toEqual([]);
+    expect(unauthorised.finishFile({ executed: 1, skippedAtRuntime: ['crítico'] }, ['[X02]'])).toEqual([
+      'teste ignorado em execução sem autorização (RUNTIME_SKIP_ALLOWED): crítico',
+    ]);
+
+    // Autorizado, mas com um problema da guarda que o Vitest descarta ao marcar o teste `skip`.
+    const discarded = createDerivationGuard();
+    expect(run(discarded, '[X02] derivou', 1)).toEqual(['derivação determinística fora de um tracker autorizado (1×): [X02] derivou']);
+    expect(run(discarded, 'outro', 1)).toHaveLength(1);
+    expect(discarded.finishFile({ executed: 2, skippedAtRuntime: ['[X02] derivou'] }, ['[X02]'])).toEqual([
+      'problemas da guarda num teste ignorado em execução (descartados pelo Vitest): [X02] derivou\nderivação determinística fora de um tracker autorizado (1×): [X02] derivou',
+    ]);
+    // Os problemas de um teste não ignorado já foram comunicados pelo próprio teste, e o registo é limpo no fim do ficheiro.
+    expect(discarded.finishFile({ executed: 2, skippedAtRuntime: ['[X02] derivou'] }, ['[X02]'])).toEqual([]);
+
+    // Um ignorado em execução que a guarda não começou continua a desequilibrar a contagem.
+    const unbalanced = createDerivationGuard();
+    expect(run(unbalanced, 'normal')).toEqual([]);
+    expect(unbalanced.finishFile({ executed: 2, skippedAtRuntime: ['[X02] sem guarda'] }, ['[X02]'])).toEqual([
+      'testes executados: 2, começados pela guarda: 1, terminados: 1',
+    ]);
+  });
+
+  it('[C2-G02] fileExecution counts finished and runtime-skipped tests, not tests skipped before running; failingTestsRun lists the it.fails that ran', () => {
+    const test = (fullTestName: string, mode: string, result?: Readonly<Record<string, unknown>>, fails = false) => ({ fails, fullTestName, mode, result, type: 'test' });
+    const file = {
+      tasks: [
+        test('passou', 'run', { state: 'pass' }),
+        test('ignorado em execução', 'skip', { pending: true, state: 'skip' }),
+        test('ignorado antes', 'skip', { state: 'skip' }),
+        test('filtrado', 'skip'),
+        test('por fazer', 'todo'),
+        test('em curso', 'run', { state: 'run' }),
+        { tasks: [test('negativo', 'run', { state: 'pass' }, true), test('falhou', 'run', { state: 'fail' })], type: 'suite' },
+      ],
+    } as unknown as RunnerTestFile;
+    expect(fileExecution(file)).toEqual({ executed: 4, skippedAtRuntime: ['ignorado em execução'] });
+    expect(failingTestsRun(file).map((task) => task.fullTestName)).toEqual(['negativo']);
+  });
+
+  it('[C2-G03] inside a running test, the name the guard uses (task.fullTestName) is the name the trackers verify (currentTestName)', ({ task }) => {
+    expect(task.fullTestName).toBe(currentTest());
+    expect(fileDerivationGuard.counts().active).toBe(currentTest());
+  });
+
+  it('[C2-S01] only [X02] may be skipped at runtime, and no Argon2id sentinel can be', () => {
+    expect(RUNTIME_SKIP_ALLOWED).toEqual(['[X02]']);
+    expect(Object.isFrozen(RUNTIME_SKIP_ALLOWED)).toBe(true);
+    const sentinels = [INSTALLATION_RECOVERY_DERIVATION, LOCAL_AUTHENTICATION_DERIVATION, IDENTITY_GATE_DERIVATION, LOCAL_SESSIONS_DERIVATION].flatMap(
+      (classification) => classification.argon2idRequired,
+    );
+    expect(sentinels.length).toBeGreaterThan(0);
+    for (const mark of RUNTIME_SKIP_ALLOWED) {
+      expect(sentinels.filter((sentinel) => sentinel.includes(mark) || mark.includes(sentinel)), mark).toEqual([]);
+    }
   });
 });
 
@@ -316,9 +398,10 @@ describe('E1.07-PD65-T4-C1 derivation through the local service', () => {
   const running: ServiceUnderTest[] = [];
 
   afterEach(async () => {
-    for (const harness of running.splice(0)) await harness.service.stop();
-    temporary?.dispose();
+    // PD87-C2 (PD-57): a base só é apagada depois de parar os serviços e confirmar as ligações fechadas.
+    const database = temporary;
     temporary = undefined;
+    await stopServicesThenDisposeNow(running.splice(0), { dispose: () => database?.dispose() });
   });
 
   const storedCredential = (database: SqliteDatabase, userId: string): PasswordHash => {
