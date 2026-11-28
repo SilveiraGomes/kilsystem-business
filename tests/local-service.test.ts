@@ -5,7 +5,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { MIGRATIONS, openSqliteDatabase, type OpenSqliteOptions, type SqliteDatabase } from '../packages/database/src/index';
-import { createBranch } from '../packages/shared-types/src/index';
+import { createBranch, deactivateCompany } from '../packages/shared-types/src/index';
 import { LOCAL_SERVICE_EXIT_CODES, runLocalServiceCli } from '../services/local-api/src/cli';
 import {
   LOCAL_SERVICE_ENV,
@@ -24,7 +24,7 @@ import {
 } from '../services/local-api/src/local-service';
 import { createJsonLogger } from '../services/local-api/src/logger';
 import { resolveProtectedDirectories } from '../services/local-api/src/protected-directories';
-import { branchInput, contextFor, newCompany } from './support/fixtures';
+import { branchInput, contextFor, newCompany, UPDATED_AT } from './support/fixtures';
 import {
   createServiceUnderTest,
   PROTECTED_DIRECTORIES,
@@ -695,9 +695,17 @@ describe('Local service lifecycle (E1.05)', () => {
 
       const contextB = contextFor(companyB.tenantId);
       await expect(harness.service.companies.findById(contextB, companyA.id)).resolves.toBeUndefined();
-      await expect(harness.service.companies.delete(contextB, companyA.id)).rejects.toMatchObject({
-        name: 'RecordNotFoundError',
-      });
+      expect('delete' in harness.service.companies).toBe(false);
+      expect('delete' in harness.service.branches).toBe(false);
+      await expect(
+        harness.service.companies.update(contextB, deactivateCompany(companyA, UPDATED_AT)),
+      ).rejects.toMatchObject({ name: 'TenantMismatchError' });
+      await expect(
+        harness.service.companies.update(
+          contextB,
+          newCompany({ ...deactivateCompany(companyA, UPDATED_AT), tenantId: companyB.tenantId }),
+        ),
+      ).rejects.toMatchObject({ name: 'RecordNotFoundError' });
       await expect(
         harness.service.companies.findById(contextFor(companyA.tenantId), companyA.id),
       ).resolves.toEqual(companyA);

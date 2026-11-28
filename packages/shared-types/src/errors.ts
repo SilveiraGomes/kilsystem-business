@@ -54,7 +54,6 @@ export class RecordNotFoundError extends Error {
 export type RecordConflictReason =
   | 'duplicate-id'
   | 'tenant-already-has-company'
-  | 'company-has-branches'
   | 'duplicate-branch-code'
   | 'immutable-field'
   | 'duplicate-username'

@@ -413,11 +413,13 @@ describe('Identity persistence (E1.07-A)', () => {
 
       expectConstraint(() => database.prepare('DELETE FROM users WHERE id = ?').run(user.id));
       expectConstraint(() => database.prepare('DELETE FROM company_memberships WHERE id = ?').run(membership.id));
-      await expect(tenant.branches.delete(context, north.id)).rejects.toMatchObject({
-        name: PersistenceError.name,
-        reason: 'constraint',
-      });
-      await expect(tenant.companies.delete(context, company.id)).rejects.toBeInstanceOf(RecordConflictError);
+      // E1.07-D3-PD78-C1: the repositories no longer delete; the schema refuses it (migration 10).
+      expect('delete' in tenant.branches).toBe(false);
+      expect('delete' in tenant.companies).toBe(false);
+      expectConstraint(() => database.prepare('DELETE FROM branches WHERE id = ?').run(north.id));
+      expectConstraint(() => database.prepare('DELETE FROM companies WHERE id = ?').run(company.id));
+      await expect(tenant.branches.findById(context, north.id)).resolves.toEqual(north);
+      await expect(tenant.companies.findById(context, company.id)).resolves.toEqual(company);
 
       expect([count(database, 'users'), count(database, 'company_memberships'), count(database, 'branch_memberships')]).toEqual([
         1, 1, 1,

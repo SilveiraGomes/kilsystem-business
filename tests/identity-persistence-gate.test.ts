@@ -861,7 +861,7 @@ describe('E1.07-D3-G0 installation authority gate (PD-73, PD-75, PD-76)', () => 
         database.close();
 
         const harness = await startedService(own.filename);
-        expect(harness.service.startupReport).toMatchObject({ appliedMigrations: [8, 9], schemaVersion: 9 });
+        expect(harness.service.startupReport).toMatchObject({ appliedMigrations: [8, 9, 10], schemaVersion: 10 });
         const anchor = { fault: 'administrator-missing', state: 'broken' };
         const { installation, users } = harness.service.identityProvisioning;
         await expect(installation.verifyAnchor()).resolves.toEqual(anchor);
@@ -1055,7 +1055,7 @@ describe('E1.07-D3-G0 installation authority gate (PD-73, PD-75, PD-76)', () => 
         applyPragmas(database, CONFIGURATIONS[1]);
         tamper(database, s);
         applyPragmas(database, CONFIGURATIONS[0]);
-        expect(runMigrations(database)).toEqual({ applied: [8, 9], currentVersion: 9 });
+        expect(runMigrations(database)).toEqual({ applied: [8, 9, 10], currentVersion: 10 });
         const store = createSqliteAuthenticationStore(database);
         // O registo descritivo continua a mostrar o identificador; só a âncora o recusa.
         expect(store.readBootstrap()?.initialAdministratorId).toBe(s.administrator.id);
@@ -1100,7 +1100,7 @@ describe('E1.07-D3-G0 installation authority gate (PD-73, PD-75, PD-76)', () => 
         database.close();
 
         const harness = await startedService(own.filename);
-        expect(harness.service.startupReport, fault).toMatchObject({ appliedMigrations: [8, 9], schemaVersion: 9 });
+        expect(harness.service.startupReport, fault).toMatchObject({ appliedMigrations: [8, 9, 10], schemaVersion: 10 });
         const { installation, credentials } = harness.service.identityProvisioning;
         await expect(installation.verifyAnchor(), fault).resolves.toEqual({ fault, state: 'broken' });
         // O registo descritivo continua a mostrar o identificador; não é prova de nada.
@@ -1156,12 +1156,12 @@ describe('E1.07-D3-G0 installation authority gate (PD-73, PD-75, PD-76)', () => 
       const triggers = () => database.prepare("SELECT name FROM sqlite_schema WHERE type = 'trigger' ORDER BY name").pluck().all();
       const before = { rows: snapshot(database), triggers: triggers() };
 
-      expect(inspectMigrations(database)).toMatchObject({ appliedVersions: [1, 2, 3, 4, 5, 6, 7], pendingVersions: [8, 9] });
+      expect(inspectMigrations(database)).toMatchObject({ appliedVersions: [1, 2, 3, 4, 5, 6, 7], pendingVersions: [8, 9, 10] });
       // Só a migração 8 (E1.07-D3-R1 acrescenta a 9, verificada à parte em installation-recovery.test.ts).
       expect(runMigrations(database, MIGRATIONS.slice(0, 8))).toEqual({ applied: [8], currentVersion: 8 });
       expect(snapshot(database)).toEqual(before.rows);
       expect(triggers()).toEqual([...before.triggers, ...MIGRATION_8_TRIGGERS].sort());
-      expect(runMigrations(database)).toEqual({ applied: [9], currentVersion: 9 });
+      expect(runMigrations(database)).toEqual({ applied: [9, 10], currentVersion: 10 });
       expect(snapshot(database)).toEqual(before.rows);
       expect(database.prepare('SELECT checksum FROM schema_migrations WHERE version <= 7 ORDER BY version').pluck().all()).toEqual(
         PUBLISHED_CHECKSUMS_1_TO_7,
@@ -1171,7 +1171,7 @@ describe('E1.07-D3-G0 installation authority gate (PD-73, PD-75, PD-76)', () => 
       expect(database.prepare('SELECT revoked_at FROM local_sessions WHERE id = ?').pluck().get(s.sessionId)).toBeNull();
       expect(database.prepare('PRAGMA integrity_check').pluck().get()).toBe('ok');
       expect(database.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
-      expect(runMigrations(database)).toEqual({ applied: [], currentVersion: 9 });
+      expect(runMigrations(database)).toEqual({ applied: [], currentVersion: 10 });
       // A migração 8 só acrescenta triggers; não cria tabelas, colunas nem dados.
       expect(MIGRATIONS[7]?.sql.replace(/--.*$/gm, '')).not.toMatch(/\b(CREATE TABLE|ALTER TABLE|INSERT INTO|DROP)\b/i);
     });
@@ -1185,10 +1185,10 @@ describe('E1.07-D3-G0 installation authority gate (PD-73, PD-75, PD-76)', () => 
       expect(() => runMigrations(database, [...MIGRATED_TO_7, { ...latest, sql: `${latest.sql}\nSELECT * FROM missing_table;` }])).toThrow(
         /missing_table/,
       );
-      expect(inspectMigrations(database)).toMatchObject({ appliedVersions: [1, 2, 3, 4, 5, 6, 7], pendingVersions: [8, 9] });
+      expect(inspectMigrations(database)).toMatchObject({ appliedVersions: [1, 2, 3, 4, 5, 6, 7], pendingVersions: [8, 9, 10] });
       expect(triggers()).toEqual(before.triggers);
       expect(snapshot(database)).toEqual(before.rows);
-      expect(runMigrations(database)).toEqual({ applied: [8, 9], currentVersion: 9 });
+      expect(runMigrations(database)).toEqual({ applied: [8, 9, 10], currentVersion: 10 });
       expect(() => inspectMigrations(database, [...MIGRATED_TO_7, { ...latest, sql: `${latest.sql}\n` }])).toThrow(
         /migration-checksum-mismatch/,
       );
@@ -1253,7 +1253,7 @@ describe('E1.07-D3-G0 installation authority gate (PD-73, PD-75, PD-76)', () => 
 
       expect(createHash('sha256').update(readFileSync(temporary.filename)).digest('hex')).toBe(hashBefore);
       const reopened = temporary.open();
-      expect(inspectMigrations(reopened)).toMatchObject({ appliedVersions: [1, 2, 3, 4, 5, 6], pendingVersions: [7, 8, 9] });
+      expect(inspectMigrations(reopened)).toMatchObject({ appliedVersions: [1, 2, 3, 4, 5, 6], pendingVersions: [7, 8, 9, 10] });
       expect(reopened.prepare('SELECT id FROM users WHERE rowid = -1').pluck().get()).toBe(legacyUser.id);
       reopened.close();
     });
@@ -1278,7 +1278,7 @@ describe('E1.07-D3-G0 installation authority gate (PD-73, PD-75, PD-76)', () => 
       await expect(applying.service.start()).rejects.toMatchObject({ reason: 'legacy-rowid-incompatible' });
       await applying.service.stop();
       const reopened = temporary.open();
-      expect(inspectMigrations(reopened)).toMatchObject({ pendingVersions: [8, 9] });
+      expect(inspectMigrations(reopened)).toMatchObject({ pendingVersions: [8, 9, 10] });
       reopened.close();
     });
 
@@ -1288,7 +1288,7 @@ describe('E1.07-D3-G0 installation authority gate (PD-73, PD-75, PD-76)', () => 
       await seedIdentities(connection);
       connection.close();
       const harness = await startedService();
-      expect(harness.service.startupReport).toMatchObject({ appliedMigrations: [8, 9], schemaVersion: 9 });
+      expect(harness.service.startupReport).toMatchObject({ appliedMigrations: [8, 9, 10], schemaVersion: 10 });
       expect(harness.records().some((record) => record['event'] === 'service.migration_preflight_refused')).toBe(false);
     });
   });

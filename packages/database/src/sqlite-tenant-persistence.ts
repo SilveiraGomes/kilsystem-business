@@ -26,7 +26,6 @@ export interface CompanyStore {
   findById(context: TenantContext, id: CompanyId): Company | undefined;
   create(context: TenantContext, company: Company): void;
   update(context: TenantContext, company: Company): void;
-  delete(context: TenantContext, id: CompanyId): void;
 }
 
 export interface BranchStore {
@@ -34,7 +33,6 @@ export interface BranchStore {
   listByCompany(context: TenantContext, companyId: CompanyId): readonly Branch[];
   create(context: TenantContext, branch: Branch): void;
   update(context: TenantContext, branch: Branch): void;
-  delete(context: TenantContext, id: BranchId): void;
 }
 
 export interface TenantStores {
@@ -64,8 +62,6 @@ const SQL = {
   updateCompany: `UPDATE companies SET jurisdiction = @jurisdiction, legal_name = @legalName,
     trade_name = @tradeName, nif = @nif, status = @status, updated_at = @updatedAt
     WHERE tenant_id = @tenantId AND id = @id`,
-  deleteCompany: 'DELETE FROM companies WHERE tenant_id = @tenantId AND id = @id',
-  companyHasBranches: 'SELECT 1 FROM branches WHERE tenant_id = @tenantId AND company_id = @companyId LIMIT 1',
   branchById: `SELECT ${BRANCH_COLUMNS} FROM branches WHERE tenant_id = @tenantId AND id = @id`,
   branchIdExists: 'SELECT 1 FROM branches WHERE id = ?',
   branchesByCompany: `SELECT ${BRANCH_COLUMNS} FROM branches
@@ -78,7 +74,6 @@ const SQL = {
   updateBranch: `UPDATE branches SET name = @name, code = @code, sector_type = @sectorType,
     status = @status, updated_at = @updatedAt
     WHERE tenant_id = @tenantId AND id = @id AND company_id = @companyId`,
-  deleteBranch: 'DELETE FROM branches WHERE tenant_id = @tenantId AND id = @id',
 } as const;
 
 const companyParameters = (company: Company): Record<string, string | null> => ({
@@ -165,14 +160,6 @@ export const createSqliteTenantPersistence = (database: SqliteDatabase): SqliteT
         if (current.createdAt !== company.createdAt) throw new RecordConflictError('immutable-field');
         statements.updateCompany.run(companyParameters(company));
       },
-      delete: (context, id) => {
-        guard(context);
-        if (!companyInTenant(context, id)) throw new RecordNotFoundError('Company');
-        if (statements.companyHasBranches.get({ companyId: id, tenantId: context.tenantId }) !== undefined) {
-          throw new RecordConflictError('company-has-branches');
-        }
-        statements.deleteCompany.run({ id, tenantId: context.tenantId });
-      },
     };
 
     const branches: BranchStore = {
@@ -203,14 +190,11 @@ export const createSqliteTenantPersistence = (database: SqliteDatabase): SqliteT
         const current = branchInTenant(context, branch.id);
         if (!current) throw new RecordNotFoundError('Branch');
         assertBranchWritable(context, branch);
-        if (current.createdAt !== branch.createdAt) throw new RecordConflictError('immutable-field');
+        if (current.createdAt !== branch.createdAt || current.sectorType !== branch.sectorType) {
+          throw new RecordConflictError('immutable-field');
+        }
         const result = statements.updateBranch.run(branchParameters(branch));
         if (result.changes !== 1) throw new RecordNotFoundError('Branch');
-      },
-      delete: (context, id) => {
-        guard(context);
-        if (!branchInTenant(context, id)) throw new RecordNotFoundError('Branch');
-        statements.deleteBranch.run({ id, tenantId: context.tenantId });
       },
     };
 
@@ -226,7 +210,6 @@ export const createSqliteTenantPersistence = (database: SqliteDatabase): SqliteT
     findById: (context, id) => settle(() => shared.companies.findById(context, id)),
     create: (context, company) => immediate(() => shared.companies.create(context, company)),
     update: (context, company) => immediate(() => shared.companies.update(context, company)),
-    delete: (context, id) => immediate(() => shared.companies.delete(context, id)),
   };
 
   const branches: BranchRepository = {
@@ -234,7 +217,6 @@ export const createSqliteTenantPersistence = (database: SqliteDatabase): SqliteT
     listByCompany: (context, companyId) => settle(() => shared.branches.listByCompany(context, companyId)),
     create: (context, branch) => immediate(() => shared.branches.create(context, branch)),
     update: (context, branch) => immediate(() => shared.branches.update(context, branch)),
-    delete: (context, id) => immediate(() => shared.branches.delete(context, id)),
   };
 
   const transaction = <T>(work: (stores: TenantStores) => T): T => {

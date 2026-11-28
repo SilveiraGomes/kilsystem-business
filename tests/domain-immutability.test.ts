@@ -671,7 +671,7 @@ describe('Domain contract immutability (E1.07-D1-H, PD-64)', () => {
         }).toThrow(TypeError);
       }
       // E1.07-D2 acrescenta a migração 6; a lista continua congelada.
-      expect(MIGRATIONS.map((migration) => migration.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+      expect(MIGRATIONS.map((migration) => migration.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
 
       expect(() => {
         (EMPTY_COMMON_PASSWORD_LIST as unknown as Record<string, unknown>)['includes'] = () => true;

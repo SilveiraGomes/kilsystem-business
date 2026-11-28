@@ -1023,6 +1023,74 @@ BEGIN
 END;
 `;
 
+// E1.07-D3-PD78-C1 (PD-78; D-222, D-253): empresas, estabelecimentos e sectores nunca são eliminados
+// nem substituídos, em qualquer configuração de foreign_keys/recursive_triggers:
+// - sem dependentes (ou com foreign_keys desligado), DELETE seguido de INSERT com o mesmo id
+//   reutilizava a identidade; como a linha passa a nunca desaparecer, a guarda de inserção da
+//   migração 7 recusa qualquer reutilização de id, tenant_id ou rowid;
+// - `UPDATE OR REPLACE branches SET code = <código de outro estabelecimento>` eliminava esse
+//   estabelecimento sem executar triggers DELETE (recursive_triggers desligado). A guarda corre em
+//   BEFORE UPDATE OF code, antes da resolução de conflitos; o código continua mutável para um
+//   valor livre (DP-PD78-03);
+// - `sector_types` é uma tabela com rowid: `INSERT OR REPLACE` com um código ou rowid existente
+//   eliminava implicitamente o sector, deixando estabelecimentos sem sector com foreign_keys
+//   desligado. A guarda de inserção segue a migração 7 (código ou rowid positivo existente, e
+//   rowid não positivo recusado depois da inserção, o que reverte a eliminação implícita).
+// Só acrescenta triggers: não altera tabelas, dados nem as migrações 1 a 9. Não contém regras de
+// estado, de jurisdição nem do NIF (migração 11). Fronteira (D-209): quem escreve SQL pode inserir
+// um sector novo e editar os campos não protegidos; quem controla o esquema pode remover triggers.
+const V10_PROTECT_COMPANY_AND_BRANCH_IDENTITIES = `
+CREATE TRIGGER companies_never_deleted
+BEFORE DELETE ON companies
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: companies are deactivated, never deleted');
+END;
+
+CREATE TRIGGER branches_never_deleted
+BEFORE DELETE ON branches
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: branches are deactivated, never deleted');
+END;
+
+CREATE TRIGGER branches_code_never_taken_over
+BEFORE UPDATE OF code ON branches
+WHEN EXISTS (SELECT 1 FROM branches WHERE company_id = NEW.company_id AND code = NEW.code AND id IS NOT OLD.id)
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: branches code belongs to another branch');
+END;
+
+CREATE TRIGGER branches_sector_immutable
+BEFORE UPDATE OF sector_type ON branches
+WHEN NEW.sector_type IS NOT OLD.sector_type
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: branches sector is immutable');
+END;
+
+CREATE TRIGGER sector_types_never_deleted
+BEFORE DELETE ON sector_types
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: sector_types are never deleted');
+END;
+
+CREATE TRIGGER sector_types_immutable
+BEFORE UPDATE ON sector_types
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: sector_types are immutable');
+END;
+
+CREATE TRIGGER sector_types_insert_requires_new_sector
+BEFORE INSERT ON sector_types
+WHEN EXISTS (SELECT 1 FROM sector_types WHERE (NEW.rowid > 0 AND rowid = NEW.rowid) OR code = NEW.code)
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: sector_types are never re-inserted');
+END;
+
+CREATE TRIGGER sector_types_rowid_positive AFTER INSERT ON sector_types WHEN NEW.rowid <= 0
+BEGIN
+  SELECT RAISE(ABORT, 'constraint failed: sector_types rowid must be positive');
+END;
+`;
+
 export const MIGRATIONS: readonly Migration[] = Object.freeze([
   Object.freeze({ name: 'create_companies_and_branches', sql: V1_COMPANIES_AND_BRANCHES, version: 1 }),
   Object.freeze({ name: 'create_users_and_memberships', sql: V2_USERS_AND_MEMBERSHIPS, version: 2 }),
@@ -1037,6 +1105,11 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
   }),
   Object.freeze({ name: 'protect_persistent_identities', sql: V8_PERSISTENT_IDENTITIES, version: 8 }),
   Object.freeze({ name: 'create_installation_recovery', sql: V9_INSTALLATION_RECOVERY, version: 9 }),
+  Object.freeze({
+    name: 'protect_company_and_branch_identities',
+    sql: V10_PROTECT_COMPANY_AND_BRANCH_IDENTITIES,
+    version: 10,
+  }),
 ]);
 
 export const migrationChecksum = (migration: Migration): string =>

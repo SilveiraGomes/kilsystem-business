@@ -322,8 +322,9 @@ describe('E1.07-D3-R1 installation recovery of the initial administrator', () =>
         database.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name").pluck().all();
       const before = { rows: rows(database, AUTHORITY_TABLES), tables: tables() };
 
-      expect(inspectMigrations(database)).toMatchObject({ pendingVersions: [9] });
-      expect(runMigrations(database)).toEqual({ applied: [9], currentVersion: 9 });
+      // E1.07-D3-PD78-C1: a migração 10 fica também pendente; aplica-se só até à 9, para a verificar isoladamente.
+      expect(inspectMigrations(database)).toMatchObject({ pendingVersions: [9, 10] });
+      expect(runMigrations(database, MIGRATIONS.slice(0, 9))).toEqual({ applied: [9], currentVersion: 9 });
       expect(rows(database, AUTHORITY_TABLES)).toEqual(before.rows);
       expect(tables()).toEqual([...before.tables, ...RECOVERY_TABLES].sort());
       expect(database.prepare('SELECT checksum FROM schema_migrations WHERE version <= 8 ORDER BY version').pluck().all()).toEqual(
@@ -341,7 +342,7 @@ describe('E1.07-D3-R1 installation recovery of the initial administrator', () =>
         runMigrations(database, [...MIGRATIONS.slice(0, 8), { ...latest, sql: `${latest.sql}\nSELECT * FROM missing_table;` }]),
       ).toThrow(/missing_table/);
       expect(database.prepare("SELECT count(*) FROM sqlite_schema WHERE name LIKE 'installation_recovery%'").pluck().get()).toBe(0);
-      expect(runMigrations(database)).toEqual({ applied: [9], currentVersion: 9 });
+      expect(runMigrations(database, MIGRATIONS.slice(0, 9))).toEqual({ applied: [9], currentVersion: 9 });
       expect(() => inspectMigrations(database, [...MIGRATIONS.slice(0, 8), { ...latest, sql: `${latest.sql}\n` }])).toThrow(
         /migration-checksum-mismatch/,
       );

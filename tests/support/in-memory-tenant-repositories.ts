@@ -77,15 +77,6 @@ export const createInMemoryTenantRepositories = (): TenantRepositoryHarness => {
         if (current.createdAt !== company.createdAt) throw new RecordConflictError('immutable-field');
         companies.set(company.id, company);
       }),
-    delete: (context, id) =>
-      settle(() => {
-        assertTenantContext(context);
-        if (!companyInTenant(context, id)) throw new RecordNotFoundError('Company');
-        if ([...branches.values()].some((branch) => branch.companyId === id)) {
-          throw new RecordConflictError('company-has-branches');
-        }
-        companies.delete(id);
-      }),
   };
 
   const branchRepository: BranchRepository = {
@@ -118,14 +109,10 @@ export const createInMemoryTenantRepositories = (): TenantRepositoryHarness => {
         const current = branchInTenant(context, branch.id);
         if (!current) throw new RecordNotFoundError('Branch');
         assertBranchWritable(context, branch);
-        if (current.createdAt !== branch.createdAt) throw new RecordConflictError('immutable-field');
+        if (current.createdAt !== branch.createdAt || current.sectorType !== branch.sectorType) {
+          throw new RecordConflictError('immutable-field');
+        }
         branches.set(branch.id, branch);
-      }),
-    delete: (context, id) =>
-      settle(() => {
-        assertTenantContext(context);
-        if (!branchInTenant(context, id)) throw new RecordNotFoundError('Branch');
-        branches.delete(id);
       }),
   };
 
