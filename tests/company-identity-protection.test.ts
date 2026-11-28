@@ -35,7 +35,11 @@ import { createTemporaryDatabase, type TemporaryDatabase } from './support/sqlit
  * Empresas, estabelecimentos e sectores nunca são eliminados nem substituídos; o código de um
  * estabelecimento nunca é tomado por outro; o sector de um estabelecimento é imutável. SQLite real,
  * bases descartáveis, dados fictícios, nas quatro combinações de foreign_keys/recursive_triggers.
+ * E1.07-PD89: estabelecimentos inactivos, sector alterado com o estado e soma publicada da migração 10.
  */
+
+/** Soma publicada da migração 10 (`main` = `70f6fa2`, D-255): SHA-256 do SQL aplicado e registado (PD-89). */
+const PUBLISHED_CHECKSUM_10 = '63056894ac6173e4b251b55668cafacbfa1b3f56e4da6bc54eb21aecffd4bf43';
 
 /** Somas publicadas das migrações 1 a 9 (`main` = `39a06a7`); a migração 10 não as altera. */
 const PUBLISHED_CHECKSUMS_1_TO_9 = [
@@ -461,6 +465,57 @@ const legitimateChanges = (s: Seed): readonly Legitimate[] => [
   ],
 ];
 
+interface InactiveSeed extends Seed {
+  /** Código `E`, sector SUPERMARKET, ACTIVE, sem linhas filhas; `north` e `south` ficam INACTIVE. */
+  readonly east: Branch;
+}
+
+/** PD-89 (RV-PD78C1M-01): o mesmo estado, com dois estabelecimentos desactivados pelo repositório. */
+const seedWithInactiveBranches = async (database: SqliteDatabase): Promise<InactiveSeed> => {
+  const s = await seed(database);
+  const tenant = createSqliteTenantPersistence(database);
+  const context = contextFor(s.company.tenantId);
+  await tenant.branches.update(context, deactivateBranch(s.north, UPDATED_AT));
+  await tenant.branches.update(context, deactivateBranch(s.south, UPDATED_AT));
+  const east = createBranch(branchInput(s.company, { code: 'E', name: 'Loja Este', sectorType: 'SUPERMARKET' }));
+  await tenant.branches.create(context, east);
+  return { ...s, east };
+};
+
+/**
+ * PD-89: cenários que nenhum teste exercitava, cada um ligado à mutação da revisão que deixava passar.
+ * I02 — DELETE de um estabelecimento inactivo; I03 — código de um titular inactivo tomado por
+ * `UPDATE OR REPLACE` (a substituição eliminaria o titular); I04 — sector alterado com o estado.
+ */
+const inactiveBranchAttacks = (s: InactiveSeed): readonly Attack[] => [
+  ['I02 DELETE an inactive childless branch', `DELETE FROM branches WHERE id = '${s.south.id}'`, BRANCH_NEVER_DELETED],
+  ['I02 DELETE an inactive branch with a local membership', `DELETE FROM branches WHERE id = '${s.north.id}'`, BRANCH_NEVER_DELETED],
+  ['I03 UPDATE OR REPLACE code of an inactive childless sibling', `UPDATE OR REPLACE branches SET code = 'S' WHERE id = '${s.east.id}'`, CODE_TAKEN],
+  ['I03 UPDATE OR REPLACE code of an inactive sibling with dependants', `UPDATE OR REPLACE branches SET code = 'N' WHERE id = '${s.east.id}'`, CODE_TAKEN],
+  [
+    'I04 UPDATE sector while deactivating an active branch',
+    `UPDATE branches SET sector_type = 'PHARMACY', status = 'INACTIVE' WHERE id = '${s.east.id}'`,
+    BRANCH_SECTOR,
+  ],
+  [
+    'I04 UPDATE sector while reactivating an inactive branch',
+    `UPDATE branches SET sector_type = 'FUEL_STATION', status = 'ACTIVE' WHERE id = '${s.south.id}'`,
+    BRANCH_SECTOR,
+  ],
+];
+
+/** Aceites na migração 9: os cenários da PD-89 descrevem garantias que só a migração 10 dá. */
+const INACTIVE_ACCEPTED_AT_9_ALWAYS = [
+  'I02 DELETE an inactive childless branch',
+  'I03 UPDATE OR REPLACE code of an inactive childless sibling',
+  'I04 UPDATE sector while deactivating an active branch',
+  'I04 UPDATE sector while reactivating an inactive branch',
+];
+const INACTIVE_ACCEPTED_AT_9_WITHOUT_FOREIGN_KEYS = [
+  'I02 DELETE an inactive branch with a local membership',
+  'I03 UPDATE OR REPLACE code of an inactive sibling with dependants',
+];
+
 describe('E1.07-D3-PD78-C1 company and branch identities (migration 10, PD-78)', () => {
   const temporaries: TemporaryDatabase[] = [];
   const running: ServiceUnderTest[] = [];
@@ -628,6 +683,20 @@ describe('E1.07-D3-PD78-C1 company and branch identities (migration 10, PD-78)',
       expect(database.prepare('SELECT checksum FROM schema_migrations WHERE version <= 9 ORDER BY version').pluck().all()).toEqual(
         PUBLISHED_CHECKSUMS_1_TO_9,
       );
+    });
+
+    it('[PD89-H01] pins the published checksum of migration 10, over its SQL content, and keeps checksums 1-9', () => {
+      const latest = MIGRATIONS[9] as (typeof MIGRATIONS)[number];
+      const published = [...PUBLISHED_CHECKSUMS_1_TO_9, PUBLISHED_CHECKSUM_10];
+      expect(MIGRATIONS.map(migrationChecksum)).toEqual(published);
+      // A soma é a do conteúdo SQL (o que é aplicado e registado), calculada aqui sem o código de execução.
+      expect(createHash('sha256').update(latest.sql, 'utf8').digest('hex')).toBe(PUBLISHED_CHECKSUM_10);
+      const { database } = fresh();
+      expect(database.prepare('SELECT checksum FROM schema_migrations ORDER BY version').pluck().all()).toEqual(published);
+      for (const altered of [`${latest.sql} `, latest.sql.replace('NEW.rowid <= 0', 'NEW.rowid < 0')]) {
+        expect(altered).not.toBe(latest.sql);
+        expect(migrationChecksum({ ...latest, sql: altered })).not.toBe(PUBLISHED_CHECKSUM_10);
+      }
     });
 
     it('[PD78-M02] upgrades a migration-9 database with data without changing any row', async () => {
@@ -840,6 +909,50 @@ describe('E1.07-D3-PD78-C1 company and branch identities (migration 10, PD-78)',
       expect(database.prepare('SELECT revoked_at FROM local_sessions WHERE id = ?').pluck().get(s.sessionId)).toBeNull();
       expect(database.prepare('SELECT count(*) FROM branches WHERE company_id = ?').pluck().get(s.company.id)).toBe(2);
       expect(database.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+    });
+  });
+
+  describe('inactive branches and joint sector and status changes (PD-89)', () => {
+    it.each(CONFIGURATIONS)('[PD89-V03] the PD-89 scenarios are accepted at migration 9 with $label', async (configuration) => {
+      const { database } = fresh(MIGRATED_TO_9);
+      const s = await seedWithInactiveBranches(database);
+      applyPragmas(database, configuration);
+      const accepted: string[] = [];
+      for (const [label, sql] of inactiveBranchAttacks(s)) {
+        database.exec('BEGIN');
+        try {
+          database.exec(sql);
+          accepted.push(label);
+        } catch {
+          // recusado
+        } finally {
+          database.exec('ROLLBACK');
+        }
+      }
+      expect(accepted.sort()).toEqual(
+        [...INACTIVE_ACCEPTED_AT_9_ALWAYS, ...(configuration.foreignKeys ? [] : INACTIVE_ACCEPTED_AT_9_WITHOUT_FOREIGN_KEYS)].sort(),
+      );
+    });
+
+    it.each(CONFIGURATIONS)('[PD89-S06] keeps inactive branches, their codes and every sector intact with $label', async (configuration) => {
+      const { database } = fresh();
+      const s = await seedWithInactiveBranches(database);
+      applyPragmas(database, configuration);
+      const before = snapshot(database);
+      const list = inactiveBranchAttacks(s);
+      expect(list).toHaveLength(6);
+      for (const [label, sql, refusal] of list) {
+        expect(() => database.exec(sql), label).toThrow(refusal);
+        expect(snapshot(database), label).toEqual(before);
+        expect(database.prepare('PRAGMA foreign_key_check').all(), label).toEqual([]);
+      }
+      expect(database.inTransaction).toBe(false);
+      expect([s.north, s.south, s.east].map((each) => branch(database, each.id))).toEqual([
+        { code: 'N', name: 'Farmácia Norte', sector_type: 'PHARMACY', status: 'INACTIVE', updated_at: UPDATED_AT },
+        { code: 'S', name: 'Restaurante Sul', sector_type: 'RESTAURANT', status: 'INACTIVE', updated_at: UPDATED_AT },
+        { code: 'E', name: 'Loja Este', sector_type: 'SUPERMARKET', status: 'ACTIVE', updated_at: s.east.updatedAt },
+      ]);
+      expect(database.prepare('SELECT branch_id FROM branch_memberships WHERE id = ?').pluck().get(s.local.id)).toBe(s.north.id);
     });
   });
 });
