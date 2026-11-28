@@ -623,7 +623,6 @@ export const createLocalService = (
     findById: (context, id) => guarded((current) => current.tenant.companies.findById(context, id)),
     create: (context, company) => guarded((current) => current.tenant.companies.create(context, company)),
     update: (context, company) => guarded((current) => current.tenant.companies.update(context, company)),
-    delete: (context, id) => guarded((current) => current.tenant.companies.delete(context, id)),
   };
 
   const branches: BranchRepository = {
@@ -632,7 +631,6 @@ export const createLocalService = (
       guarded((current) => current.tenant.branches.listByCompany(context, companyId)),
     create: (context, branch) => guarded((current) => current.tenant.branches.create(context, branch)),
     update: (context, branch) => guarded((current) => current.tenant.branches.update(context, branch)),
-    delete: (context, id) => guarded((current) => current.tenant.branches.delete(context, id)),
   };
 
   const users: UserDirectory = {

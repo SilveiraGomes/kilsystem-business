@@ -179,18 +179,56 @@ export const describeTenantRepositoryContract = (
         await expect(repositories.branches.create(contextA, foreign)).rejects.toBeInstanceOf(TenantMismatchError);
       });
 
-      it('refuses to physically delete a company that still has branches (D-027)', async () => {
-        const { companyA, contextA, pharmacyA, restaurantA } = scenario;
+      it('exposes no physical deletion of companies or branches (D-222, D-253)', async () => {
+        const { companyA, contextA, pharmacyA } = scenario;
 
-        await expect(repositories.companies.delete(contextA, companyA.id)).rejects.toMatchObject({
-          reason: 'company-has-branches',
-        });
+        // @ts-expect-error -- CompanyRepository has no delete (DP-PD78-01).
+        expect(repositories.companies.delete).toBeUndefined();
+        // @ts-expect-error -- BranchRepository has no delete (DP-PD78-01).
+        expect(repositories.branches.delete).toBeUndefined();
+        expect('delete' in repositories.companies).toBe(false);
+        expect('delete' in repositories.branches).toBe(false);
+        expect(Object.keys(repositories.companies).sort()).toEqual(['create', 'findById', 'update']);
+        expect(Object.keys(repositories.branches).sort()).toEqual(['create', 'findById', 'listByCompany', 'update']);
 
-        await repositories.branches.delete(contextA, pharmacyA.id);
-        await repositories.branches.delete(contextA, restaurantA.id);
-        await repositories.companies.delete(contextA, companyA.id);
+        await expect(repositories.companies.findById(contextA, companyA.id)).resolves.toEqual(companyA);
+        await expect(repositories.branches.findById(contextA, pharmacyA.id)).resolves.toEqual(pharmacyA);
+      });
 
-        await expect(repositories.companies.findById(contextA, companyA.id)).resolves.toBeUndefined();
+      it('keeps deactivated identities and never lets them be re-used (D-222)', async () => {
+        const { companyA, contextA, pharmacyA } = scenario;
+        const inactiveBranch = deactivateBranch(pharmacyA, UPDATED_AT);
+        const inactiveCompany = deactivateCompany(companyA, UPDATED_AT);
+        await repositories.branches.update(contextA, inactiveBranch);
+        await repositories.companies.update(contextA, inactiveCompany);
+
+        const sameCompanyId = newCompany({ id: companyA.id });
+        await expect(
+          repositories.companies.create(contextFor(sameCompanyId.tenantId), sameCompanyId),
+        ).rejects.toMatchObject({ reason: 'duplicate-id' });
+        await expect(
+          repositories.companies.create(contextA, newCompany({ tenantId: companyA.tenantId })),
+        ).rejects.toMatchObject({ reason: 'tenant-already-has-company' });
+        await expect(
+          repositories.branches.create(contextA, createBranch(branchInput(companyA, { code: 'A-NEW', id: pharmacyA.id }))),
+        ).rejects.toMatchObject({ reason: 'duplicate-id' });
+        await expect(
+          repositories.branches.create(contextA, createBranch(branchInput(companyA, { code: pharmacyA.code }))),
+        ).rejects.toMatchObject({ reason: 'duplicate-branch-code' });
+
+        await expect(repositories.companies.findById(contextA, companyA.id)).resolves.toEqual(inactiveCompany);
+        await expect(repositories.branches.findById(contextA, pharmacyA.id)).resolves.toEqual(inactiveBranch);
+        await expect(repositories.branches.listByCompany(contextA, companyA.id)).resolves.toHaveLength(2);
+      });
+
+      it('reactivates a deactivated branch without changing its identity', async () => {
+        const { contextA, pharmacyA } = scenario;
+        await repositories.branches.update(contextA, deactivateBranch(pharmacyA, UPDATED_AT));
+        const reactivated = createBranch({ ...pharmacyA, status: 'ACTIVE', updatedAt: UPDATED_AT });
+
+        await repositories.branches.update(contextA, reactivated);
+
+        await expect(repositories.branches.findById(contextA, pharmacyA.id)).resolves.toEqual(reactivated);
       });
 
       it('supports logical deactivation without deleting data (D-027)', async () => {
@@ -228,6 +266,32 @@ export const describeTenantRepositoryContract = (
         });
       });
 
+      it('allows a free code, the unchanged code and a code freed by a sibling (DP-PD78-03)', async () => {
+        const { contextA, pharmacyA, restaurantA } = scenario;
+        const unchanged = createBranch({ ...pharmacyA, name: 'Farmácia Norte', updatedAt: UPDATED_AT });
+        const moved = createBranch({ ...unchanged, code: 'A-FAR-2' });
+        const takesFreedCode = createBranch({ ...restaurantA, code: pharmacyA.code, updatedAt: UPDATED_AT });
+
+        await repositories.branches.update(contextA, unchanged);
+        await repositories.branches.update(contextA, moved);
+        await repositories.branches.update(contextA, takesFreedCode);
+
+        await expect(repositories.branches.findById(contextA, pharmacyA.id)).resolves.toEqual(moved);
+        await expect(repositories.branches.findById(contextA, restaurantA.id)).resolves.toEqual(takesFreedCode);
+      });
+
+      it('keeps the sibling intact when a code change is refused', async () => {
+        const { contextA, pharmacyA, restaurantA } = scenario;
+        const clash = createBranch({ ...restaurantA, code: pharmacyA.code, updatedAt: UPDATED_AT });
+
+        await expect(repositories.branches.update(contextA, clash)).rejects.toMatchObject({
+          reason: 'duplicate-branch-code',
+        });
+
+        await expect(repositories.branches.findById(contextA, pharmacyA.id)).resolves.toEqual(pharmacyA);
+        await expect(repositories.branches.findById(contextA, restaurantA.id)).resolves.toEqual(restaurantA);
+      });
+
       it('allows the same code in another company', async () => {
         const { companyB, contextB } = scenario;
         const sameCode = createBranch(branchInput(companyB, { code: 'A-FAR' }));
@@ -235,6 +299,19 @@ export const describeTenantRepositoryContract = (
         await repositories.branches.create(contextB, sameCode);
 
         await expect(repositories.branches.findById(contextB, sameCode.id)).resolves.toEqual(sameCode);
+      });
+    });
+
+    describe('branch sector (DP-PD78-04)', () => {
+      it('rejects changing the sector of an existing branch', async () => {
+        const { contextA, pharmacyA } = scenario;
+        const resectored = createBranch({ ...pharmacyA, sectorType: 'SUPERMARKET', updatedAt: UPDATED_AT });
+
+        await expect(repositories.branches.update(contextA, resectored)).rejects.toMatchObject({
+          reason: 'immutable-field',
+        });
+
+        await expect(repositories.branches.findById(contextA, pharmacyA.id)).resolves.toEqual(pharmacyA);
       });
     });
 
@@ -276,15 +353,22 @@ export const describeTenantRepositoryContract = (
       });
     });
 
-    describe('cross-tenant delete', () => {
-      it('rejects deletion of records owned by another tenant', async () => {
-        const { companyA, contextA, contextB, pharmacyA } = scenario;
+    describe('cross-tenant deactivation', () => {
+      it('rejects deactivation of records owned by another tenant', async () => {
+        const { companyA, companyB, contextA, contextB, pharmacyA } = scenario;
+        const inactiveCompany = deactivateCompany(companyA, UPDATED_AT);
+        const inactiveBranch = deactivateBranch(pharmacyA, UPDATED_AT);
+        const relabelledCompany = newCompany({ ...inactiveCompany, tenantId: contextB.tenantId });
+        const relabelledBranch = createBranch({ ...inactiveBranch, companyId: companyB.id, tenantId: contextB.tenantId });
 
-        await expect(repositories.branches.delete(contextB, pharmacyA.id)).rejects.toBeInstanceOf(RecordNotFoundError);
-        await expect(repositories.companies.delete(contextB, companyA.id)).rejects.toBeInstanceOf(RecordNotFoundError);
+        await expect(repositories.companies.update(contextB, inactiveCompany)).rejects.toBeInstanceOf(TenantMismatchError);
+        await expect(repositories.branches.update(contextB, inactiveBranch)).rejects.toBeInstanceOf(TenantMismatchError);
+        await expect(repositories.companies.update(contextB, relabelledCompany)).rejects.toBeInstanceOf(RecordNotFoundError);
+        await expect(repositories.branches.update(contextB, relabelledBranch)).rejects.toBeInstanceOf(RecordNotFoundError);
 
         await expect(repositories.companies.findById(contextA, companyA.id)).resolves.toEqual(companyA);
         await expect(repositories.branches.findById(contextA, pharmacyA.id)).resolves.toEqual(pharmacyA);
+        await expect(repositories.companies.findById(contextB, companyB.id)).resolves.toEqual(companyB);
       });
     });
 
@@ -293,12 +377,14 @@ export const describeTenantRepositoryContract = (
         ['companies.findById', (context) => repositories.companies.findById(context, scenario.companyA.id)],
         ['companies.create', (context) => repositories.companies.create(context, newCompany())],
         ['companies.update', (context) => repositories.companies.update(context, scenario.companyA)],
-        ['companies.delete', (context) => repositories.companies.delete(context, scenario.companyA.id)],
+        ['companies.update (deactivation)', (context) =>
+          repositories.companies.update(context, deactivateCompany(scenario.companyA, UPDATED_AT))],
         ['branches.findById', (context) => repositories.branches.findById(context, scenario.pharmacyA.id)],
         ['branches.listByCompany', (context) => repositories.branches.listByCompany(context, scenario.companyA.id)],
         ['branches.create', (context) => repositories.branches.create(context, createBranch(branchInput(scenario.companyA)))],
         ['branches.update', (context) => repositories.branches.update(context, scenario.pharmacyA)],
-        ['branches.delete', (context) => repositories.branches.delete(context, scenario.pharmacyA.id)],
+        ['branches.update (deactivation)', (context) =>
+          repositories.branches.update(context, deactivateBranch(scenario.pharmacyA, UPDATED_AT))],
       ];
 
       it.each(operations)('%s rejects a missing context', async (_name, operation) => {
@@ -329,7 +415,7 @@ export const describeTenantRepositoryContract = (
       it('leaves stored data untouched after rejected operations', async () => {
         const { companyA, contextA } = scenario;
         await expect(
-          repositories.companies.delete(undefined as unknown as TenantContext, companyA.id),
+          repositories.companies.update(undefined as unknown as TenantContext, deactivateCompany(companyA, UPDATED_AT)),
         ).rejects.toBeInstanceOf(TenantContextError);
 
         await expect(repositories.companies.findById(contextA, companyA.id)).resolves.toEqual(companyA);

@@ -249,10 +249,23 @@ describe('SQLite persistence (E1.04)', () => {
       insertCompanyRow(database, { id: companyId, tenant_id: tenantId });
       insertBranchRow(database, { company_id: companyId, tenant_id: tenantId });
 
+      // Migration 10 refuses every deletion before the foreign key is evaluated; the RESTRICT
+      // foreign key from migration 1 stays as a second barrier.
       expect(() => database.prepare('DELETE FROM companies WHERE id = ?').run(companyId)).toThrow(
-        'FOREIGN KEY constraint failed',
+        'constraint failed: companies are deactivated, never deleted',
+      );
+      expect(() => database.prepare('DELETE FROM branches WHERE company_id = ?').run(companyId)).toThrow(
+        'constraint failed: branches are deactivated, never deleted',
       );
       expect(count(database, 'companies')).toBe(1);
+      expect(count(database, 'branches')).toBe(1);
+      expect(
+        database.prepare("SELECT \"table\", on_delete FROM pragma_foreign_key_list('branches') ORDER BY \"table\"").all(),
+      ).toEqual([
+        { on_delete: 'RESTRICT', table: 'companies' },
+        { on_delete: 'RESTRICT', table: 'companies' },
+        { on_delete: 'RESTRICT', table: 'sector_types' },
+      ]);
     });
 
     it('enforces unique company identifiers and one company per tenant', () => {
@@ -464,12 +477,13 @@ describe('SQLite persistence (E1.04)', () => {
         const forged = payload as CompanyId;
         await expect(persistence.companies.findById(attacker, forged)).resolves.toBeUndefined();
         await expect(persistence.branches.listByCompany(attacker, forged)).resolves.toEqual([]);
-        await expect(persistence.companies.delete(attacker, forged)).rejects.toMatchObject({
-          name: 'RecordNotFoundError',
-        });
+        expect(persistence.transaction((stores) => stores.companies.findById(attacker, forged))).toBeUndefined();
+        expect(persistence.transaction((stores) => stores.branches.listByCompany(attacker, forged))).toEqual([]);
       }
 
+      expect('delete' in persistence.companies).toBe(false);
       expect(count(database, 'companies')).toBe(1);
+      await expect(persistence.companies.findById(contextFor(victim.tenantId), victim.id)).resolves.toEqual(victim);
     });
 
     it('rejects hostile tenant identifiers before any query', async () => {
