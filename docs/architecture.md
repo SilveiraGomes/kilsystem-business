@@ -101,12 +101,12 @@ Localização: `packages/shared-types/src`. Os contratos e as interfaces de repo
 - **Contexto** (`tenant-context.ts`): `TenantContext { tenantId, actorId, correlationId }`. `assertTenantContext` rejeita contexto ausente ou inválido em execução.
 - **Repositórios** (`repositories.ts`): `CompanyRepository` e `BranchRepository` exigem `TenantContext` em todas as operações e revalidam os registos recebidos. A semântica obrigatória (D-020):
   - leitura cruzada devolve `undefined`;
-  - alteração ou eliminação cruzada devolve `RecordNotFoundError`;
+  - alteração cruzada devolve `RecordNotFoundError`;
   - registo de outro tenant devolve `TenantMismatchError`;
   - uma empresa por tenant;
   - código de estabelecimento único na empresa;
-  - `createdAt` imutável;
-  - eliminação física recusada para empresas com estabelecimentos.
+  - `createdAt` imutável; sector do estabelecimento imutável (DP-PD78-04);
+  - sem eliminação física: os contratos não têm `delete` e a base recusa-o (migração 10, E1.07-D3-PD78-C1, D-253; antes, recusada só para empresas com estabelecimentos, D-027).
 - **Erros** (`errors.ts`): as mensagens indicam o campo ou a regra, mas nunca reproduzem valores recebidos.
 
 ## Persistência SQLite (E1.04)
@@ -405,7 +405,7 @@ LocalService.start ──▶ inspectMigrations ──▶ [pendentes] findNonPosi
 - **Migração 8 (D-206):** só triggers; `users` e `branch_memberships` desactivados, nunca eliminados; `UPDATE OF username` para o de outra identidade recusado antes da resolução de conflitos (fecha a eliminação implícita de `UPDATE OR REPLACE`); `users.created_at` imutável. Somas 1–7 inalteradas.
 - **Âncora (D-207, D-218):** única fonte admissível da identidade do administrador inicial para a futura autoridade, sempre combinada com identidade ACTIVE e sessão autenticada; `status()` é descritivo; `intact` é consistência estrutural, não prova de origem face a um escritor SQL.
 - **Administrador inicial (D-208, D-220):** estado, criação e substituição da credencial recusados pelo provisionamento interno enquanto não existir autoridade da instalação, também quando a credencial falta (a âncora fica `broken` até à recuperação R1, D-215/D-223; na branch, E1.07-D3-G0-R1, PD-80). A identidade também não é recriada: `users.create` recusa o identificador do registo, exista ou não a linha, antes de qualquer validação e de novo na transacção do directório (E1.07-D3-G0-R3, D-227, PD-82; integrada em `main` pelo PR #18, `49581ad`, D-231).
-- **Empresas e estabelecimentos (D-222):** política decidida — desactivados, nunca eliminados nem substituídos silenciosamente; implementação numa tarefa própria antes das operações empresariais (PD-78).
+- **Empresas e estabelecimentos (D-222):** política decidida — desactivados, nunca eliminados nem substituídos silenciosamente (PD-78). **Migração 10** (E1.07-D3-PD78-C1, D-253; na branch `feat/e107-d3-pd78-c1-identity-guards`, sujeita a revisão independente e merge aprovado): só triggers; `companies`, `branches` e `sector_types` nunca eliminados; código de estabelecimento nunca tomado por outro (`BEFORE UPDATE OF code`, fecha a eliminação implícita de `UPDATE OR REPLACE`; o código continua mutável para um valor livre); `branches.sector_type` imutável; `sector_types` imutável e sem reinserção por código ou `rowid` (fecha `INSERT OR REPLACE` com `recursive_triggers` e `foreign_keys` desligados). Somas 1–9 inalteradas. Sem regras de estado, jurisdição nem NIF (migração 11).
 - **Fronteira (D-209):** o esquema impede eliminar, reutilizar e redireccionar; não impede editar no lugar (nome, estado, credencial) por SQL. Sem garantias contra quem controla o esquema, o ficheiro, o código ou o sistema operativo.
 - **PD-76 (D-211):** pré-verificação no serviço local antes de qualquer migração pendente; `runMigrations` continua primitiva (PD-79 para o instalador).
 
@@ -449,7 +449,7 @@ Implementada na branch `feat/e107-d3-r1-recovery` (D-233 a D-235), a rever em E1
 - NIF validado por regras configuradas por jurisdição, sem algoritmo presumido (D-024).
 - Estados empresariais `DRAFT`, `ACTIVE`, `SUSPENDED` e `INACTIVE` (D-025).
 - Código de estabelecimento normalizado e único por empresa (D-026).
-- Desactivação lógica preferida à eliminação física; eliminação física bloqueada com estabelecimentos (D-027).
+- Desactivação lógica preferida à eliminação física; eliminação física bloqueada com estabelecimentos (D-027); para empresas e estabelecimentos, eliminação física retirada e recusada pela base (D-222, D-253, migração 10).
 - SQLite na camada de serviços locais, com `better-sqlite3` (D-028, D-029).
 - Serviço local como processo Node.js independente do Electron, sem HTTP nem rede (D-041).
 - Decisões de domínio da PD-11 (D-052 a D-061): identidades 1:1 distintas; NIF ausente só em `DRAFT`; NIF obrigatório em `ACTIVE` e preservado em `SUSPENDED`/`INACTIVE` após activação; NIF único por jurisdição e entidade jurídica após normalização; estados de empresa e de estabelecimento; código único por empresa; desactivação lógica com histórico; transições com regras explícitas.
