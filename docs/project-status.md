@@ -235,6 +235,10 @@ Em 2026-11-28, [E1.07-D3-PD78-C1-M](tasks/E1.07-D3-PD78-C1-M.md) reviu `dc273a6`
 
 **Integração (E1.07-D3-PD78-INT, D-255/D-256):** revisão integrada pelo responsável (PR #38, `407e39d`); branch técnica integrada por merge local `70f6fa2` (pais `407e39d` e `dc273a6`), validado e publicado sem *force*. `main` validada. **PD-78 e PD-29 encerradas**; RV-PD78C1M-01 passa à PD-89; PD-88 continua aberta.
 
+### Revisão independente da cobertura da migração 10
+
+Em 2026-11-28, [E1.07-PD89-M](tasks/E1.07-PD89-M.md) reviu `ae6a1e4` sobre `dc5d359`. **GO para integrar e para encerrar a PD-89 após o merge aprovado e a validação da `main`.** I02, I03 e I04 falharam nos quatro casos novos. As nove mutações foram detectadas por comportamento, com a falha da soma excluída. O SQL aplicado e registado preserva as somas 1–10. `pnpm.cmd check` passou à primeira (1132 testes, 12 builds, zero timeouts), desktop 6/6, smoke aprovado e auditoria de produção sem vulnerabilidades conhecidas. A PD-89 permanece aberta até ao gate de encerramento.
+
 ## Repositório remoto
 
 - Repositório oficial: `https://github.com/SilveiraGomes/kilsystem-business`, configurado como `origin` (configuração local do repositório).
