@@ -496,7 +496,7 @@ Implementada na branch `feat/e107-d3-r1-recovery` (D-233 a D-235), a rever em E1
 - Transporte concreto entre a interface e o serviço local: mecanismo de loopback no modo A e terminação HTTPS e certificados no modo B (os princípios estão em D-062 e D-063). Inclui a tecnologia do serviço Windows (D-065) e o modelo de segurança.
 - Localização definitiva da base local por instalação, cópias de segurança e recuperação. Desde E1.07-X, as cópias consistentes têm de ser feitas pela instância proprietária (Backup API ou `VACUUM INTO`), a implementar em E1.10.
 - Regras concretas de normalização do NIF por jurisdição, que dependem da política fiscal (D-058, PD-09).
-- Tabela concreta de transições permitidas entre estados empresariais e respectiva auditoria (o princípio está em D-061).
+- Tabela concreta de transições permitidas entre estados empresariais e respectiva auditoria (o princípio está em D-061). Proposta de migração 11 (transições, jurisdição, preservação do NIF e histórico de estado) em [E1.07-D3-PD78-C2-P](tasks/E1.07-D3-PD78-C2-P.md), por rever e aprovar; o actor das transições fica para E1.07-E.
 - Modelo de `BusinessGroup`, autorização de relatórios consolidados e respectiva auditoria (D-017).
 - Política de eliminação de dados empresariais em produção (D-027).
 
