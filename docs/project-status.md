@@ -224,6 +224,10 @@ A revisão independente final **E1.07-C-R2** (`d5f077e`) confirmou por execuçã
 - O `TenantContext` continua a ser construído pelo chamador (PD-27, a encerrar em E1.07-D4).
 - Em `main`, PD-62/PD-63 estão encerradas desde R2; o PR #12 integrou `3831700` e H-R2 encerrou PD-64 (D-178). Não há persistência nem integração operacional.
 
+### Revisão independente da migração 10
+
+Em 2026-11-28, [E1.07-D3-PD78-C1-M](tasks/E1.07-D3-PD78-C1-M.md) reviu `dc273a6` sobre `origin/main` em `39a06a7`. **GO com ressalva Baixa RV-PD78C1M-01** para a migração 10. Os oito triggers e a retirada de DELETE foram verificados. As nove somas publicadas coincidem e os ensaios compilados passaram nas quatro configurações SQLite. Nove mutações foram detectadas pela sonda independente. Duas também foram exercitadas nos 35 testes dedicados, onde passaram, o que deixa uma lacuna de cobertura. `pnpm.cmd check` passou fora do sandbox (1123 testes, 12 builds, 0 timeouts), depois de duas falhas no sandbox. Desktop 6/6, smoke aprovado e auditoria de produção sem vulnerabilidades. **PD-78 e PD-29 permanecem abertas** até ao merge aprovado e à validação na `main`. **PD-88 continua bloqueante para D3-A-P e D3-A.** Os requisitos de entrada da migração 11 estão no relatório.
+
 ## Repositório remoto
 
 - Repositório oficial: `https://github.com/SilveiraGomes/kilsystem-business`, configurado como `origin` (configuração local do repositório).
